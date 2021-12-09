@@ -8,13 +8,60 @@ type EntityStreamer interface {
 	SetPosition(int)
 }
 
-type PatternMatchResult struct {
-	StartPosition int
-	EndPosition   int
+type PatternMatchRange struct {
+	Start int
+	End   int
+}
+
+type PatternMatch struct {
+	Identifier string
+	Range      PatternMatchRange
+}
+
+func NewPatternMatch(identifier string, start int, end int) *PatternMatch {
+	return &PatternMatch{
+		Identifier: identifier,
+		Range: PatternMatchRange{
+			Start: start,
+			End:   end,
+		},
+	}
+}
+
+type PatternMismatch struct {
+	PatternMatch
+	PartialMatches []*PatternMatch
+}
+
+func NewPatternMismatch(identifier string, start int, end int, partialMatches []*PatternMatch) *PatternMismatch {
+	return &PatternMismatch{
+		PatternMatch: PatternMatch{
+			Identifier: identifier,
+			Range: PatternMatchRange{
+				Start: start,
+				End:   end,
+			},
+		},
+		PartialMatches: partialMatches,
+	}
+}
+
+type PatternMismatchLog struct {
+	Mismatches []*PatternMismatch
+}
+
+func NewPatternMismatchLog() *PatternMismatchLog {
+	return &PatternMismatchLog{
+		Mismatches: []*PatternMismatch{},
+	}
+}
+
+func (l *PatternMismatchLog) Log(err *PatternMismatch) {
+	l.Mismatches = append(l.Mismatches, err)
 }
 
 type PatternMatcher interface {
-	Match(EntityStreamer) (bool, *PatternMatchResult)
+	Match(EntityStreamer, *PatternMismatchLog) (bool, *PatternMatch)
 	Identifier() string
 }
 
@@ -36,14 +83,11 @@ func (m *SingleEntityMatch) Identifier() string {
 	return m.identifier
 }
 
-func (m *SingleEntityMatch) Match(s EntityStreamer) (bool, *PatternMatchResult) {
+func (m *SingleEntityMatch) Match(s EntityStreamer, l *PatternMismatchLog) (bool, *PatternMatch) {
 	pos := s.Position()
 
 	if m.matchFunction(s.Read()) {
-		return true, &PatternMatchResult{
-			StartPosition: pos,
-			EndPosition:   s.Position(),
-		}
+		return true, NewPatternMatch(m.identifier, pos, s.Position())
 	}
 
 	return false, nil
@@ -65,15 +109,22 @@ func (m *ConcatenationMatch) Identifier() string {
 	return m.identifier
 }
 
-func (m *ConcatenationMatch) Match(s EntityStreamer) (bool, *PatternMatchResult) {
+func (m *ConcatenationMatch) Match(s EntityStreamer, l *PatternMismatchLog) (bool, *PatternMatch) {
 	pos := s.Position()
 
+	partialMatches := []*PatternMatch{}
+
 	for _, pm := range m.patterns {
-		match, _ := pm.Match(s)
-		if !match {
+
+		match, result := pm.Match(s, l)
+		if match {
+			partialMatches = append(partialMatches, result)
+		} else {
+			l.Log(NewPatternMismatch(m.identifier, pos, s.Position(), partialMatches))
+
 			return false, nil
 		}
 	}
 
-	return true, &PatternMatchResult{StartPosition: pos, EndPosition: s.Position()}
+	return true, NewPatternMatch(m.identifier, pos, s.Position())
 }

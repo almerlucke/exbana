@@ -47,33 +47,29 @@ func (ts *TestStream) SetPosition(pos int) {
 }
 
 func TestExbana(t *testing.T) {
+	l := NewPatternMismatchLog()
 	s := NewTestStream()
+
 	sem := NewSingleEntityMatch("match even ints", func(entity interface{}) bool { return entity.(int)%2 == 0 })
-	cm := NewConcatenationMatch("match 5, 6", []PatternMatcher{
+
+	cm := NewConcatenationMatch("match 5&6", []PatternMatcher{
 		NewSingleEntityMatch("5", func(entity interface{}) bool { return entity.(int) == 5 }),
 		NewSingleEntityMatch("6", func(entity interface{}) bool { return entity.(int) == 6 }),
 	})
-	var m PatternMatcher = sem
-
-	t.Logf("%v", m.Identifier())
 
 	for !s.Finished() {
-		match, result := m.Match(s)
+		match, result := sem.Match(s, l)
 		if match {
-			t.Logf("match %v - %v", result.StartPosition, result.EndPosition)
+			t.Logf("%v %v - %v", result.Identifier, result.Range.Start, result.Range.End)
 		}
 	}
 
-	m = cm
-
 	s.SetPosition(0)
 
-	t.Logf("%v", m.Identifier())
-
 	for !s.Finished() {
-		match, result := m.Match(s)
+		match, result := cm.Match(s, l)
 		if match {
-			t.Logf("match %v - %v", result.StartPosition, result.EndPosition)
+			t.Logf("%v %v - %v", result.Identifier, result.Range.Start, result.Range.End)
 		}
 	}
 

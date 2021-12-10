@@ -1,130 +1,176 @@
 package exbana
 
+// Entity returned from streamer, real implementations could have rune or char as entity types
+type Entity interface{}
+
+// Position real type is left to the entity stream
+type Position interface{}
+
+// Value real type is left to the entity stream
+type Value interface{}
+
+// EntityStreamer interface for a stream that can emit entities to pattern matcher
 type EntityStreamer interface {
-	Peek() interface{}
-	Read() interface{}
+	Peek() (Entity, error)
+	Read() (Entity, error)
 	Finished() bool
-	Position() int
-	SetPosition(int)
+	Position() Position
+	SetPosition(Position) error
+	ValueForRange(Position, Position) Value
 }
 
-type PatternMatchRange struct {
-	Start int
-	End   int
-}
-
-type PatternMatch struct {
+// MatchResult contains matched pattern position and identifier
+type MatchResult struct {
 	Identifier string
-	Range      PatternMatchRange
+	Begin      Position
+	End        Position
+	Value      Value
 }
 
-func NewPatternMatch(identifier string, start int, end int) *PatternMatch {
-	return &PatternMatch{
+// NewMatchResult creates a new match result
+func NewMatchResult(identifier string, begin Position, end Position, value Value) *MatchResult {
+	return &MatchResult{
 		Identifier: identifier,
-		Range: PatternMatchRange{
-			Start: start,
-			End:   end,
-		},
+		Begin:      begin,
+		End:        end,
+		Value:      value,
 	}
 }
 
-type PatternMismatch struct {
-	PatternMatch
-	PartialMatches []*PatternMatch
+// Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
+// and the sub patterns that matched so far, this can be used to debug and backtrace pattern mismatches
+type Mismatch struct {
+	MatchResult
+	SubMismatch *MatchResult
+	SubMatches  []*MatchResult
 }
 
-func NewPatternMismatch(identifier string, start int, end int, partialMatches []*PatternMatch) *PatternMismatch {
-	return &PatternMismatch{
-		PatternMatch: PatternMatch{
+// NewMismatch creates a new pattern mismatch
+func NewMismatch(identifier string, begin Position, end Position, subMisMatch *MatchResult, subMatches []*MatchResult) *Mismatch {
+	return &Mismatch{
+		MatchResult: MatchResult{
 			Identifier: identifier,
-			Range: PatternMatchRange{
-				Start: start,
-				End:   end,
-			},
+			Begin:      begin,
+			End:        end,
+			Value:      nil,
 		},
-		PartialMatches: partialMatches,
+		SubMismatch: subMisMatch,
+		SubMatches:  subMatches,
 	}
 }
 
-type PatternMismatchLog struct {
-	Mismatches []*PatternMismatch
+// Logger can be used to log pattern mismatches during pattern matching
+type Logger interface {
+	Log(mismatch *Mismatch)
 }
 
-func NewPatternMismatchLog() *PatternMismatchLog {
-	return &PatternMismatchLog{
-		Mismatches: []*PatternMismatch{},
-	}
-}
-
-func (l *PatternMismatchLog) Log(err *PatternMismatch) {
-	l.Mismatches = append(l.Mismatches, err)
-}
-
-type PatternMatcher interface {
-	Match(EntityStreamer, *PatternMismatchLog) (bool, *PatternMatch)
+// Matcher can match a pattern from a stream, has an identifier and indicates if we need to log
+// mismatches
+type Matcher interface {
+	Match(EntityStreamer, Logger) (bool, *MatchResult, error)
 	Identifier() string
+	LogMismatches() bool
 }
 
-type SingleEntityMatchFunction func(interface{}) bool
+// EntityMatchFunction can match a single entity against a pattern
+type EntityMatchFunction func(Entity) bool
 
-type SingleEntityMatch struct {
+// EntityMatch
+type EntityMatch struct {
 	identifier    string
-	matchFunction SingleEntityMatchFunction
+	logMismatches bool
+	matchFunction EntityMatchFunction
 }
 
-func NewSingleEntityMatch(identifier string, matchFunction SingleEntityMatchFunction) *SingleEntityMatch {
-	return &SingleEntityMatch{
+// NewEntityMatch creates a new entity match
+func NewEntityMatch(identifier string, logMismatches bool, matchFunction EntityMatchFunction) *EntityMatch {
+	return &EntityMatch{
 		identifier:    identifier,
+		logMismatches: logMismatches,
 		matchFunction: matchFunction,
 	}
 }
 
-func (m *SingleEntityMatch) Identifier() string {
+// Identifier of this match
+func (m *EntityMatch) Identifier() string {
 	return m.identifier
 }
 
-func (m *SingleEntityMatch) Match(s EntityStreamer, l *PatternMismatchLog) (bool, *PatternMatch) {
+// LogMismatches indicates if this match needs to log mismatches
+func (m *EntityMatch) LogMismatches() bool {
+	return m.logMismatches
+}
+
+// Match entity
+func (m *EntityMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
 	pos := s.Position()
+	entity, err := s.Read()
 
-	if m.matchFunction(s.Read()) {
-		return true, NewPatternMatch(m.identifier, pos, s.Position())
+	if err != nil {
+		return false, nil, err
 	}
 
-	return false, nil
+	if m.matchFunction(entity) {
+		return true, NewMatchResult(m.identifier, pos, s.Position(), s.ValueForRange(pos, s.Position())), nil
+	} else if m.LogMismatches() && l != nil {
+		l.Log(NewMismatch(m.identifier, pos, s.Position(), nil, nil))
+	}
+
+	return false, nil, nil
 }
 
+// ConcatenationMatch matches a slice of patterns
 type ConcatenationMatch struct {
-	identifier string
-	patterns   []PatternMatcher
+	identifier    string
+	logMismatches bool
+	patterns      []Matcher
 }
 
-func NewConcatenationMatch(identifier string, patterns []PatternMatcher) *ConcatenationMatch {
+// NewConcatenationMatch creates a new concatenation match
+func NewConcatenationMatch(identifier string, logMismatches bool, patterns []Matcher) *ConcatenationMatch {
 	return &ConcatenationMatch{
-		identifier: identifier,
-		patterns:   patterns,
+		identifier:    identifier,
+		logMismatches: logMismatches,
+		patterns:      patterns,
 	}
+}
+
+func (m *ConcatenationMatch) LogMismatches() bool {
+	return m.logMismatches
 }
 
 func (m *ConcatenationMatch) Identifier() string {
 	return m.identifier
 }
 
-func (m *ConcatenationMatch) Match(s EntityStreamer, l *PatternMismatchLog) (bool, *PatternMatch) {
-	pos := s.Position()
+func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+	logMismatches := m.logMismatches && l != nil
+	beginPos := s.Position()
 
-	partialMatches := []*PatternMatch{}
+	matches := []*MatchResult{}
 
 	for _, pm := range m.patterns {
+		subBeginPos := s.Position()
 
-		match, result := pm.Match(s, l)
-		if match {
-			partialMatches = append(partialMatches, result)
+		matched, result, err := pm.Match(s, l)
+		if err != nil {
+			return false, nil, err
+		}
+
+		if matched {
+			matches = append(matches, result)
 		} else {
-			l.Log(NewPatternMismatch(m.identifier, pos, s.Position(), partialMatches))
+			subEndPos := s.Position()
 
-			return false, nil
+			if logMismatches {
+				l.Log(NewMismatch(
+					m.identifier, beginPos, subEndPos, NewMatchResult(pm.Identifier(), subBeginPos, subEndPos, nil), matches),
+				)
+			}
+
+			return false, nil, nil
 		}
 	}
 
-	return true, NewPatternMatch(m.identifier, pos, s.Position())
+	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
 }

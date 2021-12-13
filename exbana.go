@@ -37,6 +37,22 @@ func NewMatchResult(identifier string, begin Position, end Position, value Value
 	}
 }
 
+// TransformFunction transforms match result to final value
+type TransformFunction func(*MatchResult, TransformTable) Value
+
+// TransformTable is used to map matcher identifiers to a transform function
+type TransformTable map[string]TransformFunction
+
+// Transform a match result to a value
+func (t TransformTable) Transform(m *MatchResult) Value {
+	f, ok := t[m.Identifier]
+	if ok {
+		return f(m, t)
+	}
+
+	return m.Value
+}
+
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
 // and the sub patterns that matched so far, this can be used to debug and backtrace pattern mismatches
 type Mismatch struct {
@@ -119,7 +135,7 @@ func (m *EntityMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, err
 	return false, nil, nil
 }
 
-// ConcatenationMatch matches a slice of patterns
+// ConcatenationMatch matches a slice of patterns AND style
 type ConcatenationMatch struct {
 	identifier    string
 	logMismatches bool
@@ -144,7 +160,6 @@ func (m *ConcatenationMatch) Identifier() string {
 }
 
 func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	logMismatches := m.logMismatches && l != nil
 	beginPos := s.Position()
 
 	matches := []*MatchResult{}
@@ -162,7 +177,7 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 		} else {
 			subEndPos := s.Position()
 
-			if logMismatches {
+			if m.logMismatches && l != nil {
 				l.Log(NewMismatch(
 					m.identifier, beginPos, subEndPos, NewMatchResult(pm.Identifier(), subBeginPos, subEndPos, nil), matches),
 				)
@@ -173,4 +188,50 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 	}
 
 	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
+}
+
+// AlternationMatch matches a slice of patterns OR style
+type AlternationMatch struct {
+	identifier    string
+	logMismatches bool
+	patterns      []Matcher
+}
+
+func NewAlternationMatch(identifier string, logMismatches bool, patterns []Matcher) *AlternationMatch {
+	return &AlternationMatch{
+		identifier:    identifier,
+		logMismatches: logMismatches,
+		patterns:      patterns,
+	}
+}
+
+func (m *AlternationMatch) LogMismatches() bool {
+	return m.logMismatches
+}
+
+func (m *AlternationMatch) Identifier() string {
+	return m.identifier
+}
+
+func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+	beginPos := s.Position()
+
+	for _, pm := range m.patterns {
+		matched, result, err := pm.Match(s, l)
+		if err != nil {
+			return false, nil, err
+		}
+
+		if matched {
+			return true, NewMatchResult(m.identifier, beginPos, s.Position(), result), nil
+		}
+
+		s.SetPosition(beginPos)
+	}
+
+	if m.logMismatches && l != nil {
+		l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil))
+	}
+
+	return false, nil, nil
 }

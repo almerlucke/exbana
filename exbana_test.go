@@ -58,30 +58,36 @@ func (ts *TestStream) ValueForRange(begin Position, end Position) Value {
 }
 
 func TestExbana(t *testing.T) {
-	s := NewTestStream("aba")
+	s := NewTestStream("abaaa")
 	isA := NewEntityMatch("is_a", false, func(entity Entity) bool { return entity.(rune) == 'a' })
 	isB := NewEntityMatch("is_b", false, func(entity Entity) bool { return entity.(rune) == 'b' })
 	altAB := NewAlternationMatch("is_a_or_b", false, []Matcher{isA, isB})
-	con3AB := NewConcatenationMatch("ab_3", true, []Matcher{altAB, altAB, altAB})
+	repAB := NewRepetitionMatch("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable{
 		"is_a_or_b": func(m *MatchResult, t TransformTable) Value {
 			return t.Transform(m.Value.(*MatchResult))
 		},
-		"ab_3": func(m *MatchResult, t TransformTable) Value {
+		"ab_repeat": func(m *MatchResult, t TransformTable) Value {
 			results := m.Value.([]*MatchResult)
 
-			return t.Transform(results[0]).(string) + t.Transform(results[1]).(string) + t.Transform(results[2]).(string)
+			str := ""
+
+			for _, r := range results {
+				str += t.Transform(r).(string)
+			}
+
+			return str
 		},
 	}
 
-	matched, result, _ := con3AB.Match(s, s)
+	matched, result, _ := repAB.Match(s, s)
 	if matched {
 		t.Logf("%v", transformTable.Transform(result))
 	}
 
 	for _, mismatch := range s.mismatches {
-		fmt.Printf("mismatch %v %v %v", mismatch.Identifier, mismatch.Begin, mismatch.End)
+		fmt.Printf("mismatch %v %v %v %v", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
 	}
 
 	// s.SetPosition(0)

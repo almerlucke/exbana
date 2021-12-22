@@ -1,5 +1,9 @@
 package exbana
 
+import (
+	"fmt"
+)
+
 // Entity returned from streamer, real implementations could have rune or char as entity types
 type Entity interface{}
 
@@ -54,15 +58,16 @@ func (t TransformTable) Transform(m *MatchResult) Value {
 }
 
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
-// and the sub patterns that matched so far, this can be used to debug and backtrace pattern mismatches
+// and the sub patterns that matched so far, an optional error can be passed to give more specific information
 type Mismatch struct {
 	MatchResult
 	SubMismatch *MatchResult
 	SubMatches  []*MatchResult
+	Error       error
 }
 
 // NewMismatch creates a new pattern mismatch
-func NewMismatch(identifier string, begin Position, end Position, subMisMatch *MatchResult, subMatches []*MatchResult) *Mismatch {
+func NewMismatch(identifier string, begin Position, end Position, subMisMatch *MatchResult, subMatches []*MatchResult, err error) *Mismatch {
 	return &Mismatch{
 		MatchResult: MatchResult{
 			Identifier: identifier,
@@ -72,6 +77,7 @@ func NewMismatch(identifier string, begin Position, end Position, subMisMatch *M
 		},
 		SubMismatch: subMisMatch,
 		SubMatches:  subMatches,
+		Error:       err,
 	}
 }
 
@@ -129,7 +135,7 @@ func (m *EntityMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, err
 	if m.matchFunction(entity) {
 		return true, NewMatchResult(m.identifier, pos, s.Position(), s.ValueForRange(pos, s.Position())), nil
 	} else if m.LogMismatches() && l != nil {
-		l.Log(NewMismatch(m.identifier, pos, s.Position(), nil, nil))
+		l.Log(NewMismatch(m.identifier, pos, s.Position(), nil, nil, nil))
 	}
 
 	return false, nil, nil
@@ -179,7 +185,7 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 
 			if m.logMismatches && l != nil {
 				l.Log(NewMismatch(
-					m.identifier, beginPos, subEndPos, NewMatchResult(pm.Identifier(), subBeginPos, subEndPos, nil), matches),
+					m.identifier, beginPos, subEndPos, NewMatchResult(pm.Identifier(), subBeginPos, subEndPos, nil), matches, nil),
 				)
 			}
 
@@ -217,6 +223,8 @@ func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult
 	beginPos := s.Position()
 
 	for _, pm := range m.patterns {
+		s.SetPosition(beginPos)
+
 		matched, result, err := pm.Match(s, l)
 		if err != nil {
 			return false, nil, err
@@ -225,13 +233,75 @@ func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult
 		if matched {
 			return true, NewMatchResult(m.identifier, beginPos, s.Position(), result), nil
 		}
-
-		s.SetPosition(beginPos)
 	}
 
 	if m.logMismatches && l != nil {
-		l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil))
+		l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil, nil))
 	}
 
 	return false, nil, nil
+}
+
+type RepetitionMatch struct {
+	identifier    string
+	logMismatches bool
+	pattern       Matcher
+	min           int
+	max           int
+}
+
+func NewRepetitionMatch(identifier string, logMismatches bool, pattern Matcher, min int, max int) *RepetitionMatch {
+	return &RepetitionMatch{
+		identifier:    identifier,
+		logMismatches: logMismatches,
+		pattern:       pattern,
+		min:           min,
+		max:           max,
+	}
+}
+
+func (m *RepetitionMatch) LogMismatches() bool {
+	return m.logMismatches
+}
+
+func (m *RepetitionMatch) Identifier() string {
+	return m.identifier
+}
+
+func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+	beginPos := s.Position()
+	matches := []*MatchResult{}
+
+	for {
+		if s.Finished() {
+			break
+		}
+
+		resetPos := s.Position()
+
+		matched, result, err := m.pattern.Match(s, l)
+		if err != nil {
+			return false, nil, err
+		}
+
+		if !matched {
+			s.SetPosition(resetPos)
+			break
+		}
+
+		matches = append(matches, result)
+		if m.max != 0 && len(matches) == m.max {
+			break
+		}
+	}
+
+	if len(matches) < m.min {
+		if m.logMismatches && l != nil {
+			l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", m.min)))
+		}
+
+		return false, nil, nil
+	}
+
+	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
 }

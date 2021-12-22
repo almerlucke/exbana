@@ -7,6 +7,9 @@ import (
 // Entity returned from streamer, real implementations could have rune or char as entity types
 type Entity interface{}
 
+// EntityEqualFunction test if two entities are equal
+type EntityEqualFunction func(Entity, Entity) bool
+
 // Position real type is left to the entity stream
 type Position interface{}
 
@@ -139,6 +142,53 @@ func (m *EntityMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, err
 	}
 
 	return false, nil, nil
+}
+
+type EntitySeriesMatch struct {
+	identifier    string
+	logMismatches bool
+	equalFunction EntityEqualFunction
+	series        []Entity
+}
+
+func NewEntitySeriesMatch(identifier string, logMismatches bool, series []Entity, equalFunction EntityEqualFunction) *EntitySeriesMatch {
+	return &EntitySeriesMatch{
+		identifier:    identifier,
+		logMismatches: logMismatches,
+		series:        series,
+		equalFunction: equalFunction,
+	}
+}
+
+func (m *EntitySeriesMatch) LogMismatches() bool {
+	return m.logMismatches
+}
+
+func (m *EntitySeriesMatch) Identifier() string {
+	return m.identifier
+}
+
+func (m *EntitySeriesMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+	beginPos := s.Position()
+
+	for _, e1 := range m.series {
+		e2, err := s.Read()
+		if err != nil {
+			return false, nil, err
+		}
+
+		if !m.equalFunction(e1, e2) {
+			if m.logMismatches && l != nil {
+				l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil, nil))
+			}
+
+			return false, nil, nil
+		}
+	}
+
+	endPos := s.Position()
+
+	return true, NewMatchResult(m.identifier, beginPos, endPos, s.ValueForRange(beginPos, endPos)), nil
 }
 
 // ConcatenationMatch matches a slice of patterns AND style

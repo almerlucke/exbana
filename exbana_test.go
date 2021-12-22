@@ -99,3 +99,33 @@ func TestExbana(t *testing.T) {
 	// 	}
 	// }
 }
+
+func runeEntityEqual(e1 Entity, e2 Entity) bool {
+	return e1.(rune) == e2.(rune)
+}
+
+func stringToEntitySeries(str string) []Entity {
+	entities := []Entity{}
+
+	for _, r := range str {
+		entities = append(entities, r)
+	}
+
+	return entities
+}
+
+func TestExbanaEntitySeries(t *testing.T) {
+	s := NewTestStream("hallr")
+	isHallo := NewEntitySeriesMatch("hallo", true, stringToEntitySeries("hallo"), runeEntityEqual)
+
+	transformTable := TransformTable{}
+
+	matched, result, _ := isHallo.Match(s, s)
+	if matched {
+		t.Logf("%v", transformTable.Transform(result))
+	}
+
+	for _, mismatch := range s.mismatches {
+		fmt.Printf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+	}
+}

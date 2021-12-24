@@ -57,6 +57,8 @@ func (ts *TestStream) ValueForRange(begin Position, end Position) Value {
 	return string(ts.values[begin.(int):end.(int)])
 }
 
+// go test -run TestExbanaEntitySeries -v
+
 func TestExbana(t *testing.T) {
 	s := NewTestStream("abaaa")
 	isA := NewEntityMatch("is_a", false, func(entity Entity) bool { return entity.(rune) == 'a' })
@@ -113,6 +115,8 @@ func stringToEntitySeries(str string) []Entity {
 
 	return entities
 }
+
+// go test -run TestExbanaEntitySeries -v
 
 func TestExbanaEntitySeries(t *testing.T) {
 	s := NewTestStream("hallr")

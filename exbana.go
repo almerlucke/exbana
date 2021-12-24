@@ -310,6 +310,18 @@ func NewRepetitionMatch(identifier string, logMismatches bool, pattern Matcher, 
 	}
 }
 
+func NewOptionalMatch(identifier string, logMismatches bool, pattern Matcher) *RepetitionMatch {
+	return NewRepetitionMatch(identifier, logMismatches, pattern, 0, 1)
+}
+
+func NewAnyMatch(identifier string, logMismatches bool, pattern Matcher) *RepetitionMatch {
+	return NewRepetitionMatch(identifier, logMismatches, pattern, 0, 0)
+}
+
+func NewTimesMatch(identifier string, logMismatches bool, pattern Matcher, times int) *RepetitionMatch {
+	return NewRepetitionMatch(identifier, logMismatches, pattern, times, times)
+}
+
 func (m *RepetitionMatch) LogMismatches() bool {
 	return m.logMismatches
 }
@@ -354,4 +366,83 @@ func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult,
 	}
 
 	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
+}
+
+type ExceptionMatch struct {
+	identifier    string
+	logMismatches bool
+	mustMatch     Matcher
+	except        Matcher
+}
+
+func NewExceptionMatch(identifier string, logMismatches bool, mustMatch Matcher, except Matcher) *ExceptionMatch {
+	return &ExceptionMatch{
+		identifier:    identifier,
+		logMismatches: logMismatches,
+		mustMatch:     mustMatch,
+		except:        except,
+	}
+}
+
+func (m *ExceptionMatch) LogMismatches() bool {
+	return m.logMismatches
+}
+
+func (m *ExceptionMatch) Identifier() string {
+	return m.identifier
+}
+
+func (m *ExceptionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+	beginPos := s.Position()
+
+	// First check for the exception match, we do not want to match the exception
+	matched, result, err := m.except.Match(s, l)
+	if err != nil {
+		return false, nil, err
+	}
+
+	if matched {
+		if m.logMismatches && l != nil {
+			l.Log(NewMismatch(m.identifier, beginPos, s.Position(), result, nil, nil))
+		}
+
+		return false, nil, nil
+	}
+
+	// Reset the position and return the mustMatch result
+	s.SetPosition(beginPos)
+
+	return m.mustMatch.Match(s, l)
+}
+
+type EndOfStreamMatch struct {
+	identifier    string
+	logMismatches bool
+}
+
+func NewEndOfStreamMatch(identifier string, logMismatches bool) *EndOfStreamMatch {
+	return &EndOfStreamMatch{
+		identifier:    identifier,
+		logMismatches: logMismatches,
+	}
+}
+
+func (m *EndOfStreamMatch) LogMismatches() bool {
+	return m.logMismatches
+}
+
+func (m *EndOfStreamMatch) Identifier() string {
+	return m.identifier
+}
+
+func (m *EndOfStreamMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+	if s.Finished() {
+		return true, NewMatchResult(m.identifier, s.Position(), s.Position(), nil), nil
+	}
+
+	if m.logMismatches && l != nil {
+		l.Log(NewMismatch(m.identifier, s.Position(), s.Position(), nil, nil, nil))
+	}
+
+	return false, nil, nil
 }

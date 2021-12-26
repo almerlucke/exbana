@@ -3,6 +3,7 @@ package exbana
 import (
 	"fmt"
 	"testing"
+	"unicode"
 )
 
 type TestStream struct {
@@ -125,6 +126,33 @@ func TestExbanaEntitySeries(t *testing.T) {
 	transformTable := TransformTable{}
 
 	matched, result, _ := isHallo.Match(s, s)
+	if matched {
+		t.Logf("%v", transformTable.Transform(result))
+	}
+
+	for _, mismatch := range s.mismatches {
+		fmt.Printf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+	}
+}
+
+func TestExbanaException(t *testing.T) {
+	s := NewTestStream("1234567")
+	isDigit := NewEntityMatch("isLetter", false, func(entity Entity) bool { return unicode.IsDigit(entity.(rune)) })
+	isSix := NewEntityMatch("isSix", false, func(entity Entity) bool { return entity.(rune) == '6' })
+	isDigitExceptSix := NewExceptionMatch("isDigitExceptSix", false, isDigit, isSix)
+	allDigitsExceptSix := NewRepetitionMatch("allDigitsExceptSix", true, isDigitExceptSix, 1, 0)
+
+	transformTable := TransformTable{
+		"allDigitsExceptSix": func(result *MatchResult, table TransformTable) Value {
+			str := ""
+			for _, r := range result.Value.([]*MatchResult) {
+				str += r.Value.(string)
+			}
+			return str
+		},
+	}
+
+	matched, result, _ := allDigitsExceptSix.Match(s, s)
 	if matched {
 		t.Logf("%v", transformTable.Transform(result))
 	}

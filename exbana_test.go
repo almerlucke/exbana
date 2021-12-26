@@ -58,6 +58,20 @@ func (ts *TestStream) ValueForRange(begin Position, end Position) Value {
 	return string(ts.values[begin.(int):end.(int)])
 }
 
+func runeEntityEqual(e1 Entity, e2 Entity) bool {
+	return (e1 != nil) && (e2 != nil) && (e1.(rune) == e2.(rune))
+}
+
+func stringToEntitySeries(str string) []Entity {
+	entities := []Entity{}
+
+	for _, r := range str {
+		entities = append(entities, r)
+	}
+
+	return entities
+}
+
 // go test -run TestExbanaEntitySeries -v
 
 func TestExbana(t *testing.T) {
@@ -101,20 +115,6 @@ func TestExbana(t *testing.T) {
 	// 		t.Logf("%v %v - %v - %v", result.Identifier, result.Begin, result.End, result.Value)
 	// 	}
 	// }
-}
-
-func runeEntityEqual(e1 Entity, e2 Entity) bool {
-	return e1.(rune) == e2.(rune)
-}
-
-func stringToEntitySeries(str string) []Entity {
-	entities := []Entity{}
-
-	for _, r := range str {
-		entities = append(entities, r)
-	}
-
-	return entities
 }
 
 // go test -run TestExbanaEntitySeries -v
@@ -164,5 +164,82 @@ func TestExbanaException(t *testing.T) {
 
 	for _, mismatch := range s.mismatches {
 		t.Logf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+	}
+}
+
+func TestExbanaPascal(t *testing.T) {
+	s := NewTestStream(`PROGRAM DEMO1
+	BEGIN
+		A:=3;
+		B:=45;
+		H:=-100023;
+		C:=A;
+		D123:=B34A;
+		BABOON:=GIRAFFE;
+		TEXT:="Hello world!";
+	END`)
+
+	// count := 0
+	// for {
+	// 	if s.Finished() {
+	// 		break
+	// 	}
+	// 	e, _ := s.Read()
+	// 	t.Logf("%d %c\n", count, e.(rune))
+	// 	count += 1
+	// }
+
+	// s.SetPosition(0)
+
+	minus := NewEntityMatch("minus", false, func(e Entity) bool { return e != nil && e.(rune) == '-' })
+	doubleQuote := NewEntityMatch("doubleQuote", false, func(e Entity) bool { return e != nil && e.(rune) == '"' })
+	assignSymbol := NewEntitySeriesMatch("assignSymbol", true, stringToEntitySeries(":="), runeEntityEqual)
+	semiColon := NewEntityMatch("semiColon", false, func(e Entity) bool { return e != nil && e.(rune) == ';' })
+	allCharacters := NewEntityMatch("allCharacters", false, func(e Entity) bool { return e != nil && unicode.IsGraphic(e.(rune)) })
+	allButDoubleQuote := NewExceptionMatch("allButDoubleQuote", false, allCharacters, doubleQuote)
+	stringValue := NewConcatenationMatch("stringValue", false, []Matcher{doubleQuote, NewAnyMatch("stringContent", false, allButDoubleQuote), doubleQuote})
+	whiteSpace := NewEntityMatch("whiteSpace", false, func(e Entity) bool { return e != nil && unicode.IsSpace(e.(rune)) })
+	atLeastOneWhiteSpace := NewRepetitionMatch("atLeastOneWhiteSpace", false, whiteSpace, 1, 0)
+	digit := NewEntityMatch("digit", false, func(e Entity) bool { return e != nil && unicode.IsDigit(e.(rune)) })
+	anyDigit := NewAnyMatch("anyDigit", false, digit)
+	alphabeticCharacter := NewEntityMatch("alphabeticCharacter", false, func(e Entity) bool { return e != nil && unicode.IsUpper(e.(rune)) && unicode.IsLetter(e.(rune)) })
+	anyAlnum := NewAnyMatch("anyAlnum", false, NewAlternationMatch("aa1", false, []Matcher{alphabeticCharacter, digit}))
+	identifier := NewConcatenationMatch("identifier", false, []Matcher{alphabeticCharacter, anyAlnum})
+	number := NewConcatenationMatch("number", false, []Matcher{NewOptionalMatch("optMinus", false, minus), digit, anyDigit})
+	assignmentRightSide := NewAlternationMatch("assignmentRightSide", false, []Matcher{number, identifier, stringValue})
+	assignment := NewConcatenationMatch("assignment", false, []Matcher{identifier, assignSymbol, assignmentRightSide})
+	programTerminal := NewEntitySeriesMatch("programTerminal", true, stringToEntitySeries("PROGRAM"), runeEntityEqual)
+	beginTerminal := NewEntitySeriesMatch("beginTerminal", true, stringToEntitySeries("BEGIN"), runeEntityEqual)
+	endTerminal := NewEntitySeriesMatch("endTerminal", true, stringToEntitySeries("END"), runeEntityEqual)
+	assignmentsInternal := NewConcatenationMatch("assignmentsInternal", false, []Matcher{assignment, semiColon, atLeastOneWhiteSpace})
+	assignments := NewAnyMatch("assignments", false, assignmentsInternal)
+	program := NewConcatenationMatch("program", false, []Matcher{
+		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
+	})
+
+	transformTable := TransformTable{
+		"identifier": func(result *MatchResult, table TransformTable) Value {
+			elements := result.Value.([]*MatchResult)
+			id := elements[0].Value.(string)
+			for _, alnum := range elements[1].Value.([]*MatchResult) {
+				id += alnum.Value.(*MatchResult).Value.(string)
+			}
+
+			return id
+		},
+		"program": func(result *MatchResult, table TransformTable) Value {
+			elements := result.Value.([]*MatchResult)
+			t.Logf("program name: %v", table.Transform(elements[2]))
+			return result
+		},
+	}
+
+	matched, result, _ := program.Match(s, s)
+	if matched {
+		t.Logf("%v", transformTable.Transform(result))
+	} else {
+		for _, mismatch := range s.mismatches {
+			t.Logf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+		}
 	}
 }

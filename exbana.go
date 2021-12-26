@@ -195,7 +195,7 @@ func (m *EntitySeriesMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResul
 type ConcatenationMatch struct {
 	identifier    string
 	logMismatches bool
-	patterns      []Matcher
+	Patterns      []Matcher
 }
 
 // NewConcatenationMatch creates a new concatenation match
@@ -203,7 +203,7 @@ func NewConcatenationMatch(identifier string, logMismatches bool, patterns []Mat
 	return &ConcatenationMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
-		patterns:      patterns,
+		Patterns:      patterns,
 	}
 }
 
@@ -220,7 +220,7 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 
 	matches := []*MatchResult{}
 
-	for _, pm := range m.patterns {
+	for _, pm := range m.Patterns {
 		subBeginPos := s.Position()
 
 		matched, result, err := pm.Match(s, l)
@@ -250,14 +250,14 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 type AlternationMatch struct {
 	identifier    string
 	logMismatches bool
-	patterns      []Matcher
+	Patterns      []Matcher
 }
 
 func NewAlternationMatch(identifier string, logMismatches bool, patterns []Matcher) *AlternationMatch {
 	return &AlternationMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
-		patterns:      patterns,
+		Patterns:      patterns,
 	}
 }
 
@@ -272,7 +272,7 @@ func (m *AlternationMatch) Identifier() string {
 func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
 	beginPos := s.Position()
 
-	for _, pm := range m.patterns {
+	for _, pm := range m.Patterns {
 		s.SetPosition(beginPos)
 
 		matched, result, err := pm.Match(s, l)
@@ -295,7 +295,7 @@ func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult
 type RepetitionMatch struct {
 	identifier    string
 	logMismatches bool
-	pattern       Matcher
+	Pattern       Matcher
 	min           int
 	max           int
 }
@@ -304,7 +304,7 @@ func NewRepetitionMatch(identifier string, logMismatches bool, pattern Matcher, 
 	return &RepetitionMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
-		pattern:       pattern,
+		Pattern:       pattern,
 		min:           min,
 		max:           max,
 	}
@@ -341,7 +341,7 @@ func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult,
 
 		resetPos := s.Position()
 
-		matched, result, err := m.pattern.Match(s, l)
+		matched, result, err := m.Pattern.Match(s, l)
 		if err != nil {
 			return false, nil, err
 		}
@@ -371,16 +371,16 @@ func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult,
 type ExceptionMatch struct {
 	identifier    string
 	logMismatches bool
-	mustMatch     Matcher
-	except        Matcher
+	MustMatch     Matcher
+	Except        Matcher
 }
 
 func NewExceptionMatch(identifier string, logMismatches bool, mustMatch Matcher, except Matcher) *ExceptionMatch {
 	return &ExceptionMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
-		mustMatch:     mustMatch,
-		except:        except,
+		MustMatch:     mustMatch,
+		Except:        except,
 	}
 }
 
@@ -396,7 +396,7 @@ func (m *ExceptionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, 
 	beginPos := s.Position()
 
 	// First check for the exception match, we do not want to match the exception
-	matched, result, err := m.except.Match(s, l)
+	matched, result, err := m.Except.Match(s, l)
 	if err != nil {
 		return false, nil, err
 	}
@@ -412,7 +412,7 @@ func (m *ExceptionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, 
 	// Reset the position and return the mustMatch result
 	s.SetPosition(beginPos)
 
-	return m.mustMatch.Match(s, l)
+	return m.MustMatch.Match(s, l)
 }
 
 type EndOfStreamMatch struct {

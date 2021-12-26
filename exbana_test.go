@@ -136,11 +136,13 @@ func TestExbanaEntitySeries(t *testing.T) {
 }
 
 func TestExbanaException(t *testing.T) {
-	s := NewTestStream("1234567")
+	s := NewTestStream("123457")
 	isDigit := NewEntityMatch("isLetter", false, func(entity Entity) bool { return unicode.IsDigit(entity.(rune)) })
 	isSix := NewEntityMatch("isSix", false, func(entity Entity) bool { return entity.(rune) == '6' })
 	isDigitExceptSix := NewExceptionMatch("isDigitExceptSix", false, isDigit, isSix)
-	allDigitsExceptSix := NewRepetitionMatch("allDigitsExceptSix", true, isDigitExceptSix, 1, 0)
+	allDigitsExceptSix := NewRepetitionMatch("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
+	endOfStream := NewEndOfStreamMatch("endOfStream", false)
+	allDigitsExceptSixTillTheEnd := NewConcatenationMatch("allDigitsExceptSixTillTheEnd", true, []Matcher{allDigitsExceptSix, endOfStream})
 
 	transformTable := TransformTable{
 		"allDigitsExceptSix": func(result *MatchResult, table TransformTable) Value {
@@ -150,14 +152,17 @@ func TestExbanaException(t *testing.T) {
 			}
 			return str
 		},
+		"allDigitsExceptSixTillTheEnd": func(result *MatchResult, table TransformTable) Value {
+			return table.Transform(result.Value.([]*MatchResult)[0])
+		},
 	}
 
-	matched, result, _ := allDigitsExceptSix.Match(s, s)
+	matched, result, _ := allDigitsExceptSixTillTheEnd.Match(s, s)
 	if matched {
 		t.Logf("%v", transformTable.Transform(result))
 	}
 
 	for _, mismatch := range s.mismatches {
-		fmt.Printf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+		t.Logf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
 	}
 }

@@ -167,7 +167,30 @@ func TestExbanaException(t *testing.T) {
 	}
 }
 
-func TestExbanaPascal(t *testing.T) {
+type ProgramValueType int
+
+const (
+	ProgramValueTypeString ProgramValueType = iota
+	ProgramValueTypeNumber
+	ProgramValueTypeIdentifier
+)
+
+type ProgramValue struct {
+	Content string
+	Type    ProgramValueType
+}
+
+type ProgramAssignment struct {
+	LeftSide  *ProgramValue
+	RightSide *ProgramValue
+}
+
+type Program struct {
+	Name        *ProgramValue
+	Assignments []*ProgramAssignment
+}
+
+func TestExbanaProgram(t *testing.T) {
 	s := NewTestStream(`PROGRAM DEMO1
 	BEGIN
 		A:=3;
@@ -179,30 +202,30 @@ func TestExbanaPascal(t *testing.T) {
 		TEXT:="Hello world!";
 	END`)
 
-	// count := 0
-	// for {
-	// 	if s.Finished() {
-	// 		break
-	// 	}
-	// 	e, _ := s.Read()
-	// 	t.Logf("%d %c\n", count, e.(rune))
-	// 	count += 1
-	// }
+	runeMatch := func(r rune) EntityMatchFunction {
+		return func(e Entity) bool {
+			return e != nil && e.(rune) == r
+		}
+	}
 
-	// s.SetPosition(0)
+	runeFuncMatch := func(rf func(rune) bool) EntityMatchFunction {
+		return func(e Entity) bool {
+			return e != nil && rf(e.(rune))
+		}
+	}
 
-	minus := NewEntityMatch("minus", false, func(e Entity) bool { return e != nil && e.(rune) == '-' })
-	doubleQuote := NewEntityMatch("doubleQuote", false, func(e Entity) bool { return e != nil && e.(rune) == '"' })
+	minus := NewEntityMatch("minus", false, runeMatch('-'))
+	doubleQuote := NewEntityMatch("doubleQuote", false, runeMatch('"'))
 	assignSymbol := NewEntitySeriesMatch("assignSymbol", true, stringToEntitySeries(":="), runeEntityEqual)
-	semiColon := NewEntityMatch("semiColon", false, func(e Entity) bool { return e != nil && e.(rune) == ';' })
-	allCharacters := NewEntityMatch("allCharacters", false, func(e Entity) bool { return e != nil && unicode.IsGraphic(e.(rune)) })
+	semiColon := NewEntityMatch("semiColon", false, runeMatch(';'))
+	allCharacters := NewEntityMatch("allCharacters", false, runeFuncMatch(unicode.IsGraphic))
 	allButDoubleQuote := NewExceptionMatch("allButDoubleQuote", false, allCharacters, doubleQuote)
-	stringValue := NewConcatenationMatch("stringValue", false, []Matcher{doubleQuote, NewAnyMatch("stringContent", false, allButDoubleQuote), doubleQuote})
-	whiteSpace := NewEntityMatch("whiteSpace", false, func(e Entity) bool { return e != nil && unicode.IsSpace(e.(rune)) })
+	stringValue := NewConcatenationMatch("string", false, []Matcher{doubleQuote, NewAnyMatch("stringContent", false, allButDoubleQuote), doubleQuote})
+	whiteSpace := NewEntityMatch("whiteSpace", false, runeFuncMatch(unicode.IsSpace))
 	atLeastOneWhiteSpace := NewRepetitionMatch("atLeastOneWhiteSpace", false, whiteSpace, 1, 0)
-	digit := NewEntityMatch("digit", false, func(e Entity) bool { return e != nil && unicode.IsDigit(e.(rune)) })
+	digit := NewEntityMatch("digit", false, runeFuncMatch(unicode.IsDigit))
 	anyDigit := NewAnyMatch("anyDigit", false, digit)
-	alphabeticCharacter := NewEntityMatch("alphabeticCharacter", false, func(e Entity) bool { return e != nil && unicode.IsUpper(e.(rune)) && unicode.IsLetter(e.(rune)) })
+	alphabeticCharacter := NewEntityMatch("alphabeticCharacter", false, runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) }))
 	anyAlnum := NewAnyMatch("anyAlnum", false, NewAlternationMatch("aa1", false, []Matcher{alphabeticCharacter, digit}))
 	identifier := NewConcatenationMatch("identifier", false, []Matcher{alphabeticCharacter, anyAlnum})
 	number := NewConcatenationMatch("number", false, []Matcher{NewOptionalMatch("optMinus", false, minus), digit, anyDigit})
@@ -218,25 +241,78 @@ func TestExbanaPascal(t *testing.T) {
 	})
 
 	transformTable := TransformTable{
-		"identifier": func(result *MatchResult, table TransformTable) Value {
+		"assignment": func(result *MatchResult, table TransformTable) Value {
 			elements := result.Value.([]*MatchResult)
-			id := elements[0].Value.(string)
-			for _, alnum := range elements[1].Value.([]*MatchResult) {
-				id += alnum.Value.(*MatchResult).Value.(string)
+
+			leftSide := table.Transform(elements[0]).(*ProgramValue)
+			rightSide := table.Transform(elements[2].Value.(*MatchResult)).(*ProgramValue)
+
+			return &ProgramAssignment{LeftSide: leftSide, RightSide: rightSide}
+		},
+		"number": func(result *MatchResult, table TransformTable) Value {
+			elements := result.Value.([]*MatchResult)
+			numContent := ""
+
+			if len(elements[0].Value.([]*MatchResult)) > 0 {
+				numContent += "-"
 			}
 
-			return id
+			numContent += elements[1].Value.(string)
+
+			for _, numChr := range elements[2].Value.([]*MatchResult) {
+				numContent += numChr.Value.(string)
+			}
+
+			return &ProgramValue{Content: numContent, Type: ProgramValueTypeNumber}
+		},
+		"string": func(result *MatchResult, table TransformTable) Value {
+			elements := result.Value.([]*MatchResult)
+			stringContent := ""
+
+			for _, strChr := range elements[1].Value.([]*MatchResult) {
+				stringContent += strChr.Value.(string)
+			}
+
+			return &ProgramValue{Content: stringContent, Type: ProgramValueTypeString}
+		},
+		"identifier": func(result *MatchResult, table TransformTable) Value {
+			elements := result.Value.([]*MatchResult)
+			// First character
+			idContent := elements[0].Value.(string)
+			// Rest of characters
+			for _, alnum := range elements[1].Value.([]*MatchResult) {
+				idContent += alnum.Value.(*MatchResult).Value.(string)
+			}
+
+			return &ProgramValue{Content: idContent, Type: ProgramValueTypeIdentifier}
 		},
 		"program": func(result *MatchResult, table TransformTable) Value {
 			elements := result.Value.([]*MatchResult)
-			t.Logf("program name: %v", table.Transform(elements[2]))
-			return result
+			name := table.Transform(elements[2]).(*ProgramValue)
+
+			assignments := []*ProgramAssignment{}
+
+			rawAssignments := elements[6].Value.([]*MatchResult)
+
+			for _, rawAssignment := range rawAssignments {
+				assignment := table.Transform(rawAssignment.Value.([]*MatchResult)[0]).(*ProgramAssignment)
+				assignments = append(assignments, assignment)
+			}
+
+			return &Program{
+				Name:        name,
+				Assignments: assignments,
+			}
 		},
 	}
 
 	matched, result, _ := program.Match(s, s)
 	if matched {
-		t.Logf("%v", transformTable.Transform(result))
+		program := transformTable.Transform(result).(*Program)
+		t.Logf("Program %v", program.Name.Content)
+		for _, assignment := range program.Assignments {
+			t.Logf("Assignment: %v = %v", assignment.LeftSide.Content, assignment.RightSide.Content)
+		}
 	} else {
 		for _, mismatch := range s.mismatches {
 			t.Logf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)

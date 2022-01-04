@@ -292,6 +292,7 @@ func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult
 	return false, nil, nil
 }
 
+// RepetitionMatch matches a pattern min and max times
 type RepetitionMatch struct {
 	identifier    string
 	logMismatches bool
@@ -368,6 +369,7 @@ func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult,
 	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
 }
 
+// ExceptionMatch must match MustMatch but first must not match Except
 type ExceptionMatch struct {
 	identifier    string
 	logMismatches bool
@@ -415,11 +417,13 @@ func (m *ExceptionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, 
 	return m.MustMatch.Match(s, l)
 }
 
+// EndOfStreamMatch matches the end of stream
 type EndOfStreamMatch struct {
 	identifier    string
 	logMismatches bool
 }
 
+// NewEndOfStreamMatch creates a new end of stream match
 func NewEndOfStreamMatch(identifier string, logMismatches bool) *EndOfStreamMatch {
 	return &EndOfStreamMatch{
 		identifier:    identifier,

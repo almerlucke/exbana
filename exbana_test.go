@@ -220,7 +220,7 @@ func TestExbanaProgram(t *testing.T) {
 	semiColon := NewEntityMatch("semiColon", false, runeMatch(';'))
 	allCharacters := NewEntityMatch("allCharacters", false, runeFuncMatch(unicode.IsGraphic))
 	allButDoubleQuote := NewExceptionMatch("allButDoubleQuote", false, allCharacters, doubleQuote)
-	stringValue := NewConcatenationMatch("string", false, []Matcher{doubleQuote, NewAnyMatch("stringContent", false, allButDoubleQuote), doubleQuote})
+	stringValue := NewConcatenationMatch("string", true, []Matcher{doubleQuote, NewAnyMatch("stringContent", false, allButDoubleQuote), doubleQuote})
 	whiteSpace := NewEntityMatch("whiteSpace", false, runeFuncMatch(unicode.IsSpace))
 	atLeastOneWhiteSpace := NewRepetitionMatch("atLeastOneWhiteSpace", false, whiteSpace, 1, 0)
 	digit := NewEntityMatch("digit", false, runeFuncMatch(unicode.IsDigit))
@@ -231,12 +231,12 @@ func TestExbanaProgram(t *testing.T) {
 	number := NewConcatenationMatch("number", false, []Matcher{NewOptionalMatch("optMinus", false, minus), digit, anyDigit})
 	assignmentRightSide := NewAlternationMatch("assignmentRightSide", false, []Matcher{number, identifier, stringValue})
 	assignment := NewConcatenationMatch("assignment", false, []Matcher{identifier, assignSymbol, assignmentRightSide})
-	programTerminal := NewEntitySeriesMatch("programTerminal", true, stringToEntitySeries("PROGRAM"), runeEntityEqual)
-	beginTerminal := NewEntitySeriesMatch("beginTerminal", true, stringToEntitySeries("BEGIN"), runeEntityEqual)
-	endTerminal := NewEntitySeriesMatch("endTerminal", true, stringToEntitySeries("END"), runeEntityEqual)
+	programTerminal := NewEntitySeriesMatch("programTerminal", false, stringToEntitySeries("PROGRAM"), runeEntityEqual)
+	beginTerminal := NewEntitySeriesMatch("beginTerminal", false, stringToEntitySeries("BEGIN"), runeEntityEqual)
+	endTerminal := NewEntitySeriesMatch("endTerminal", false, stringToEntitySeries("END"), runeEntityEqual)
 	assignmentsInternal := NewConcatenationMatch("assignmentsInternal", false, []Matcher{assignment, semiColon, atLeastOneWhiteSpace})
 	assignments := NewAnyMatch("assignments", false, assignmentsInternal)
-	program := NewConcatenationMatch("program", false, []Matcher{
+	program := NewConcatenationMatch("program", true, []Matcher{
 		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
 	})
 

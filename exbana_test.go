@@ -76,10 +76,10 @@ func stringToEntitySeries(str string) []Entity {
 
 func TestExbana(t *testing.T) {
 	s := NewTestStream("abaaa")
-	isA := NewEntityMatch("is_a", false, func(entity Entity) bool { return entity.(rune) == 'a' })
-	isB := NewEntityMatch("is_b", false, func(entity Entity) bool { return entity.(rune) == 'b' })
-	altAB := NewAlternationMatch("is_a_or_b", false, []Matcher{isA, isB})
-	repAB := NewRepetitionMatch("ab_repeat", true, altAB, 3, 4)
+	isA := NewEntityMatchWithID("is_a", false, func(entity Entity) bool { return entity.(rune) == 'a' })
+	isB := NewEntityMatchWithID("is_b", false, func(entity Entity) bool { return entity.(rune) == 'b' })
+	altAB := NewAlternationMatchWithID("is_a_or_b", false, []Matcher{isA, isB})
+	repAB := NewRepetitionMatchWithID("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable{
 		"is_a_or_b": func(m *MatchResult, t TransformTable) Value {
@@ -121,7 +121,7 @@ func TestExbana(t *testing.T) {
 
 func TestExbanaEntitySeries(t *testing.T) {
 	s := NewTestStream("hallr")
-	isHallo := NewEntitySeriesMatch("hallo", true, stringToEntitySeries("hallo"), runeEntityEqual)
+	isHallo := NewEntitySeriesMatchWithID("hallo", true, stringToEntitySeries("hallo"), runeEntityEqual)
 
 	transformTable := TransformTable{}
 
@@ -137,12 +137,12 @@ func TestExbanaEntitySeries(t *testing.T) {
 
 func TestExbanaException(t *testing.T) {
 	s := NewTestStream("123457")
-	isDigit := NewEntityMatch("isLetter", false, func(entity Entity) bool { return unicode.IsDigit(entity.(rune)) })
-	isSix := NewEntityMatch("isSix", false, func(entity Entity) bool { return entity.(rune) == '6' })
-	isDigitExceptSix := NewExceptionMatch("isDigitExceptSix", false, isDigit, isSix)
-	allDigitsExceptSix := NewRepetitionMatch("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
-	endOfStream := NewEndOfStreamMatch("endOfStream", false)
-	allDigitsExceptSixTillTheEnd := NewConcatenationMatch("allDigitsExceptSixTillTheEnd", true, []Matcher{allDigitsExceptSix, endOfStream})
+	isDigit := NewEntityMatchWithID("isLetter", false, func(entity Entity) bool { return unicode.IsDigit(entity.(rune)) })
+	isSix := NewEntityMatchWithID("isSix", false, func(entity Entity) bool { return entity.(rune) == '6' })
+	isDigitExceptSix := NewExceptionMatchWithID("isDigitExceptSix", false, isDigit, isSix)
+	allDigitsExceptSix := NewRepetitionMatchWithID("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
+	endOfStream := NewEndOfStreamMatchWithID("endOfStream", false)
+	allDigitsExceptSixTillTheEnd := NewConcatenationMatchWithID("allDigitsExceptSixTillTheEnd", true, []Matcher{allDigitsExceptSix, endOfStream})
 
 	transformTable := TransformTable{
 		"allDigitsExceptSix": func(result *MatchResult, table TransformTable) Value {
@@ -214,29 +214,29 @@ func TestExbanaProgram(t *testing.T) {
 		}
 	}
 
-	minus := NewEntityMatch("minus", false, runeMatch('-'))
-	doubleQuote := NewEntityMatch("doubleQuote", false, runeMatch('"'))
-	assignSymbol := NewEntitySeriesMatch("assignSymbol", true, stringToEntitySeries(":="), runeEntityEqual)
-	semiColon := NewEntityMatch("semiColon", false, runeMatch(';'))
-	allCharacters := NewEntityMatch("allCharacters", false, runeFuncMatch(unicode.IsGraphic))
-	allButDoubleQuote := NewExceptionMatch("allButDoubleQuote", false, allCharacters, doubleQuote)
-	stringValue := NewConcatenationMatch("string", true, []Matcher{doubleQuote, NewAnyMatch("stringContent", false, allButDoubleQuote), doubleQuote})
-	whiteSpace := NewEntityMatch("whiteSpace", false, runeFuncMatch(unicode.IsSpace))
-	atLeastOneWhiteSpace := NewRepetitionMatch("atLeastOneWhiteSpace", false, whiteSpace, 1, 0)
-	digit := NewEntityMatch("digit", false, runeFuncMatch(unicode.IsDigit))
-	anyDigit := NewAnyMatch("anyDigit", false, digit)
-	alphabeticCharacter := NewEntityMatch("alphabeticCharacter", false, runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) }))
-	anyAlnum := NewAnyMatch("anyAlnum", false, NewAlternationMatch("aa1", false, []Matcher{alphabeticCharacter, digit}))
-	identifier := NewConcatenationMatch("identifier", false, []Matcher{alphabeticCharacter, anyAlnum})
-	number := NewConcatenationMatch("number", false, []Matcher{NewOptionalMatch("optMinus", false, minus), digit, anyDigit})
-	assignmentRightSide := NewAlternationMatch("assignmentRightSide", false, []Matcher{number, identifier, stringValue})
-	assignment := NewConcatenationMatch("assignment", false, []Matcher{identifier, assignSymbol, assignmentRightSide})
-	programTerminal := NewEntitySeriesMatch("programTerminal", false, stringToEntitySeries("PROGRAM"), runeEntityEqual)
-	beginTerminal := NewEntitySeriesMatch("beginTerminal", false, stringToEntitySeries("BEGIN"), runeEntityEqual)
-	endTerminal := NewEntitySeriesMatch("endTerminal", false, stringToEntitySeries("END"), runeEntityEqual)
-	assignmentsInternal := NewConcatenationMatch("assignmentsInternal", false, []Matcher{assignment, semiColon, atLeastOneWhiteSpace})
-	assignments := NewAnyMatch("assignments", false, assignmentsInternal)
-	program := NewConcatenationMatch("program", true, []Matcher{
+	minus := NewEntityMatch(runeMatch('-'))
+	doubleQuote := NewEntityMatch(runeMatch('"'))
+	assignSymbol := NewEntitySeriesMatch(stringToEntitySeries(":="), runeEntityEqual)
+	semiColon := NewEntityMatch(runeMatch(';'))
+	allCharacters := NewEntityMatch(runeFuncMatch(unicode.IsGraphic))
+	allButDoubleQuote := NewExceptionMatch(allCharacters, doubleQuote)
+	stringValue := NewConcatenationMatchWithID("string", true, []Matcher{doubleQuote, NewAnyMatch(allButDoubleQuote), doubleQuote})
+	whiteSpace := NewEntityMatch(runeFuncMatch(unicode.IsSpace))
+	atLeastOneWhiteSpace := NewRepetitionMatch(whiteSpace, 1, 0)
+	digit := NewEntityMatch(runeFuncMatch(unicode.IsDigit))
+	anyDigit := NewAnyMatch(digit)
+	alphabeticCharacter := NewEntityMatch(runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) }))
+	anyAlnum := NewAnyMatch(NewAlternationMatch([]Matcher{alphabeticCharacter, digit}))
+	identifier := NewConcatenationMatchWithID("identifier", false, []Matcher{alphabeticCharacter, anyAlnum})
+	number := NewConcatenationMatchWithID("number", false, []Matcher{NewOptionalMatch(minus), digit, anyDigit})
+	assignmentRightSide := NewAlternationMatch([]Matcher{number, identifier, stringValue})
+	assignment := NewConcatenationMatchWithID("assignment", false, []Matcher{identifier, assignSymbol, assignmentRightSide})
+	programTerminal := NewEntitySeriesMatch(stringToEntitySeries("PROGRAM"), runeEntityEqual)
+	beginTerminal := NewEntitySeriesMatch(stringToEntitySeries("BEGIN"), runeEntityEqual)
+	endTerminal := NewEntitySeriesMatch(stringToEntitySeries("END"), runeEntityEqual)
+	assignmentsInternal := NewConcatenationMatch([]Matcher{assignment, semiColon, atLeastOneWhiteSpace})
+	assignments := NewRepetitionMatchWithID("assignments", false, assignmentsInternal, 0, 0)
+	program := NewConcatenationMatchWithID("program", true, []Matcher{
 		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
 	})
 

@@ -108,12 +108,16 @@ type EntityMatch struct {
 }
 
 // NewEntityMatch creates a new entity match
-func NewEntityMatch(identifier string, logMismatches bool, matchFunction EntityMatchFunction) *EntityMatch {
+func NewEntityMatchWithID(identifier string, logMismatches bool, matchFunction EntityMatchFunction) *EntityMatch {
 	return &EntityMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
 		matchFunction: matchFunction,
 	}
+}
+
+func NewEntityMatch(matchFunction EntityMatchFunction) *EntityMatch {
+	return NewEntityMatchWithID("", false, matchFunction)
 }
 
 // Identifier of this match
@@ -151,13 +155,17 @@ type EntitySeriesMatch struct {
 	series        []Entity
 }
 
-func NewEntitySeriesMatch(identifier string, logMismatches bool, series []Entity, equalFunction EntityEqualFunction) *EntitySeriesMatch {
+func NewEntitySeriesMatchWithID(identifier string, logMismatches bool, series []Entity, equalFunction EntityEqualFunction) *EntitySeriesMatch {
 	return &EntitySeriesMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
 		series:        series,
 		equalFunction: equalFunction,
 	}
+}
+
+func NewEntitySeriesMatch(series []Entity, equalFunction EntityEqualFunction) *EntitySeriesMatch {
+	return NewEntitySeriesMatchWithID("", false, series, equalFunction)
 }
 
 func (m *EntitySeriesMatch) LogMismatches() bool {
@@ -199,12 +207,16 @@ type ConcatenationMatch struct {
 }
 
 // NewConcatenationMatch creates a new concatenation match
-func NewConcatenationMatch(identifier string, logMismatches bool, patterns []Matcher) *ConcatenationMatch {
+func NewConcatenationMatchWithID(identifier string, logMismatches bool, patterns []Matcher) *ConcatenationMatch {
 	return &ConcatenationMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
 		Patterns:      patterns,
 	}
+}
+
+func NewConcatenationMatch(patterns []Matcher) *ConcatenationMatch {
+	return NewConcatenationMatchWithID("", false, patterns)
 }
 
 func (m *ConcatenationMatch) LogMismatches() bool {
@@ -253,12 +265,16 @@ type AlternationMatch struct {
 	Patterns      []Matcher
 }
 
-func NewAlternationMatch(identifier string, logMismatches bool, patterns []Matcher) *AlternationMatch {
+func NewAlternationMatchWithID(identifier string, logMismatches bool, patterns []Matcher) *AlternationMatch {
 	return &AlternationMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
 		Patterns:      patterns,
 	}
+}
+
+func NewAlternationMatch(patterns []Matcher) *AlternationMatch {
+	return NewAlternationMatchWithID("", false, patterns)
 }
 
 func (m *AlternationMatch) LogMismatches() bool {
@@ -301,7 +317,7 @@ type RepetitionMatch struct {
 	max           int
 }
 
-func NewRepetitionMatch(identifier string, logMismatches bool, pattern Matcher, min int, max int) *RepetitionMatch {
+func NewRepetitionMatchWithID(identifier string, logMismatches bool, pattern Matcher, min int, max int) *RepetitionMatch {
 	return &RepetitionMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
@@ -311,16 +327,20 @@ func NewRepetitionMatch(identifier string, logMismatches bool, pattern Matcher, 
 	}
 }
 
-func NewOptionalMatch(identifier string, logMismatches bool, pattern Matcher) *RepetitionMatch {
-	return NewRepetitionMatch(identifier, logMismatches, pattern, 0, 1)
+func NewRepetitionMatch(pattern Matcher, min int, max int) *RepetitionMatch {
+	return NewRepetitionMatchWithID("", false, pattern, min, max)
 }
 
-func NewAnyMatch(identifier string, logMismatches bool, pattern Matcher) *RepetitionMatch {
-	return NewRepetitionMatch(identifier, logMismatches, pattern, 0, 0)
+func NewOptionalMatch(pattern Matcher) *RepetitionMatch {
+	return NewRepetitionMatch(pattern, 0, 1)
 }
 
-func NewTimesMatch(identifier string, logMismatches bool, pattern Matcher, times int) *RepetitionMatch {
-	return NewRepetitionMatch(identifier, logMismatches, pattern, times, times)
+func NewAnyMatch(pattern Matcher) *RepetitionMatch {
+	return NewRepetitionMatch(pattern, 0, 0)
+}
+
+func NewTimesMatch(pattern Matcher, times int) *RepetitionMatch {
+	return NewRepetitionMatch(pattern, times, times)
 }
 
 func (m *RepetitionMatch) LogMismatches() bool {
@@ -377,13 +397,17 @@ type ExceptionMatch struct {
 	Except        Matcher
 }
 
-func NewExceptionMatch(identifier string, logMismatches bool, mustMatch Matcher, except Matcher) *ExceptionMatch {
+func NewExceptionMatchWithID(identifier string, logMismatches bool, mustMatch Matcher, except Matcher) *ExceptionMatch {
 	return &ExceptionMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
 		MustMatch:     mustMatch,
 		Except:        except,
 	}
+}
+
+func NewExceptionMatch(mustMatch Matcher, except Matcher) *ExceptionMatch {
+	return NewExceptionMatchWithID("", false, mustMatch, except)
 }
 
 func (m *ExceptionMatch) LogMismatches() bool {
@@ -424,11 +448,15 @@ type EndOfStreamMatch struct {
 }
 
 // NewEndOfStreamMatch creates a new end of stream match
-func NewEndOfStreamMatch(identifier string, logMismatches bool) *EndOfStreamMatch {
+func NewEndOfStreamMatchWithID(identifier string, logMismatches bool) *EndOfStreamMatch {
 	return &EndOfStreamMatch{
 		identifier:    identifier,
 		logMismatches: logMismatches,
 	}
+}
+
+func NewEndOfStreamMatch() *EndOfStreamMatch {
+	return NewEndOfStreamMatchWithID("", false)
 }
 
 func (m *EndOfStreamMatch) LogMismatches() bool {

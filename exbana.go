@@ -57,6 +57,10 @@ func (r *Result) Values() []Value {
 	return values
 }
 
+func (r *Result) NestedValue() Value {
+	return r.Value.(*Result).Value
+}
+
 // TransformFunc can transform match result to final value
 type TransformFunc func(*Result, TransformTable) Value
 

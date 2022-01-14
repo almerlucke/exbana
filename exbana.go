@@ -16,8 +16,8 @@ type Position interface{}
 // Value is an abstract return value from result
 type Value interface{}
 
-// ObjStreamer interface for a stream that can emit objects to a pattern matcher
-type ObjStreamer interface {
+// ObjectStreamer interface for a stream that can emit objects to a pattern matcher
+type ObjectStreamer interface {
 	Peek() (Object, error)
 	Read() (Object, error)
 	Finished() bool
@@ -62,16 +62,16 @@ func (r *Result) NestedValue() Value {
 }
 
 // TransformFunc can transform match result to final value
-type TransformFunc func(*Result, TransformTable) Value
+type TransformFunc func(*Result, TransformTable, ObjectStreamer) Value
 
 // TransformTable is used to map matcher identifiers to a transform function
 type TransformTable map[string]TransformFunc
 
 // Transform a match result to a value
-func (t TransformTable) Transform(m *Result) Value {
+func (t TransformTable) Transform(m *Result, stream ObjectStreamer) Value {
 	f, ok := t[m.ID]
 	if ok {
-		return f(m, t)
+		return f(m, t, stream)
 	}
 
 	return m.Value
@@ -108,7 +108,7 @@ type Logger interface {
 
 // Pattern can match objects from a stream, has an identifier
 type Pattern interface {
-	Match(ObjStreamer, Logger) (bool, *Result, error)
+	Match(ObjectStreamer, Logger) (bool, *Result, error)
 	ID() string
 }
 
@@ -145,7 +145,7 @@ func (p *UnitPattern) ID() string {
 }
 
 // Match matches the unit object against a stream
-func (p *UnitPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *UnitPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	pos := s.Position()
 	entity, err := s.Read()
 
@@ -191,7 +191,7 @@ func (p *SeriesPattern) ID() string {
 }
 
 // Match matches the series pattern against a stream
-func (p *SeriesPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *SeriesPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	for _, e1 := range p.series {
@@ -241,7 +241,7 @@ func (p *ConcatPattern) ID() string {
 }
 
 // Match matches And against a stream, fails if any of the patterns mismatches
-func (p *ConcatPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *ConcatPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	matches := []*Result{}
@@ -299,7 +299,7 @@ func (p *AltPattern) ID() string {
 }
 
 // Match matches the OR pattern against a stream, fails if all of the patterns mismatch
-func (p *AltPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *AltPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	for _, pm := range p.Patterns {
@@ -383,7 +383,7 @@ func (p *RepPattern) ID() string {
 }
 
 // Match matches the repetition pattern aginst a stream
-func (p *RepPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *RepPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 	matches := []*Result{}
 
@@ -450,7 +450,7 @@ func (p *ExceptPattern) ID() string {
 }
 
 // Match matches the exception against a stream
-func (p *ExceptPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *ExceptPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	// First check for the exception match, we do not want to match the exception
@@ -498,7 +498,7 @@ func (p *EndPattern) ID() string {
 }
 
 // Match matches a end of stream pattern against a stream
-func (p *EndPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *EndPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	if s.Finished() {
 		return true, NewResult(p.id, s.Position(), s.Position(), nil), nil
 	}

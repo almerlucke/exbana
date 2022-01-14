@@ -72,16 +72,16 @@ func TestExbana(t *testing.T) {
 	repAB := Repx("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable{
-		"is_a_or_b": func(m *Result, t TransformTable) Value {
-			return t.Transform(m.Value.(*Result))
+		"is_a_or_b": func(m *Result, t TransformTable, s ObjectStreamer) Value {
+			return t.Transform(m.Value.(*Result), s)
 		},
-		"ab_repeat": func(m *Result, t TransformTable) Value {
+		"ab_repeat": func(m *Result, t TransformTable, s ObjectStreamer) Value {
 			results := m.Value.([]*Result)
 
 			str := ""
 
 			for _, r := range results {
-				str += t.Transform(r).(string)
+				str += t.Transform(r, s).(string)
 			}
 
 			return str
@@ -90,7 +90,7 @@ func TestExbana(t *testing.T) {
 
 	matched, result, _ := repAB.Match(s, s)
 	if matched {
-		t.Logf("%v", transformTable.Transform(result))
+		t.Logf("%v", transformTable.Transform(result, s))
 	}
 
 	for _, mismatch := range s.mismatches {
@@ -127,7 +127,7 @@ func TestExbanaEntitySeries(t *testing.T) {
 
 	matched, result, _ := isHallo.Match(s, s)
 	if matched {
-		t.Logf("%v", transformTable.Transform(result))
+		t.Logf("%v", transformTable.Transform(result, s))
 	}
 
 	for _, mismatch := range s.mismatches {
@@ -145,21 +145,21 @@ func TestExbanaException(t *testing.T) {
 	allDigitsExceptSixTillTheEnd := Concatx("allDigitsExceptSixTillTheEnd", true, allDigitsExceptSix, endOfStream)
 
 	transformTable := TransformTable{
-		"allDigitsExceptSix": func(result *Result, table TransformTable) Value {
+		"allDigitsExceptSix": func(result *Result, table TransformTable, s ObjectStreamer) Value {
 			str := ""
 			for _, r := range result.Value.([]*Result) {
 				str += r.Value.(string)
 			}
 			return str
 		},
-		"allDigitsExceptSixTillTheEnd": func(result *Result, table TransformTable) Value {
-			return table.Transform(result.Value.([]*Result)[0])
+		"allDigitsExceptSixTillTheEnd": func(result *Result, table TransformTable, s ObjectStreamer) Value {
+			return table.Transform(result.Value.([]*Result)[0], s)
 		},
 	}
 
 	matched, result, _ := allDigitsExceptSixTillTheEnd.Match(s, s)
 	if matched {
-		t.Logf("%v", transformTable.Transform(result))
+		t.Logf("%v", transformTable.Transform(result, s))
 	}
 
 	for _, mismatch := range s.mismatches {
@@ -245,15 +245,15 @@ func TestExbanaProgram(t *testing.T) {
 	)
 
 	transformTable := TransformTable{
-		"assignment": func(result *Result, table TransformTable) Value {
+		"assignment": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
 			elements := result.Value.([]*Result)
 
-			leftSide := table.Transform(elements[0]).(*ProgramValue)
-			rightSide := table.Transform(elements[2].Value.(*Result)).(*ProgramValue)
+			leftSide := table.Transform(elements[0], stream).(*ProgramValue)
+			rightSide := table.Transform(elements[2].Value.(*Result), stream).(*ProgramValue)
 
 			return &ProgramAssignment{LeftSide: leftSide, RightSide: rightSide}
 		},
-		"number": func(result *Result, table TransformTable) Value {
+		"number": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
 			elements := result.Value.([]*Result)
 			numContent := ""
 
@@ -269,7 +269,7 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramValue{Content: numContent, Type: ProgramValueTypeNumber}
 		},
-		"string": func(result *Result, table TransformTable) Value {
+		"string": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
 			elements := result.Value.([]*Result)
 			stringContent := ""
 
@@ -279,7 +279,7 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramValue{Content: stringContent, Type: ProgramValueTypeString}
 		},
-		"identifier": func(result *Result, table TransformTable) Value {
+		"identifier": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
 			elements := result.Value.([]*Result)
 			// First character
 			idContent := elements[0].Value.(string)
@@ -290,16 +290,16 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramValue{Content: idContent, Type: ProgramValueTypeIdentifier}
 		},
-		"program": func(result *Result, table TransformTable) Value {
+		"program": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
 			elements := result.Value.([]*Result)
-			name := table.Transform(elements[2]).(*ProgramValue)
+			name := table.Transform(elements[2], stream).(*ProgramValue)
 
 			assignments := []*ProgramAssignment{}
 
 			rawAssignments := elements[6].Value.([]*Result)
 
 			for _, rawAssignment := range rawAssignments {
-				assignment := table.Transform(rawAssignment.Value.([]*Result)[0]).(*ProgramAssignment)
+				assignment := table.Transform(rawAssignment.Value.([]*Result)[0], stream).(*ProgramAssignment)
 				assignments = append(assignments, assignment)
 			}
 
@@ -312,7 +312,7 @@ func TestExbanaProgram(t *testing.T) {
 
 	matched, result, _ := program.Match(s, s)
 	if matched {
-		program := transformTable.Transform(result).(*Program)
+		program := transformTable.Transform(result, s).(*Program)
 		t.Logf("Program %v", program.Name.Content)
 		for _, assignment := range program.Assignments {
 			t.Logf("Assignment: %v = %v", assignment.LeftSide.Content, assignment.RightSide.Content)

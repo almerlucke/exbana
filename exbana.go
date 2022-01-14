@@ -49,12 +49,16 @@ func (r *Result) Components() []*Result {
 }
 
 func (r *Result) Values() []Value {
-	components := r.Components()
+	components := r.Value.([]*Result)
 	values := make([]Value, len(components))
 	for index, component := range components {
 		values[index] = component.Value
 	}
 	return values
+}
+
+func (r *Result) NestedResult() *Result {
+	return r.Value.(*Result)
 }
 
 func (r *Result) NestedValue() Value {

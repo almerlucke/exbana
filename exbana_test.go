@@ -66,10 +66,10 @@ func runeEntityEqual(o1 Object, o2 Object) bool {
 
 func TestExbana(t *testing.T) {
 	s := NewTestStream("abaaa")
-	isA := UnitF("is_a", false, func(obj Object) bool { return obj.(rune) == 'a' })
-	isB := UnitF("is_b", false, func(obj Object) bool { return obj.(rune) == 'b' })
-	altAB := OrF("is_a_or_b", false, isA, isB)
-	repAB := RepF("ab_repeat", true, altAB, 3, 4)
+	isA := Unitx("is_a", false, func(obj Object) bool { return obj.(rune) == 'a' })
+	isB := Unitx("is_b", false, func(obj Object) bool { return obj.(rune) == 'b' })
+	altAB := Altx("is_a_or_b", false, isA, isB)
+	repAB := Repx("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable{
 		"is_a_or_b": func(m *Result, t TransformTable) Value {
@@ -121,7 +121,7 @@ func stringToSeries(str string) []Object {
 
 func TestExbanaEntitySeries(t *testing.T) {
 	s := NewTestStream("hallr")
-	isHallo := SeriesF("hallo", true, runeEntityEqual, stringToSeries("hallo")...)
+	isHallo := Seriesx("hallo", true, runeEntityEqual, stringToSeries("hallo")...)
 
 	transformTable := TransformTable{}
 
@@ -137,12 +137,12 @@ func TestExbanaEntitySeries(t *testing.T) {
 
 func TestExbanaException(t *testing.T) {
 	s := NewTestStream("123457")
-	isDigit := UnitF("isLetter", false, func(obj Object) bool { return unicode.IsDigit(obj.(rune)) })
-	isSix := UnitF("isSix", false, func(obj Object) bool { return obj.(rune) == '6' })
-	isDigitExceptSix := ExceptF("isDigitExceptSix", false, isDigit, isSix)
-	allDigitsExceptSix := RepF("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
-	endOfStream := EndF("endOfStream", false)
-	allDigitsExceptSixTillTheEnd := AndF("allDigitsExceptSixTillTheEnd", true, allDigitsExceptSix, endOfStream)
+	isDigit := Unitx("isLetter", false, func(obj Object) bool { return unicode.IsDigit(obj.(rune)) })
+	isSix := Unitx("isSix", false, func(obj Object) bool { return obj.(rune) == '6' })
+	isDigitExceptSix := Exceptx("isDigitExceptSix", false, isDigit, isSix)
+	allDigitsExceptSix := Repx("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
+	endOfStream := Endx("endOfStream", false)
+	allDigitsExceptSixTillTheEnd := Concatx("allDigitsExceptSixTillTheEnd", true, allDigitsExceptSix, endOfStream)
 
 	transformTable := TransformTable{
 		"allDigitsExceptSix": func(result *Result, table TransformTable) Value {
@@ -224,23 +224,23 @@ func TestExbanaProgram(t *testing.T) {
 	semiColon := runeMatch(';')
 	allCharacters := runeFuncMatch(unicode.IsGraphic)
 	allButDoubleQuote := Except(allCharacters, doubleQuote)
-	stringValue := AndF("string", true, doubleQuote, Any(allButDoubleQuote), doubleQuote)
+	stringValue := Concatx("string", true, doubleQuote, Any(allButDoubleQuote), doubleQuote)
 	whiteSpace := runeFuncMatch(unicode.IsSpace)
 	atLeastOneWhiteSpace := Rep(whiteSpace, 1, 0)
 	digit := runeFuncMatch(unicode.IsDigit)
 	anyDigit := Any(digit)
 	alphabeticCharacter := runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
-	anyAlnum := Any(Or(alphabeticCharacter, digit))
-	identifier := AndF("identifier", false, alphabeticCharacter, anyAlnum)
-	number := AndF("number", false, Opt(minus), digit, anyDigit)
-	assignmentRightSide := Or(number, identifier, stringValue)
-	assignment := AndF("assignment", false, identifier, assignSymbol, assignmentRightSide)
+	anyAlnum := Any(Alt(alphabeticCharacter, digit))
+	identifier := Concatx("identifier", false, alphabeticCharacter, anyAlnum)
+	number := Concatx("number", false, Opt(minus), digit, anyDigit)
+	assignmentRightSide := Alt(number, identifier, stringValue)
+	assignment := Concatx("assignment", false, identifier, assignSymbol, assignmentRightSide)
 	programTerminal := runeSeries("PROGRAM")
 	beginTerminal := runeSeries("BEGIN")
 	endTerminal := runeSeries("END")
-	assignmentsInternal := And(assignment, semiColon, atLeastOneWhiteSpace)
+	assignmentsInternal := Concat(assignment, semiColon, atLeastOneWhiteSpace)
 	assignments := Any(assignmentsInternal)
-	program := AndF("program", true,
+	program := Concatx("program", true,
 		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
 	)
 

@@ -4,79 +4,79 @@ import (
 	"fmt"
 )
 
-// Entity returned from streamer, real implementations could have rune or char as entity types
-type Entity interface{}
+// Obj returned from streamer, real implementations could have rune or char as entity types
+type Obj interface{}
 
-// EntityEqualFunction test if two entities are equal
-type EntityEqualFunction func(Entity, Entity) bool
+// ObjEqFunc test if two entities are equal
+type ObjEqFunc func(Obj, Obj) bool
 
-// Position real type is left to the entity stream
-type Position interface{}
+// Pos real type is left to the entity stream
+type Pos interface{}
 
-// Value real type is left to the entity stream
-type Value interface{}
+// Val real type is left to the entity stream
+type Val interface{}
 
-// EntityStreamer interface for a stream that can emit entities to pattern matcher
-type EntityStreamer interface {
-	Peek() (Entity, error)
-	Read() (Entity, error)
+// ObjStreamer interface for a stream that can emit objects to pattern matcher
+type ObjStreamer interface {
+	Peek() (Obj, error)
+	Read() (Obj, error)
 	Finished() bool
-	Position() Position
-	SetPosition(Position) error
-	ValueForRange(Position, Position) Value
+	Pos() Pos
+	SetPos(Pos) error
+	ValForRange(Pos, Pos) Val
 }
 
-// MatchResult contains matched pattern position and identifier
-type MatchResult struct {
-	Identifier string
-	Begin      Position
-	End        Position
-	Value      Value
+// Result contains matched pattern position and identifier
+type Result struct {
+	ID    string
+	Begin Pos
+	End   Pos
+	Val   Val
 }
 
-// NewMatchResult creates a new match result
-func NewMatchResult(identifier string, begin Position, end Position, value Value) *MatchResult {
-	return &MatchResult{
-		Identifier: identifier,
-		Begin:      begin,
-		End:        end,
-		Value:      value,
+// NewResult creates a new match result
+func NewResult(id string, begin Pos, end Pos, val Val) *Result {
+	return &Result{
+		ID:    id,
+		Begin: begin,
+		End:   end,
+		Val:   val,
 	}
 }
 
-// TransformFunction transforms match result to final value
-type TransformFunction func(*MatchResult, TransformTable) Value
+// TransFunc transforms match result to final value
+type TransFunc func(*Result, TransTable) Val
 
-// TransformTable is used to map matcher identifiers to a transform function
-type TransformTable map[string]TransformFunction
+// TransTable is used to map matcher identifiers to a transform function
+type TransTable map[string]TransFunc
 
 // Transform a match result to a value
-func (t TransformTable) Transform(m *MatchResult) Value {
-	f, ok := t[m.Identifier]
+func (t TransTable) Transform(m *Result) Val {
+	f, ok := t[m.ID]
 	if ok {
 		return f(m, t)
 	}
 
-	return m.Value
+	return m.Val
 }
 
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
 // and the sub patterns that matched so far, an optional error can be passed to give more specific information
 type Mismatch struct {
-	MatchResult
-	SubMismatch *MatchResult
-	SubMatches  []*MatchResult
+	Result
+	SubMismatch *Result
+	SubMatches  []*Result
 	Error       error
 }
 
 // NewMismatch creates a new pattern mismatch
-func NewMismatch(identifier string, begin Position, end Position, subMisMatch *MatchResult, subMatches []*MatchResult, err error) *Mismatch {
+func NewMismatch(id string, begin Pos, end Pos, subMisMatch *Result, subMatches []*Result, err error) *Mismatch {
 	return &Mismatch{
-		MatchResult: MatchResult{
-			Identifier: identifier,
-			Begin:      begin,
-			End:        end,
-			Value:      nil,
+		Result: Result{
+			ID:    id,
+			Begin: begin,
+			End:   end,
+			Val:   nil,
 		},
 		SubMismatch: subMisMatch,
 		SubMatches:  subMatches,
@@ -92,92 +92,82 @@ type Logger interface {
 // Matcher can match a pattern from a stream, has an identifier and indicates if we need to log
 // mismatches
 type Matcher interface {
-	Match(EntityStreamer, Logger) (bool, *MatchResult, error)
-	Identifier() string
-	LogMismatches() bool
+	Match(ObjStreamer, Logger) (bool, *Result, error)
+	ID() string
 }
 
-// EntityMatchFunction can match a single entity against a pattern
-type EntityMatchFunction func(Entity) bool
+// SingleFunc can match a single entity against a pattern
+type SingleFunc func(Obj) bool
 
-// EntityMatch
-type EntityMatch struct {
-	identifier    string
-	logMismatches bool
-	matchFunction EntityMatchFunction
+// Single object matcher
+type Single struct {
+	id        string
+	logging   bool
+	matchFunc SingleFunc
 }
 
-// NewEntityMatch creates a new entity match
-func NewEntityMatchWithID(identifier string, logMismatches bool, matchFunction EntityMatchFunction) *EntityMatch {
-	return &EntityMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
-		matchFunction: matchFunction,
+// NewvF creates a new obj match
+func NewSingleF(id string, logging bool, matchFunc SingleFunc) *Single {
+	return &Single{
+		id:        id,
+		logging:   logging,
+		matchFunc: matchFunc,
 	}
 }
 
-func NewEntityMatch(matchFunction EntityMatchFunction) *EntityMatch {
-	return NewEntityMatchWithID("", false, matchFunction)
+func NewSingle(matchFunction SingleFunc) *Single {
+	return NewSingleF("", false, matchFunction)
 }
 
 // Identifier of this match
-func (m *EntityMatch) Identifier() string {
-	return m.identifier
-}
-
-// LogMismatches indicates if this match needs to log mismatches
-func (m *EntityMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *Single) ID() string {
+	return m.id
 }
 
 // Match entity
-func (m *EntityMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	pos := s.Position()
+func (m *Single) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+	pos := s.Pos()
 	entity, err := s.Read()
 
 	if err != nil {
 		return false, nil, err
 	}
 
-	if m.matchFunction(entity) {
-		return true, NewMatchResult(m.identifier, pos, s.Position(), s.ValueForRange(pos, s.Position())), nil
-	} else if m.LogMismatches() && l != nil {
-		l.Log(NewMismatch(m.identifier, pos, s.Position(), nil, nil, nil))
+	if m.matchFunc(entity) {
+		return true, NewResult(m.id, pos, s.Pos(), s.ValForRange(pos, s.Pos())), nil
+	} else if m.logging && l != nil {
+		l.Log(NewMismatch(m.id, pos, s.Pos(), nil, nil, nil))
 	}
 
 	return false, nil, nil
 }
 
-type EntitySeriesMatch struct {
-	identifier    string
-	logMismatches bool
-	equalFunction EntityEqualFunction
-	series        []Entity
+type Series struct {
+	id      string
+	logging bool
+	eqFunc  ObjEqFunc
+	series  []Obj
 }
 
-func NewEntitySeriesMatchWithID(identifier string, logMismatches bool, series []Entity, equalFunction EntityEqualFunction) *EntitySeriesMatch {
-	return &EntitySeriesMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
-		series:        series,
-		equalFunction: equalFunction,
+func NewSeriesF(id string, logging bool, series []Obj, eqFunc ObjEqFunc) *Series {
+	return &Series{
+		id:      id,
+		logging: logging,
+		series:  series,
+		eqFunc:  eqFunc,
 	}
 }
 
-func NewEntitySeriesMatch(series []Entity, equalFunction EntityEqualFunction) *EntitySeriesMatch {
-	return NewEntitySeriesMatchWithID("", false, series, equalFunction)
+func NewSeries(series []Obj, eqFunc ObjEqFunc) *Series {
+	return NewSeriesF("", false, series, eqFunc)
 }
 
-func (m *EntitySeriesMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *Series) ID() string {
+	return m.id
 }
 
-func (m *EntitySeriesMatch) Identifier() string {
-	return m.identifier
-}
-
-func (m *EntitySeriesMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	beginPos := s.Position()
+func (m *Series) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+	beginPos := s.Pos()
 
 	for _, e1 := range m.series {
 		e2, err := s.Read()
@@ -185,55 +175,51 @@ func (m *EntitySeriesMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResul
 			return false, nil, err
 		}
 
-		if !m.equalFunction(e1, e2) {
-			if m.logMismatches && l != nil {
-				l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil, nil))
+		if !m.eqFunc(e1, e2) {
+			if m.logging && l != nil {
+				l.Log(NewMismatch(m.id, beginPos, s.Pos(), nil, nil, nil))
 			}
 
 			return false, nil, nil
 		}
 	}
 
-	endPos := s.Position()
+	endPos := s.Pos()
 
-	return true, NewMatchResult(m.identifier, beginPos, endPos, s.ValueForRange(beginPos, endPos)), nil
+	return true, NewResult(m.id, beginPos, endPos, s.ValForRange(beginPos, endPos)), nil
 }
 
-// ConcatenationMatch matches a slice of patterns AND style
-type ConcatenationMatch struct {
-	identifier    string
-	logMismatches bool
-	Patterns      []Matcher
+// And matches a slice of patterns AND style
+type And struct {
+	id       string
+	logging  bool
+	Patterns []Matcher
 }
 
-// NewConcatenationMatch creates a new concatenation match
-func NewConcatenationMatchWithID(identifier string, logMismatches bool, patterns []Matcher) *ConcatenationMatch {
-	return &ConcatenationMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
-		Patterns:      patterns,
+// NewAndF creates a new concatenation match
+func NewAndF(id string, logging bool, patterns []Matcher) *And {
+	return &And{
+		id:       id,
+		logging:  logging,
+		Patterns: patterns,
 	}
 }
 
-func NewConcatenationMatch(patterns []Matcher) *ConcatenationMatch {
-	return NewConcatenationMatchWithID("", false, patterns)
+func NewAnd(patterns []Matcher) *And {
+	return NewAndF("", false, patterns)
 }
 
-func (m *ConcatenationMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *And) ID() string {
+	return m.id
 }
 
-func (m *ConcatenationMatch) Identifier() string {
-	return m.identifier
-}
+func (m *And) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+	beginPos := s.Pos()
 
-func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	beginPos := s.Position()
-
-	matches := []*MatchResult{}
+	matches := []*Result{}
 
 	for _, pm := range m.Patterns {
-		subBeginPos := s.Position()
+		subBeginPos := s.Pos()
 
 		matched, result, err := pm.Match(s, l)
 		if err != nil {
@@ -243,11 +229,11 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 		if matched {
 			matches = append(matches, result)
 		} else {
-			subEndPos := s.Position()
+			subEndPos := s.Pos()
 
-			if m.logMismatches && l != nil {
+			if m.logging && l != nil {
 				l.Log(NewMismatch(
-					m.identifier, beginPos, subEndPos, NewMatchResult(pm.Identifier(), subBeginPos, subEndPos, nil), matches, nil),
+					m.id, beginPos, subEndPos, NewResult(pm.ID(), subBeginPos, subEndPos, nil), matches, nil),
 				)
 			}
 
@@ -255,41 +241,37 @@ func (m *ConcatenationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResu
 		}
 	}
 
-	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
+	return true, NewResult(m.id, beginPos, s.Pos(), matches), nil
 }
 
-// AlternationMatch matches a slice of patterns OR style
-type AlternationMatch struct {
-	identifier    string
-	logMismatches bool
-	Patterns      []Matcher
+// Or matches a slice of patterns OR style
+type Or struct {
+	id       string
+	logging  bool
+	Patterns []Matcher
 }
 
-func NewAlternationMatchWithID(identifier string, logMismatches bool, patterns []Matcher) *AlternationMatch {
-	return &AlternationMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
-		Patterns:      patterns,
+func NewOrF(id string, logging bool, patterns []Matcher) *Or {
+	return &Or{
+		id:       id,
+		logging:  logging,
+		Patterns: patterns,
 	}
 }
 
-func NewAlternationMatch(patterns []Matcher) *AlternationMatch {
-	return NewAlternationMatchWithID("", false, patterns)
+func NewOr(patterns []Matcher) *Or {
+	return NewOrF("", false, patterns)
 }
 
-func (m *AlternationMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *Or) ID() string {
+	return m.id
 }
 
-func (m *AlternationMatch) Identifier() string {
-	return m.identifier
-}
-
-func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	beginPos := s.Position()
+func (m *Or) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+	beginPos := s.Pos()
 
 	for _, pm := range m.Patterns {
-		s.SetPosition(beginPos)
+		s.SetPos(beginPos)
 
 		matched, result, err := pm.Match(s, l)
 		if err != nil {
@@ -297,70 +279,66 @@ func (m *AlternationMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult
 		}
 
 		if matched {
-			return true, NewMatchResult(m.identifier, beginPos, s.Position(), result), nil
+			return true, NewResult(m.id, beginPos, s.Pos(), result), nil
 		}
 	}
 
-	if m.logMismatches && l != nil {
-		l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil, nil))
+	if m.logging && l != nil {
+		l.Log(NewMismatch(m.id, beginPos, s.Pos(), nil, nil, nil))
 	}
 
 	return false, nil, nil
 }
 
-// RepetitionMatch matches a pattern min and max times
-type RepetitionMatch struct {
-	identifier    string
-	logMismatches bool
-	Pattern       Matcher
-	min           int
-	max           int
+// Rep matches a pattern min and max times repetition
+type Rep struct {
+	id      string
+	logging bool
+	Pattern Matcher
+	min     int
+	max     int
 }
 
-func NewRepetitionMatchWithID(identifier string, logMismatches bool, pattern Matcher, min int, max int) *RepetitionMatch {
-	return &RepetitionMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
-		Pattern:       pattern,
-		min:           min,
-		max:           max,
+func NewRepF(id string, logging bool, pattern Matcher, min int, max int) *Rep {
+	return &Rep{
+		id:      id,
+		logging: logging,
+		Pattern: pattern,
+		min:     min,
+		max:     max,
 	}
 }
 
-func NewRepetitionMatch(pattern Matcher, min int, max int) *RepetitionMatch {
-	return NewRepetitionMatchWithID("", false, pattern, min, max)
+func NewRep(pattern Matcher, min int, max int) *Rep {
+	return NewRepF("", false, pattern, min, max)
 }
 
-func NewOptionalMatch(pattern Matcher) *RepetitionMatch {
-	return NewRepetitionMatch(pattern, 0, 1)
+func NewOpt(pattern Matcher) *Rep {
+	return NewRep(pattern, 0, 1)
 }
 
-func NewAnyMatch(pattern Matcher) *RepetitionMatch {
-	return NewRepetitionMatch(pattern, 0, 0)
+func NewAny(pattern Matcher) *Rep {
+	return NewRep(pattern, 0, 0)
 }
 
-func NewTimesMatch(pattern Matcher, times int) *RepetitionMatch {
-	return NewRepetitionMatch(pattern, times, times)
+func NewN(pattern Matcher, n int) *Rep {
+	return NewRep(pattern, n, n)
 }
 
-func (m *RepetitionMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *Rep) ID() string {
+	return m.id
 }
 
-func (m *RepetitionMatch) Identifier() string {
-	return m.identifier
-}
-
-func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	beginPos := s.Position()
-	matches := []*MatchResult{}
+func (m *Rep) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+	beginPos := s.Pos()
+	matches := []*Result{}
 
 	for {
 		if s.Finished() {
 			break
 		}
 
-		resetPos := s.Position()
+		resetPos := s.Pos()
 
 		matched, result, err := m.Pattern.Match(s, l)
 		if err != nil {
@@ -368,7 +346,7 @@ func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult,
 		}
 
 		if !matched {
-			s.SetPosition(resetPos)
+			s.SetPos(resetPos)
 			break
 		}
 
@@ -379,47 +357,43 @@ func (m *RepetitionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult,
 	}
 
 	if len(matches) < m.min {
-		if m.logMismatches && l != nil {
-			l.Log(NewMismatch(m.identifier, beginPos, s.Position(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", m.min)))
+		if m.logging && l != nil {
+			l.Log(NewMismatch(m.id, beginPos, s.Pos(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", m.min)))
 		}
 
 		return false, nil, nil
 	}
 
-	return true, NewMatchResult(m.identifier, beginPos, s.Position(), matches), nil
+	return true, NewResult(m.id, beginPos, s.Pos(), matches), nil
 }
 
-// ExceptionMatch must match MustMatch but first must not match Except
-type ExceptionMatch struct {
-	identifier    string
-	logMismatches bool
-	MustMatch     Matcher
-	Except        Matcher
+// Except must match MustMatch but first must not match Except
+type Except struct {
+	id        string
+	logging   bool
+	MustMatch Matcher
+	Except    Matcher
 }
 
-func NewExceptionMatchWithID(identifier string, logMismatches bool, mustMatch Matcher, except Matcher) *ExceptionMatch {
-	return &ExceptionMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
-		MustMatch:     mustMatch,
-		Except:        except,
+func NewExceptF(id string, logging bool, mustMatch Matcher, except Matcher) *Except {
+	return &Except{
+		id:        id,
+		logging:   logging,
+		MustMatch: mustMatch,
+		Except:    except,
 	}
 }
 
-func NewExceptionMatch(mustMatch Matcher, except Matcher) *ExceptionMatch {
-	return NewExceptionMatchWithID("", false, mustMatch, except)
+func NewExcept(mustMatch Matcher, except Matcher) *Except {
+	return NewExceptF("", false, mustMatch, except)
 }
 
-func (m *ExceptionMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *Except) ID() string {
+	return m.id
 }
 
-func (m *ExceptionMatch) Identifier() string {
-	return m.identifier
-}
-
-func (m *ExceptionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
-	beginPos := s.Position()
+func (m *Except) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+	beginPos := s.Pos()
 
 	// First check for the exception match, we do not want to match the exception
 	matched, result, err := m.Except.Match(s, l)
@@ -428,52 +402,48 @@ func (m *ExceptionMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, 
 	}
 
 	if matched {
-		if m.logMismatches && l != nil {
-			l.Log(NewMismatch(m.identifier, beginPos, s.Position(), result, nil, nil))
+		if m.logging && l != nil {
+			l.Log(NewMismatch(m.id, beginPos, s.Pos(), result, nil, nil))
 		}
 
 		return false, nil, nil
 	}
 
 	// Reset the position and return the mustMatch result
-	s.SetPosition(beginPos)
+	s.SetPos(beginPos)
 
 	return m.MustMatch.Match(s, l)
 }
 
-// EndOfStreamMatch matches the end of stream
-type EndOfStreamMatch struct {
-	identifier    string
-	logMismatches bool
+// End matches the end of stream
+type End struct {
+	id      string
+	logging bool
 }
 
-// NewEndOfStreamMatch creates a new end of stream match
-func NewEndOfStreamMatchWithID(identifier string, logMismatches bool) *EndOfStreamMatch {
-	return &EndOfStreamMatch{
-		identifier:    identifier,
-		logMismatches: logMismatches,
+// NewEndF creates a new end of stream match
+func NewEndF(id string, logging bool) *End {
+	return &End{
+		id:      id,
+		logging: logging,
 	}
 }
 
-func NewEndOfStreamMatch() *EndOfStreamMatch {
-	return NewEndOfStreamMatchWithID("", false)
+func NewEnd() *End {
+	return NewEndF("", false)
 }
 
-func (m *EndOfStreamMatch) LogMismatches() bool {
-	return m.logMismatches
+func (m *End) ID() string {
+	return m.id
 }
 
-func (m *EndOfStreamMatch) Identifier() string {
-	return m.identifier
-}
-
-func (m *EndOfStreamMatch) Match(s EntityStreamer, l Logger) (bool, *MatchResult, error) {
+func (m *End) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	if s.Finished() {
-		return true, NewMatchResult(m.identifier, s.Position(), s.Position(), nil), nil
+		return true, NewResult(m.id, s.Pos(), s.Pos(), nil), nil
 	}
 
-	if m.logMismatches && l != nil {
-		l.Log(NewMismatch(m.identifier, s.Position(), s.Position(), nil, nil, nil))
+	if m.logging && l != nil {
+		l.Log(NewMismatch(m.id, s.Pos(), s.Pos(), nil, nil, nil))
 	}
 
 	return false, nil, nil

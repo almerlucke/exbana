@@ -19,7 +19,7 @@ func NewTestStream(str string) *TestStream {
 	}
 }
 
-func (ts *TestStream) Peek() (Entity, error) {
+func (ts *TestStream) Peek() (Obj, error) {
 	if ts.pos < len(ts.values) {
 		return ts.values[ts.pos], nil
 	}
@@ -27,7 +27,7 @@ func (ts *TestStream) Peek() (Entity, error) {
 	return nil, nil
 }
 
-func (ts *TestStream) Read() (Entity, error) {
+func (ts *TestStream) Read() (Obj, error) {
 	if ts.pos < len(ts.values) {
 		v := ts.values[ts.pos]
 		ts.pos += 1
@@ -41,11 +41,11 @@ func (ts *TestStream) Finished() bool {
 	return ts.pos >= len(ts.values)
 }
 
-func (ts *TestStream) Position() Position {
+func (ts *TestStream) Pos() Pos {
 	return ts.pos
 }
 
-func (ts *TestStream) SetPosition(pos Position) error {
+func (ts *TestStream) SetPos(pos Pos) error {
 	ts.pos = pos.(int)
 	return nil
 }
@@ -54,16 +54,16 @@ func (ts *TestStream) Log(mismatch *Mismatch) {
 	ts.mismatches = append(ts.mismatches, mismatch)
 }
 
-func (ts *TestStream) ValueForRange(begin Position, end Position) Value {
+func (ts *TestStream) ValForRange(begin Pos, end Pos) Val {
 	return string(ts.values[begin.(int):end.(int)])
 }
 
-func runeEntityEqual(e1 Entity, e2 Entity) bool {
+func runeEntityEqual(e1 Obj, e2 Obj) bool {
 	return (e1 != nil) && (e2 != nil) && (e1.(rune) == e2.(rune))
 }
 
-func stringToEntitySeries(str string) []Entity {
-	entities := []Entity{}
+func stringToSeries(str string) []Obj {
+	entities := []Obj{}
 
 	for _, r := range str {
 		entities = append(entities, r)
@@ -76,17 +76,17 @@ func stringToEntitySeries(str string) []Entity {
 
 func TestExbana(t *testing.T) {
 	s := NewTestStream("abaaa")
-	isA := NewEntityMatchWithID("is_a", false, func(entity Entity) bool { return entity.(rune) == 'a' })
-	isB := NewEntityMatchWithID("is_b", false, func(entity Entity) bool { return entity.(rune) == 'b' })
-	altAB := NewAlternationMatchWithID("is_a_or_b", false, []Matcher{isA, isB})
-	repAB := NewRepetitionMatchWithID("ab_repeat", true, altAB, 3, 4)
+	isA := NewSingleF("is_a", false, func(obj Obj) bool { return obj.(rune) == 'a' })
+	isB := NewSingleF("is_b", false, func(obj Obj) bool { return obj.(rune) == 'b' })
+	altAB := NewOrF("is_a_or_b", false, []Matcher{isA, isB})
+	repAB := NewRepF("ab_repeat", true, altAB, 3, 4)
 
-	transformTable := TransformTable{
-		"is_a_or_b": func(m *MatchResult, t TransformTable) Value {
-			return t.Transform(m.Value.(*MatchResult))
+	transformTable := TransTable{
+		"is_a_or_b": func(m *Result, t TransTable) Val {
+			return t.Transform(m.Val.(*Result))
 		},
-		"ab_repeat": func(m *MatchResult, t TransformTable) Value {
-			results := m.Value.([]*MatchResult)
+		"ab_repeat": func(m *Result, t TransTable) Val {
+			results := m.Val.([]*Result)
 
 			str := ""
 
@@ -104,7 +104,7 @@ func TestExbana(t *testing.T) {
 	}
 
 	for _, mismatch := range s.mismatches {
-		fmt.Printf("mismatch %v %v %v %v", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+		fmt.Printf("mismatch %v %v %v %v", mismatch.ID, mismatch.Begin, mismatch.End, mismatch.Error)
 	}
 
 	// s.SetPosition(0)
@@ -121,9 +121,9 @@ func TestExbana(t *testing.T) {
 
 func TestExbanaEntitySeries(t *testing.T) {
 	s := NewTestStream("hallr")
-	isHallo := NewEntitySeriesMatchWithID("hallo", true, stringToEntitySeries("hallo"), runeEntityEqual)
+	isHallo := NewSeriesF("hallo", true, stringToSeries("hallo"), runeEntityEqual)
 
-	transformTable := TransformTable{}
+	transformTable := TransTable{}
 
 	matched, result, _ := isHallo.Match(s, s)
 	if matched {
@@ -131,29 +131,29 @@ func TestExbanaEntitySeries(t *testing.T) {
 	}
 
 	for _, mismatch := range s.mismatches {
-		fmt.Printf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+		fmt.Printf("mismatch %v %v %v %v\n", mismatch.ID, mismatch.Begin, mismatch.End, mismatch.Error)
 	}
 }
 
 func TestExbanaException(t *testing.T) {
 	s := NewTestStream("123457")
-	isDigit := NewEntityMatchWithID("isLetter", false, func(entity Entity) bool { return unicode.IsDigit(entity.(rune)) })
-	isSix := NewEntityMatchWithID("isSix", false, func(entity Entity) bool { return entity.(rune) == '6' })
-	isDigitExceptSix := NewExceptionMatchWithID("isDigitExceptSix", false, isDigit, isSix)
-	allDigitsExceptSix := NewRepetitionMatchWithID("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
-	endOfStream := NewEndOfStreamMatchWithID("endOfStream", false)
-	allDigitsExceptSixTillTheEnd := NewConcatenationMatchWithID("allDigitsExceptSixTillTheEnd", true, []Matcher{allDigitsExceptSix, endOfStream})
+	isDigit := NewSingleF("isLetter", false, func(obj Obj) bool { return unicode.IsDigit(obj.(rune)) })
+	isSix := NewSingleF("isSix", false, func(obj Obj) bool { return obj.(rune) == '6' })
+	isDigitExceptSix := NewExceptF("isDigitExceptSix", false, isDigit, isSix)
+	allDigitsExceptSix := NewRepF("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
+	endOfStream := NewEndF("endOfStream", false)
+	allDigitsExceptSixTillTheEnd := NewAndF("allDigitsExceptSixTillTheEnd", true, []Matcher{allDigitsExceptSix, endOfStream})
 
-	transformTable := TransformTable{
-		"allDigitsExceptSix": func(result *MatchResult, table TransformTable) Value {
+	transformTable := TransTable{
+		"allDigitsExceptSix": func(result *Result, table TransTable) Val {
 			str := ""
-			for _, r := range result.Value.([]*MatchResult) {
-				str += r.Value.(string)
+			for _, r := range result.Val.([]*Result) {
+				str += r.Val.(string)
 			}
 			return str
 		},
-		"allDigitsExceptSixTillTheEnd": func(result *MatchResult, table TransformTable) Value {
-			return table.Transform(result.Value.([]*MatchResult)[0])
+		"allDigitsExceptSixTillTheEnd": func(result *Result, table TransTable) Val {
+			return table.Transform(result.Val.([]*Result)[0])
 		},
 	}
 
@@ -163,7 +163,7 @@ func TestExbanaException(t *testing.T) {
 	}
 
 	for _, mismatch := range s.mismatches {
-		t.Logf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+		t.Logf("mismatch %v %v %v %v\n", mismatch.ID, mismatch.Begin, mismatch.End, mismatch.Error)
 	}
 }
 
@@ -202,100 +202,100 @@ func TestExbanaProgram(t *testing.T) {
 		TEXT:="Hello world!";
 	END`)
 
-	runeMatch := func(r rune) EntityMatchFunction {
-		return func(e Entity) bool {
-			return e != nil && e.(rune) == r
+	runeMatch := func(r rune) SingleFunc {
+		return func(obj Obj) bool {
+			return obj != nil && obj.(rune) == r
 		}
 	}
 
-	runeFuncMatch := func(rf func(rune) bool) EntityMatchFunction {
-		return func(e Entity) bool {
-			return e != nil && rf(e.(rune))
+	runeFuncMatch := func(rf func(rune) bool) SingleFunc {
+		return func(obj Obj) bool {
+			return obj != nil && rf(obj.(rune))
 		}
 	}
 
-	minus := NewEntityMatch(runeMatch('-'))
-	doubleQuote := NewEntityMatch(runeMatch('"'))
-	assignSymbol := NewEntitySeriesMatch(stringToEntitySeries(":="), runeEntityEqual)
-	semiColon := NewEntityMatch(runeMatch(';'))
-	allCharacters := NewEntityMatch(runeFuncMatch(unicode.IsGraphic))
-	allButDoubleQuote := NewExceptionMatch(allCharacters, doubleQuote)
-	stringValue := NewConcatenationMatchWithID("string", true, []Matcher{doubleQuote, NewAnyMatch(allButDoubleQuote), doubleQuote})
-	whiteSpace := NewEntityMatch(runeFuncMatch(unicode.IsSpace))
-	atLeastOneWhiteSpace := NewRepetitionMatch(whiteSpace, 1, 0)
-	digit := NewEntityMatch(runeFuncMatch(unicode.IsDigit))
-	anyDigit := NewAnyMatch(digit)
-	alphabeticCharacter := NewEntityMatch(runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) }))
-	anyAlnum := NewAnyMatch(NewAlternationMatch([]Matcher{alphabeticCharacter, digit}))
-	identifier := NewConcatenationMatchWithID("identifier", false, []Matcher{alphabeticCharacter, anyAlnum})
-	number := NewConcatenationMatchWithID("number", false, []Matcher{NewOptionalMatch(minus), digit, anyDigit})
-	assignmentRightSide := NewAlternationMatch([]Matcher{number, identifier, stringValue})
-	assignment := NewConcatenationMatchWithID("assignment", false, []Matcher{identifier, assignSymbol, assignmentRightSide})
-	programTerminal := NewEntitySeriesMatch(stringToEntitySeries("PROGRAM"), runeEntityEqual)
-	beginTerminal := NewEntitySeriesMatch(stringToEntitySeries("BEGIN"), runeEntityEqual)
-	endTerminal := NewEntitySeriesMatch(stringToEntitySeries("END"), runeEntityEqual)
-	assignmentsInternal := NewConcatenationMatch([]Matcher{assignment, semiColon, atLeastOneWhiteSpace})
-	assignments := NewRepetitionMatchWithID("assignments", false, assignmentsInternal, 0, 0)
-	program := NewConcatenationMatchWithID("program", true, []Matcher{
+	minus := NewSingle(runeMatch('-'))
+	doubleQuote := NewSingle(runeMatch('"'))
+	assignSymbol := NewSeries(stringToSeries(":="), runeEntityEqual)
+	semiColon := NewSingle(runeMatch(';'))
+	allCharacters := NewSingle(runeFuncMatch(unicode.IsGraphic))
+	allButDoubleQuote := NewExcept(allCharacters, doubleQuote)
+	stringValue := NewAndF("string", true, []Matcher{doubleQuote, NewAny(allButDoubleQuote), doubleQuote})
+	whiteSpace := NewSingle(runeFuncMatch(unicode.IsSpace))
+	atLeastOneWhiteSpace := NewRep(whiteSpace, 1, 0)
+	digit := NewSingle(runeFuncMatch(unicode.IsDigit))
+	anyDigit := NewAny(digit)
+	alphabeticCharacter := NewSingle(runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) }))
+	anyAlnum := NewAny(NewOr([]Matcher{alphabeticCharacter, digit}))
+	identifier := NewAndF("identifier", false, []Matcher{alphabeticCharacter, anyAlnum})
+	number := NewAndF("number", false, []Matcher{NewOpt(minus), digit, anyDigit})
+	assignmentRightSide := NewOr([]Matcher{number, identifier, stringValue})
+	assignment := NewAndF("assignment", false, []Matcher{identifier, assignSymbol, assignmentRightSide})
+	programTerminal := NewSeries(stringToSeries("PROGRAM"), runeEntityEqual)
+	beginTerminal := NewSeries(stringToSeries("BEGIN"), runeEntityEqual)
+	endTerminal := NewSeries(stringToSeries("END"), runeEntityEqual)
+	assignmentsInternal := NewAnd([]Matcher{assignment, semiColon, atLeastOneWhiteSpace})
+	assignments := NewAny(assignmentsInternal)
+	program := NewAndF("program", true, []Matcher{
 		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
 	})
 
-	transformTable := TransformTable{
-		"assignment": func(result *MatchResult, table TransformTable) Value {
-			elements := result.Value.([]*MatchResult)
+	transformTable := TransTable{
+		"assignment": func(result *Result, table TransTable) Val {
+			elements := result.Val.([]*Result)
 
 			leftSide := table.Transform(elements[0]).(*ProgramValue)
-			rightSide := table.Transform(elements[2].Value.(*MatchResult)).(*ProgramValue)
+			rightSide := table.Transform(elements[2].Val.(*Result)).(*ProgramValue)
 
 			return &ProgramAssignment{LeftSide: leftSide, RightSide: rightSide}
 		},
-		"number": func(result *MatchResult, table TransformTable) Value {
-			elements := result.Value.([]*MatchResult)
+		"number": func(result *Result, table TransTable) Val {
+			elements := result.Val.([]*Result)
 			numContent := ""
 
-			if len(elements[0].Value.([]*MatchResult)) > 0 {
+			if len(elements[0].Val.([]*Result)) > 0 {
 				numContent += "-"
 			}
 
-			numContent += elements[1].Value.(string)
+			numContent += elements[1].Val.(string)
 
-			for _, numChr := range elements[2].Value.([]*MatchResult) {
-				numContent += numChr.Value.(string)
+			for _, numChr := range elements[2].Val.([]*Result) {
+				numContent += numChr.Val.(string)
 			}
 
 			return &ProgramValue{Content: numContent, Type: ProgramValueTypeNumber}
 		},
-		"string": func(result *MatchResult, table TransformTable) Value {
-			elements := result.Value.([]*MatchResult)
+		"string": func(result *Result, table TransTable) Val {
+			elements := result.Val.([]*Result)
 			stringContent := ""
 
-			for _, strChr := range elements[1].Value.([]*MatchResult) {
-				stringContent += strChr.Value.(string)
+			for _, strChr := range elements[1].Val.([]*Result) {
+				stringContent += strChr.Val.(string)
 			}
 
 			return &ProgramValue{Content: stringContent, Type: ProgramValueTypeString}
 		},
-		"identifier": func(result *MatchResult, table TransformTable) Value {
-			elements := result.Value.([]*MatchResult)
+		"identifier": func(result *Result, table TransTable) Val {
+			elements := result.Val.([]*Result)
 			// First character
-			idContent := elements[0].Value.(string)
+			idContent := elements[0].Val.(string)
 			// Rest of characters
-			for _, alnum := range elements[1].Value.([]*MatchResult) {
-				idContent += alnum.Value.(*MatchResult).Value.(string)
+			for _, alnum := range elements[1].Val.([]*Result) {
+				idContent += alnum.Val.(*Result).Val.(string)
 			}
 
 			return &ProgramValue{Content: idContent, Type: ProgramValueTypeIdentifier}
 		},
-		"program": func(result *MatchResult, table TransformTable) Value {
-			elements := result.Value.([]*MatchResult)
+		"program": func(result *Result, table TransTable) Val {
+			elements := result.Val.([]*Result)
 			name := table.Transform(elements[2]).(*ProgramValue)
 
 			assignments := []*ProgramAssignment{}
 
-			rawAssignments := elements[6].Value.([]*MatchResult)
+			rawAssignments := elements[6].Val.([]*Result)
 
 			for _, rawAssignment := range rawAssignments {
-				assignment := table.Transform(rawAssignment.Value.([]*MatchResult)[0]).(*ProgramAssignment)
+				assignment := table.Transform(rawAssignment.Val.([]*Result)[0]).(*ProgramAssignment)
 				assignments = append(assignments, assignment)
 			}
 
@@ -315,7 +315,7 @@ func TestExbanaProgram(t *testing.T) {
 		}
 	} else {
 		for _, mismatch := range s.mismatches {
-			t.Logf("mismatch %v %v %v %v\n", mismatch.Identifier, mismatch.Begin, mismatch.End, mismatch.Error)
+			t.Logf("mismatch %v %v %v %v\n", mismatch.ID, mismatch.Begin, mismatch.End, mismatch.Error)
 		}
 	}
 

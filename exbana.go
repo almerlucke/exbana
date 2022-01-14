@@ -44,6 +44,19 @@ func NewResult(id string, begin Position, end Position, value Value) *Result {
 	}
 }
 
+func (r *Result) Components() []*Result {
+	return r.Value.([]*Result)
+}
+
+func (r *Result) Values() []Value {
+	components := r.Components()
+	values := make([]Value, len(components))
+	for index, component := range components {
+		values[index] = component.Value
+	}
+	return values
+}
+
 // TransformFunc can transform match result to final value
 type TransformFunc func(*Result, TransformTable) Value
 

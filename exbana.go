@@ -101,34 +101,34 @@ type Patterns []Pattern
 // UnitFunc can match a single object
 type UnitMatchFunc func(Object) bool
 
-// Unit represents a single object pattern
-type Unit struct {
+// UnitPattern represents a single object pattern
+type UnitPattern struct {
 	id        string
 	logging   bool
 	matchFunc UnitMatchFunc
 }
 
-// NewUnitF creates a new unit pattern
-func NewUnitF(id string, logging bool, matchFunc UnitMatchFunc) *Unit {
-	return &Unit{
+// UnitF creates a new unit pattern
+func UnitF(id string, logging bool, matchFunc UnitMatchFunc) *UnitPattern {
+	return &UnitPattern{
 		id:        id,
 		logging:   logging,
 		matchFunc: matchFunc,
 	}
 }
 
-// NewUnit creates a new unit pattern
-func NewUnit(matchFunction UnitMatchFunc) *Unit {
-	return NewUnitF("", false, matchFunction)
+// Unit creates a new unit pattern
+func Unit(matchFunction UnitMatchFunc) *UnitPattern {
+	return UnitF("", false, matchFunction)
 }
 
 // ID returns the unit pattern ID
-func (p *Unit) ID() string {
+func (p *UnitPattern) ID() string {
 	return p.id
 }
 
 // Match matches the unit object against a stream
-func (p *Unit) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *UnitPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	pos := s.Position()
 	entity, err := s.Read()
 
@@ -145,17 +145,17 @@ func (p *Unit) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	return false, nil, nil
 }
 
-// Series represents a series of objects to match
-type Series struct {
+// SeriesPattern represents a series of objects to match
+type SeriesPattern struct {
 	id      string
 	logging bool
 	eqFunc  ObjectEqualFunc
 	series  []Object
 }
 
-// NewSeriesF creates a new series pattern
-func NewSeriesF(id string, logging bool, eqFunc ObjectEqualFunc, series ...Object) *Series {
-	return &Series{
+// SeriesF creates a new series pattern
+func SeriesF(id string, logging bool, eqFunc ObjectEqualFunc, series ...Object) *SeriesPattern {
+	return &SeriesPattern{
 		id:      id,
 		logging: logging,
 		series:  series,
@@ -163,18 +163,18 @@ func NewSeriesF(id string, logging bool, eqFunc ObjectEqualFunc, series ...Objec
 	}
 }
 
-// NewSeries creates a new series pattern
-func NewSeries(eqFunc ObjectEqualFunc, series ...Object) *Series {
-	return NewSeriesF("", false, eqFunc, series...)
+// Series creates a new series pattern
+func Series(eqFunc ObjectEqualFunc, series ...Object) *SeriesPattern {
+	return SeriesF("", false, eqFunc, series...)
 }
 
 // ID return the series pattern ID
-func (p *Series) ID() string {
+func (p *SeriesPattern) ID() string {
 	return p.id
 }
 
 // Match matches the series pattern against a stream
-func (p *Series) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *SeriesPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	for _, e1 := range p.series {
@@ -198,33 +198,33 @@ func (p *Series) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 }
 
 // And matches a series of patterns AND style
-type And struct {
+type AndPattern struct {
 	id       string
 	logging  bool
 	Patterns Patterns
 }
 
-// NewAndF creates a new AND pattern
-func NewAndF(id string, logging bool, patterns ...Pattern) *And {
-	return &And{
+// AndF creates a new AND pattern
+func AndF(id string, logging bool, patterns ...Pattern) *AndPattern {
+	return &AndPattern{
 		id:       id,
 		logging:  logging,
 		Patterns: patterns,
 	}
 }
 
-// NewAnd creates a new AND pattern
-func NewAnd(patterns ...Pattern) *And {
-	return NewAndF("", false, patterns...)
+// And creates a new AND pattern
+func And(patterns ...Pattern) *AndPattern {
+	return AndF("", false, patterns...)
 }
 
 // ID returns the AND pattern ID
-func (p *And) ID() string {
+func (p *AndPattern) ID() string {
 	return p.id
 }
 
 // Match matches And against a stream, fails if any of the patterns mismatches
-func (p *And) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *AndPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	matches := []*Result{}
@@ -255,34 +255,34 @@ func (p *And) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	return true, NewResult(p.id, beginPos, s.Position(), matches), nil
 }
 
-// Or matches a series of patterns OR style
-type Or struct {
+// OrPattern matches a series of patterns OR style
+type OrPattern struct {
 	id       string
 	logging  bool
 	Patterns Patterns
 }
 
-// NewOrF creates a new OR pattern
-func NewOrF(id string, logging bool, patterns ...Pattern) *Or {
-	return &Or{
+// OrF creates a new OR pattern
+func OrF(id string, logging bool, patterns ...Pattern) *OrPattern {
+	return &OrPattern{
 		id:       id,
 		logging:  logging,
 		Patterns: patterns,
 	}
 }
 
-// NewOr creates a new OR pattern
-func NewOr(patterns ...Pattern) *Or {
-	return NewOrF("", false, patterns...)
+// Or creates a new OR pattern
+func Or(patterns ...Pattern) *OrPattern {
+	return OrF("", false, patterns...)
 }
 
 // ID returns the ID of the OR pattern
-func (p *Or) ID() string {
+func (p *OrPattern) ID() string {
 	return p.id
 }
 
 // Match matches the OR pattern against a stream, fails if all of the patterns mismatch
-func (p *Or) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *OrPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	for _, pm := range p.Patterns {
@@ -305,8 +305,8 @@ func (p *Or) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	return false, nil, nil
 }
 
-// Rep matches a pattern repetition
-type Rep struct {
+// RepPattern matches a pattern repetition
+type RepPattern struct {
 	id      string
 	logging bool
 	Pattern Pattern
@@ -314,9 +314,9 @@ type Rep struct {
 	max     int
 }
 
-// NewRepF creates a new repetition pattern
-func NewRepF(id string, logging bool, pattern Pattern, min int, max int) *Rep {
-	return &Rep{
+// RepF creates a new repetition pattern
+func RepF(id string, logging bool, pattern Pattern, min int, max int) *RepPattern {
+	return &RepPattern{
 		id:      id,
 		logging: logging,
 		Pattern: pattern,
@@ -325,48 +325,48 @@ func NewRepF(id string, logging bool, pattern Pattern, min int, max int) *Rep {
 	}
 }
 
-// NewRep creates a new repetition pattern
-func NewRep(pattern Pattern, min int, max int) *Rep {
-	return NewRepF("", false, pattern, min, max)
+// Rep creates a new repetition pattern
+func Rep(pattern Pattern, min int, max int) *RepPattern {
+	return RepF("", false, pattern, min, max)
 }
 
-// NewOptF creates a new optional pattern
-func NewOptF(id string, logging bool, pattern Pattern) *Rep {
-	return NewRepF(id, logging, pattern, 0, 1)
+// OptF creates a new optional pattern
+func OptF(id string, logging bool, pattern Pattern) *RepPattern {
+	return RepF(id, logging, pattern, 0, 1)
 }
 
-// NewOpt creates a new optional pattern
-func NewOpt(pattern Pattern) *Rep {
-	return NewOptF("", false, pattern)
+// Opt creates a new optional pattern
+func Opt(pattern Pattern) *RepPattern {
+	return OptF("", false, pattern)
 }
 
-// NewAnyF creates a new any repetition pattern
-func NewAnyF(id string, logging bool, pattern Pattern) *Rep {
-	return NewRepF(id, logging, pattern, 0, 0)
+// AnyF creates a new any repetition pattern
+func AnyF(id string, logging bool, pattern Pattern) *RepPattern {
+	return RepF(id, logging, pattern, 0, 0)
 }
 
-// NewAny creates a new any repetition pattern
-func NewAny(pattern Pattern) *Rep {
-	return NewAnyF("", false, pattern)
+// Any creates a new any repetition pattern
+func Any(pattern Pattern) *RepPattern {
+	return AnyF("", false, pattern)
 }
 
-// NewNF creates a new repetition pattern for exactly n times
-func NewNF(id string, logging bool, pattern Pattern, n int) *Rep {
-	return NewRepF(id, logging, pattern, n, n)
+// NF creates a new repetition pattern for exactly n times
+func NF(id string, logging bool, pattern Pattern, n int) *RepPattern {
+	return RepF(id, logging, pattern, n, n)
 }
 
-// NewN creates a new repetition pattern for exactly n times
-func NewN(pattern Pattern, n int) *Rep {
-	return NewNF("", false, pattern, n)
+// N creates a new repetition pattern for exactly n times
+func N(pattern Pattern, n int) *RepPattern {
+	return NF("", false, pattern, n)
 }
 
 // ID returns the ID of the repetition pattern
-func (p *Rep) ID() string {
+func (p *RepPattern) ID() string {
 	return p.id
 }
 
 // Match matches the repetition pattern aginst a stream
-func (p *Rep) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *RepPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 	matches := []*Result{}
 
@@ -404,17 +404,17 @@ func (p *Rep) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	return true, NewResult(p.id, beginPos, s.Position(), matches), nil
 }
 
-// Except pattern must not match the Except pattern but must match the MustMatch pattern
-type Except struct {
+// ExceptPattern must not match the Except pattern but must match the MustMatch pattern
+type ExceptPattern struct {
 	id        string
 	logging   bool
 	MustMatch Pattern
 	Except    Pattern
 }
 
-// NewExceptF creates a new except pattern
-func NewExceptF(id string, logging bool, mustMatch Pattern, except Pattern) *Except {
-	return &Except{
+// ExceptF creates a new except pattern
+func ExceptF(id string, logging bool, mustMatch Pattern, except Pattern) *ExceptPattern {
+	return &ExceptPattern{
 		id:        id,
 		logging:   logging,
 		MustMatch: mustMatch,
@@ -423,17 +423,17 @@ func NewExceptF(id string, logging bool, mustMatch Pattern, except Pattern) *Exc
 }
 
 // NewExcept creates a new except pattern
-func NewExcept(mustMatch Pattern, except Pattern) *Except {
-	return NewExceptF("", false, mustMatch, except)
+func Except(mustMatch Pattern, except Pattern) *ExceptPattern {
+	return ExceptF("", false, mustMatch, except)
 }
 
 // ID returns the except pattern ID
-func (p *Except) ID() string {
+func (p *ExceptPattern) ID() string {
 	return p.id
 }
 
 // Match matches the exception against a stream
-func (p *Except) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *ExceptPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	// First check for the exception match, we do not want to match the exception
@@ -456,32 +456,32 @@ func (p *Except) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	return p.MustMatch.Match(s, l)
 }
 
-// End pattern matches the end of stream
-type End struct {
+// EndPattern matches the end of stream
+type EndPattern struct {
 	id      string
 	logging bool
 }
 
-// NewEndF creates a new end of stream pattern
-func NewEndF(id string, logging bool) *End {
-	return &End{
+// EndF creates a new end of stream pattern
+func EndF(id string, logging bool) *EndPattern {
+	return &EndPattern{
 		id:      id,
 		logging: logging,
 	}
 }
 
-// NewEnd creates a new end of stream pattern
-func NewEnd() *End {
-	return NewEndF("", false)
+// End creates a new end of stream pattern
+func End() *EndPattern {
+	return EndF("", false)
 }
 
 // ID returns end of stream pattern ID
-func (p *End) ID() string {
+func (p *EndPattern) ID() string {
 	return p.id
 }
 
 // Match matches a end of stream pattern against a stream
-func (p *End) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
+func (p *EndPattern) Match(s ObjStreamer, l Logger) (bool, *Result, error) {
 	if s.Finished() {
 		return true, NewResult(p.id, s.Position(), s.Position(), nil), nil
 	}

@@ -66,10 +66,10 @@ func runeEntityEqual(o1 Object, o2 Object) bool {
 
 func TestExbana(t *testing.T) {
 	s := NewTestStream("abaaa")
-	isA := NewUnitF("is_a", false, func(obj Object) bool { return obj.(rune) == 'a' })
-	isB := NewUnitF("is_b", false, func(obj Object) bool { return obj.(rune) == 'b' })
-	altAB := NewOrF("is_a_or_b", false, isA, isB)
-	repAB := NewRepF("ab_repeat", true, altAB, 3, 4)
+	isA := UnitF("is_a", false, func(obj Object) bool { return obj.(rune) == 'a' })
+	isB := UnitF("is_b", false, func(obj Object) bool { return obj.(rune) == 'b' })
+	altAB := OrF("is_a_or_b", false, isA, isB)
+	repAB := RepF("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable{
 		"is_a_or_b": func(m *Result, t TransformTable) Value {
@@ -121,7 +121,7 @@ func stringToSeries(str string) []Object {
 
 func TestExbanaEntitySeries(t *testing.T) {
 	s := NewTestStream("hallr")
-	isHallo := NewSeriesF("hallo", true, runeEntityEqual, stringToSeries("hallo")...)
+	isHallo := SeriesF("hallo", true, runeEntityEqual, stringToSeries("hallo")...)
 
 	transformTable := TransformTable{}
 
@@ -137,12 +137,12 @@ func TestExbanaEntitySeries(t *testing.T) {
 
 func TestExbanaException(t *testing.T) {
 	s := NewTestStream("123457")
-	isDigit := NewUnitF("isLetter", false, func(obj Object) bool { return unicode.IsDigit(obj.(rune)) })
-	isSix := NewUnitF("isSix", false, func(obj Object) bool { return obj.(rune) == '6' })
-	isDigitExceptSix := NewExceptF("isDigitExceptSix", false, isDigit, isSix)
-	allDigitsExceptSix := NewRepF("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
-	endOfStream := NewEndF("endOfStream", false)
-	allDigitsExceptSixTillTheEnd := NewAndF("allDigitsExceptSixTillTheEnd", true, allDigitsExceptSix, endOfStream)
+	isDigit := UnitF("isLetter", false, func(obj Object) bool { return unicode.IsDigit(obj.(rune)) })
+	isSix := UnitF("isSix", false, func(obj Object) bool { return obj.(rune) == '6' })
+	isDigitExceptSix := ExceptF("isDigitExceptSix", false, isDigit, isSix)
+	allDigitsExceptSix := RepF("allDigitsExceptSix", false, isDigitExceptSix, 1, 0)
+	endOfStream := EndF("endOfStream", false)
+	allDigitsExceptSixTillTheEnd := AndF("allDigitsExceptSixTillTheEnd", true, allDigitsExceptSix, endOfStream)
 
 	transformTable := TransformTable{
 		"allDigitsExceptSix": func(result *Result, table TransformTable) Value {
@@ -203,19 +203,19 @@ func TestExbanaProgram(t *testing.T) {
 	END`)
 
 	runeMatch := func(r rune) Pattern {
-		return NewUnit(func(obj Object) bool {
+		return Unit(func(obj Object) bool {
 			return obj != nil && obj.(rune) == r
 		})
 	}
 
 	runeFuncMatch := func(rf func(rune) bool) Pattern {
-		return NewUnit(func(obj Object) bool {
+		return Unit(func(obj Object) bool {
 			return obj != nil && rf(obj.(rune))
 		})
 	}
 
 	runeSeries := func(str string) Pattern {
-		return NewSeries(runeEntityEqual, stringToSeries(str)...)
+		return Series(runeEntityEqual, stringToSeries(str)...)
 	}
 
 	minus := runeMatch('-')
@@ -223,24 +223,24 @@ func TestExbanaProgram(t *testing.T) {
 	assignSymbol := runeSeries(":=")
 	semiColon := runeMatch(';')
 	allCharacters := runeFuncMatch(unicode.IsGraphic)
-	allButDoubleQuote := NewExcept(allCharacters, doubleQuote)
-	stringValue := NewAndF("string", true, doubleQuote, NewAny(allButDoubleQuote), doubleQuote)
+	allButDoubleQuote := Except(allCharacters, doubleQuote)
+	stringValue := AndF("string", true, doubleQuote, Any(allButDoubleQuote), doubleQuote)
 	whiteSpace := runeFuncMatch(unicode.IsSpace)
-	atLeastOneWhiteSpace := NewRep(whiteSpace, 1, 0)
+	atLeastOneWhiteSpace := Rep(whiteSpace, 1, 0)
 	digit := runeFuncMatch(unicode.IsDigit)
-	anyDigit := NewAny(digit)
+	anyDigit := Any(digit)
 	alphabeticCharacter := runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
-	anyAlnum := NewAny(NewOr(alphabeticCharacter, digit))
-	identifier := NewAndF("identifier", false, alphabeticCharacter, anyAlnum)
-	number := NewAndF("number", false, NewOpt(minus), digit, anyDigit)
-	assignmentRightSide := NewOr(number, identifier, stringValue)
-	assignment := NewAndF("assignment", false, identifier, assignSymbol, assignmentRightSide)
+	anyAlnum := Any(Or(alphabeticCharacter, digit))
+	identifier := AndF("identifier", false, alphabeticCharacter, anyAlnum)
+	number := AndF("number", false, Opt(minus), digit, anyDigit)
+	assignmentRightSide := Or(number, identifier, stringValue)
+	assignment := AndF("assignment", false, identifier, assignSymbol, assignmentRightSide)
 	programTerminal := runeSeries("PROGRAM")
 	beginTerminal := runeSeries("BEGIN")
 	endTerminal := runeSeries("END")
-	assignmentsInternal := NewAnd(assignment, semiColon, atLeastOneWhiteSpace)
-	assignments := NewAny(assignmentsInternal)
-	program := NewAndF("program", true,
+	assignmentsInternal := And(assignment, semiColon, atLeastOneWhiteSpace)
+	assignments := Any(assignmentsInternal)
+	program := AndF("program", true,
 		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
 	)
 

@@ -65,6 +65,15 @@ func (r *Result) NestedValue() Value {
 	return r.Value.(*Result).Value
 }
 
+func (r *Result) Optional() *Result {
+	components := r.Value.([]*Result)
+	if len(components) > 0 {
+		return components[0]
+	}
+
+	return nil
+}
+
 // TransformFunc can transform match result to final value
 type TransformFunc func(*Result, TransformTable, ObjectStreamer) Value
 

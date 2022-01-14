@@ -73,10 +73,10 @@ func TestExbana(t *testing.T) {
 
 	transformTable := TransformTable{
 		"is_a_or_b": func(m *Result, t TransformTable) Value {
-			return t.Transform(m.Val.(*Result))
+			return t.Transform(m.Value.(*Result))
 		},
 		"ab_repeat": func(m *Result, t TransformTable) Value {
-			results := m.Val.([]*Result)
+			results := m.Value.([]*Result)
 
 			str := ""
 
@@ -147,13 +147,13 @@ func TestExbanaException(t *testing.T) {
 	transformTable := TransformTable{
 		"allDigitsExceptSix": func(result *Result, table TransformTable) Value {
 			str := ""
-			for _, r := range result.Val.([]*Result) {
-				str += r.Val.(string)
+			for _, r := range result.Value.([]*Result) {
+				str += r.Value.(string)
 			}
 			return str
 		},
 		"allDigitsExceptSixTillTheEnd": func(result *Result, table TransformTable) Value {
-			return table.Transform(result.Val.([]*Result)[0])
+			return table.Transform(result.Value.([]*Result)[0])
 		},
 	}
 
@@ -246,60 +246,60 @@ func TestExbanaProgram(t *testing.T) {
 
 	transformTable := TransformTable{
 		"assignment": func(result *Result, table TransformTable) Value {
-			elements := result.Val.([]*Result)
+			elements := result.Value.([]*Result)
 
 			leftSide := table.Transform(elements[0]).(*ProgramValue)
-			rightSide := table.Transform(elements[2].Val.(*Result)).(*ProgramValue)
+			rightSide := table.Transform(elements[2].Value.(*Result)).(*ProgramValue)
 
 			return &ProgramAssignment{LeftSide: leftSide, RightSide: rightSide}
 		},
 		"number": func(result *Result, table TransformTable) Value {
-			elements := result.Val.([]*Result)
+			elements := result.Value.([]*Result)
 			numContent := ""
 
-			if len(elements[0].Val.([]*Result)) > 0 {
+			if len(elements[0].Value.([]*Result)) > 0 {
 				numContent += "-"
 			}
 
-			numContent += elements[1].Val.(string)
+			numContent += elements[1].Value.(string)
 
-			for _, numChr := range elements[2].Val.([]*Result) {
-				numContent += numChr.Val.(string)
+			for _, numChr := range elements[2].Value.([]*Result) {
+				numContent += numChr.Value.(string)
 			}
 
 			return &ProgramValue{Content: numContent, Type: ProgramValueTypeNumber}
 		},
 		"string": func(result *Result, table TransformTable) Value {
-			elements := result.Val.([]*Result)
+			elements := result.Value.([]*Result)
 			stringContent := ""
 
-			for _, strChr := range elements[1].Val.([]*Result) {
-				stringContent += strChr.Val.(string)
+			for _, strChr := range elements[1].Value.([]*Result) {
+				stringContent += strChr.Value.(string)
 			}
 
 			return &ProgramValue{Content: stringContent, Type: ProgramValueTypeString}
 		},
 		"identifier": func(result *Result, table TransformTable) Value {
-			elements := result.Val.([]*Result)
+			elements := result.Value.([]*Result)
 			// First character
-			idContent := elements[0].Val.(string)
+			idContent := elements[0].Value.(string)
 			// Rest of characters
-			for _, alnum := range elements[1].Val.([]*Result) {
-				idContent += alnum.Val.(*Result).Val.(string)
+			for _, alnum := range elements[1].Value.([]*Result) {
+				idContent += alnum.Value.(*Result).Value.(string)
 			}
 
 			return &ProgramValue{Content: idContent, Type: ProgramValueTypeIdentifier}
 		},
 		"program": func(result *Result, table TransformTable) Value {
-			elements := result.Val.([]*Result)
+			elements := result.Value.([]*Result)
 			name := table.Transform(elements[2]).(*ProgramValue)
 
 			assignments := []*ProgramAssignment{}
 
-			rawAssignments := elements[6].Val.([]*Result)
+			rawAssignments := elements[6].Value.([]*Result)
 
 			for _, rawAssignment := range rawAssignments {
-				assignment := table.Transform(rawAssignment.Val.([]*Result)[0]).(*ProgramAssignment)
+				assignment := table.Transform(rawAssignment.Value.([]*Result)[0]).(*ProgramAssignment)
 				assignments = append(assignments, assignment)
 			}
 

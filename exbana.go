@@ -31,16 +31,16 @@ type Result struct {
 	ID    string
 	Begin Position
 	End   Position
-	Val   Value
+	Value Value
 }
 
 // NewResult creates a new pattern match result
-func NewResult(id string, begin Position, end Position, val Value) *Result {
+func NewResult(id string, begin Position, end Position, value Value) *Result {
 	return &Result{
 		ID:    id,
 		Begin: begin,
 		End:   end,
-		Val:   val,
+		Value: value,
 	}
 }
 
@@ -57,7 +57,7 @@ func (t TransformTable) Transform(m *Result) Value {
 		return f(m, t)
 	}
 
-	return m.Val
+	return m.Value
 }
 
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
@@ -76,7 +76,7 @@ func NewMismatch(id string, begin Position, end Position, subMisMatch *Result, s
 			ID:    id,
 			Begin: begin,
 			End:   end,
-			Val:   nil,
+			Value: nil,
 		},
 		SubMismatch: subMisMatch,
 		SubMatches:  subMatches,

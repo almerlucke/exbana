@@ -48,6 +48,10 @@ func (r *Result) Components() []*Result {
 	return r.Value.([]*Result)
 }
 
+func (r *Result) Component(index int) *Result {
+	return r.Value.([]*Result)[index]
+}
+
 func (r *Result) Values() []Value {
 	components := r.Value.([]*Result)
 	values := make([]Value, len(components))

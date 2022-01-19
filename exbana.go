@@ -2,6 +2,7 @@ package exbana
 
 import (
 	"fmt"
+	"math/rand"
 )
 
 // Object returned from streamer, a real implementation could have rune as object type
@@ -16,14 +17,20 @@ type Position interface{}
 // Value is an abstract return value from result
 type Value interface{}
 
-// ObjectStreamer interface for a stream that can emit objects to a pattern matcher
-type ObjectStreamer interface {
+// ObjectReader interface for a stream that can serve objects to a pattern matcher
+type ObjectReader interface {
 	Peek() (Object, error)
 	Read() (Object, error)
 	Finished() bool
 	Position() Position
 	SetPosition(Position) error
 	ValueForRange(Position, Position) Value
+}
+
+// ObjectWriter interface to write generated objects
+type ObjectWriter interface {
+	Write(...Object) error
+	Finish() error
 }
 
 // Result contains matched pattern position, identifier and value
@@ -44,14 +51,17 @@ func NewResult(id string, begin Position, end Position, value Value) *Result {
 	}
 }
 
+// Components (Concat & Alt)
 func (r *Result) Components() []*Result {
 	return r.Value.([]*Result)
 }
 
+// Component at index (Concat & Alt)
 func (r *Result) Component(index int) *Result {
 	return r.Value.([]*Result)[index]
 }
 
+// Values for components (Concat & Alt)
 func (r *Result) Values() []Value {
 	components := r.Value.([]*Result)
 	values := make([]Value, len(components))
@@ -61,14 +71,17 @@ func (r *Result) Values() []Value {
 	return values
 }
 
+// NestedResult for Alt
 func (r *Result) NestedResult() *Result {
 	return r.Value.(*Result)
 }
 
+// NestedValue for Alt
 func (r *Result) NestedValue() Value {
 	return r.Value.(*Result).Value
 }
 
+// Optional result
 func (r *Result) Optional() *Result {
 	components := r.Value.([]*Result)
 	if len(components) > 0 {
@@ -79,13 +92,13 @@ func (r *Result) Optional() *Result {
 }
 
 // TransformFunc can transform match result to final value
-type TransformFunc func(*Result, TransformTable, ObjectStreamer) Value
+type TransformFunc func(*Result, TransformTable, ObjectReader) Value
 
 // TransformTable is used to map matcher identifiers to a transform function
 type TransformTable map[string]TransformFunc
 
 // Transform a match result to a value
-func (t TransformTable) Transform(m *Result, stream ObjectStreamer) Value {
+func (t TransformTable) Transform(m *Result, stream ObjectReader) Value {
 	f, ok := t[m.ID]
 	if ok {
 		return f(m, t, stream)
@@ -125,29 +138,55 @@ type Logger interface {
 
 // Pattern can match objects from a stream, has an identifier
 type Pattern interface {
-	Match(ObjectStreamer, Logger) (bool, *Result, error)
+	Match(ObjectReader, Logger) (bool, *Result, error)
+	Generate(ObjectWriter)
 	ID() string
 }
 
 // Patterns is a convenience type for a slice of pattern interfaces
 type Patterns []Pattern
 
-// UnitFunc can match a single object
+// Scan stream for pattern and return all results
+func Scan(stream ObjectReader, pattern Pattern) ([]*Result, error) {
+	results := []*Result{}
+	for !stream.Finished() {
+		pos := stream.Position()
+		matched, result, err := pattern.Match(stream, nil)
+		if err != nil {
+			return nil, err
+		}
+		if matched {
+			results = append(results, result)
+		} else {
+			stream.SetPosition(pos)
+			stream.Read()
+		}
+	}
+
+	return results, nil
+}
+
+// UnitMatchFunc matches a single object
 type UnitMatchFunc func(Object) bool
+
+// UnitGenerateFunc generates a single object
+type UnitGenerateFunc func() Object
 
 // UnitPattern represents a single object pattern
 type UnitPattern struct {
-	id        string
-	logging   bool
-	matchFunc UnitMatchFunc
+	id           string
+	logging      bool
+	matchFunc    UnitMatchFunc
+	GenerateFunc UnitGenerateFunc
 }
 
 // Unitx creates a new unit pattern with identifier and logging
 func Unitx(id string, logging bool, matchFunc UnitMatchFunc) *UnitPattern {
 	return &UnitPattern{
-		id:        id,
-		logging:   logging,
-		matchFunc: matchFunc,
+		id:           id,
+		logging:      logging,
+		matchFunc:    matchFunc,
+		GenerateFunc: nil,
 	}
 }
 
@@ -162,7 +201,7 @@ func (p *UnitPattern) ID() string {
 }
 
 // Match matches the unit object against a stream
-func (p *UnitPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *UnitPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	pos := s.Position()
 	entity, err := s.Read()
 
@@ -177,6 +216,13 @@ func (p *UnitPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	}
 
 	return false, nil, nil
+}
+
+// Generate writes an object to an object writer
+func (p *UnitPattern) Generate(wr ObjectWriter) {
+	if p.GenerateFunc != nil {
+		wr.Write(p.GenerateFunc())
+	}
 }
 
 // SeriesPattern represents a series of objects to match
@@ -208,7 +254,7 @@ func (p *SeriesPattern) ID() string {
 }
 
 // Match matches the series pattern against a stream
-func (p *SeriesPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *SeriesPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	for _, e1 := range p.series {
@@ -229,6 +275,11 @@ func (p *SeriesPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error)
 	endPos := s.Position()
 
 	return true, NewResult(p.id, beginPos, endPos, s.ValueForRange(beginPos, endPos)), nil
+}
+
+// Generate writes a series of objects to an object writer
+func (p *SeriesPattern) Generate(wr ObjectWriter) {
+	wr.Write(p.series...)
 }
 
 // Concat matches a series of patterns AND style in order (concatenation)
@@ -258,7 +309,7 @@ func (p *ConcatPattern) ID() string {
 }
 
 // Match matches And against a stream, fails if any of the patterns mismatches
-func (p *ConcatPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *ConcatPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	matches := []*Result{}
@@ -289,6 +340,13 @@ func (p *ConcatPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error)
 	return true, NewResult(p.id, beginPos, s.Position(), matches), nil
 }
 
+// Generate writes a concatenation of patterns to a writer
+func (p *ConcatPattern) Generate(wr ObjectWriter) {
+	for _, childPattern := range p.Patterns {
+		childPattern.Generate(wr)
+	}
+}
+
 // AltPattern matches a series of patterns OR style in order (alternation)
 type AltPattern struct {
 	id       string
@@ -316,7 +374,7 @@ func (p *AltPattern) ID() string {
 }
 
 // Match matches the OR pattern against a stream, fails if all of the patterns mismatch
-func (p *AltPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *AltPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	for _, pm := range p.Patterns {
@@ -337,6 +395,11 @@ func (p *AltPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	}
 
 	return false, nil, nil
+}
+
+// Generate writes an alternation of patterns to a writer, randomly chosen
+func (p *AltPattern) Generate(wr ObjectWriter) {
+	p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
 }
 
 // RepPattern matches a pattern repetition
@@ -400,7 +463,7 @@ func (p *RepPattern) ID() string {
 }
 
 // Match matches the repetition pattern aginst a stream
-func (p *RepPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *RepPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 	matches := []*Result{}
 
@@ -438,6 +501,22 @@ func (p *RepPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	return true, NewResult(p.id, beginPos, s.Position(), matches), nil
 }
 
+// Generate writes pattern to a writer a random number of times
+func (p *RepPattern) Generate(wr ObjectWriter) {
+	min := p.min
+	max := p.max
+
+	if p.max == 0 {
+		max = min + 5
+	}
+
+	n := rand.Intn(max-min+1) + min
+
+	for i := 0; i < n; i += 1 {
+		p.Pattern.Generate(wr)
+	}
+}
+
 // ExceptPattern must not match the Except pattern but must match the MustMatch pattern
 type ExceptPattern struct {
 	id        string
@@ -467,7 +546,7 @@ func (p *ExceptPattern) ID() string {
 }
 
 // Match matches the exception against a stream
-func (p *ExceptPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *ExceptPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	beginPos := s.Position()
 
 	// First check for the exception match, we do not want to match the exception
@@ -488,6 +567,11 @@ func (p *ExceptPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error)
 	s.SetPosition(beginPos)
 
 	return p.MustMatch.Match(s, l)
+}
+
+// Generate let's MustMatch generate to writer
+func (p *ExceptPattern) Generate(wr ObjectWriter) {
+	p.MustMatch.Generate(wr)
 }
 
 // EndPattern matches the end of stream
@@ -515,7 +599,7 @@ func (p *EndPattern) ID() string {
 }
 
 // Match matches a end of stream pattern against a stream
-func (p *EndPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
+func (p *EndPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 	if s.Finished() {
 		return true, NewResult(p.id, s.Position(), s.Position(), nil), nil
 	}
@@ -525,4 +609,9 @@ func (p *EndPattern) Match(s ObjectStreamer, l Logger) (bool, *Result, error) {
 	}
 
 	return false, nil, nil
+}
+
+// Generate sends finish to writer
+func (p *EndPattern) Generate(wr ObjectWriter) {
+	wr.Finish()
 }

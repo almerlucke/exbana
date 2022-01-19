@@ -2,7 +2,9 @@ package exbana
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
+	"time"
 	"unicode"
 )
 
@@ -58,11 +60,106 @@ func (ts *TestStream) ValueForRange(begin Position, end Position) Value {
 	return string(ts.values[begin.(int):end.(int)])
 }
 
+func (ts *TestStream) Write(objs ...Object) error {
+	for _, obj := range objs {
+		ts.values = append(ts.values, obj.(rune))
+	}
+
+	return nil
+}
+
+func (ts *TestStream) Runes() []rune {
+	return ts.values
+}
+
+func (ts *TestStream) Finish() error {
+	return nil
+}
+
 func runeEntityEqual(o1 Object, o2 Object) bool {
 	return (o1 != nil) && (o2 != nil) && (o1.(rune) == o2.(rune))
 }
 
+func runeMatch(r rune) Pattern {
+	return Unit(func(obj Object) bool {
+		return obj != nil && obj.(rune) == r
+	})
+}
+
+func runeFuncMatch(rf func(rune) bool) Pattern {
+	return Unit(func(obj Object) bool {
+		return obj != nil && rf(obj.(rune))
+	})
+}
+
+func runeSeries(str string) Pattern {
+	return Series(runeEntityEqual, stringToSeries(str)...)
+}
+
 // go test -run TestExbanaEntitySeries -v
+
+func randomRuneFunc(str string) func() Object {
+	runes := []rune(str)
+	return func() Object { return runes[rand.Intn(len(runes))] }
+}
+
+func TestGenerate(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+
+	wr := NewTestStream("")
+
+	minus := runeMatch('-')
+	minus.(*UnitPattern).GenerateFunc = func() Object { return '-' }
+	doubleQuote := runeMatch('"')
+	minus.(*UnitPattern).GenerateFunc = func() Object { return '"' }
+	assignSymbol := runeSeries(":=")
+	semiColon := runeMatch(';')
+	minus.(*UnitPattern).GenerateFunc = func() Object { return ';' }
+	allCharacters := runeFuncMatch(unicode.IsGraphic)
+	allCharacters.(*UnitPattern).GenerateFunc = randomRuneFunc("456$#@agsg")
+	allButDoubleQuote := Except(allCharacters, doubleQuote)
+	stringValue := Concatx("string", true, doubleQuote, Any(allButDoubleQuote), doubleQuote)
+	whiteSpace := runeFuncMatch(unicode.IsSpace)
+	whiteSpace.(*UnitPattern).GenerateFunc = randomRuneFunc(" ")
+	atLeastOneWhiteSpace := Rep(whiteSpace, 1, 0)
+	digit := runeFuncMatch(unicode.IsDigit)
+	digit.(*UnitPattern).GenerateFunc = randomRuneFunc("1234567890")
+	anyDigit := Any(digit)
+	alphabeticCharacter := runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
+	alphabeticCharacter.(*UnitPattern).GenerateFunc = randomRuneFunc("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	anyAlnum := Any(Alt(alphabeticCharacter, digit))
+	identifier := Concatx("identifier", false, alphabeticCharacter, anyAlnum)
+	number := Concatx("number", false, Opt(minus), digit, anyDigit)
+	assignmentRightSide := Alt(number, identifier, stringValue)
+	assignment := Concatx("assignment", false, identifier, assignSymbol, assignmentRightSide)
+	programTerminal := runeSeries("PROGRAM")
+	beginTerminal := runeSeries("BEGIN")
+	endTerminal := runeSeries("END")
+	assignmentsInternal := Concat(assignment, semiColon, atLeastOneWhiteSpace)
+	assignments := Any(assignmentsInternal)
+	program := Concatx("program", true,
+		programTerminal, atLeastOneWhiteSpace, identifier, atLeastOneWhiteSpace, beginTerminal, atLeastOneWhiteSpace, assignments, endTerminal,
+	)
+
+	program.Generate(wr)
+
+	t.Logf("%v", string(wr.Runes()))
+}
+
+func TestScan(t *testing.T) {
+	s := NewTestStream("testing {hallo}hallo this :330ehallo")
+	hallo := Concat(runeMatch('{'), runeSeries("hallo"), runeMatch('}'))
+
+	results, err := Scan(s, hallo)
+	if err != nil {
+		t.Errorf("err %v", err)
+		t.FailNow()
+	}
+
+	for _, result := range results {
+		t.Logf("result %v", *result)
+	}
+}
 
 func TestExbana(t *testing.T) {
 	s := NewTestStream("abaaa")
@@ -72,10 +169,10 @@ func TestExbana(t *testing.T) {
 	repAB := Repx("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable{
-		"is_a_or_b": func(m *Result, t TransformTable, s ObjectStreamer) Value {
+		"is_a_or_b": func(m *Result, t TransformTable, s ObjectReader) Value {
 			return t.Transform(m.Value.(*Result), s)
 		},
-		"ab_repeat": func(m *Result, t TransformTable, s ObjectStreamer) Value {
+		"ab_repeat": func(m *Result, t TransformTable, s ObjectReader) Value {
 			results := m.Value.([]*Result)
 
 			str := ""
@@ -145,14 +242,14 @@ func TestExbanaException(t *testing.T) {
 	allDigitsExceptSixTillTheEnd := Concatx("allDigitsExceptSixTillTheEnd", true, allDigitsExceptSix, endOfStream)
 
 	transformTable := TransformTable{
-		"allDigitsExceptSix": func(result *Result, table TransformTable, s ObjectStreamer) Value {
+		"allDigitsExceptSix": func(result *Result, table TransformTable, s ObjectReader) Value {
 			str := ""
 			for _, r := range result.Value.([]*Result) {
 				str += r.Value.(string)
 			}
 			return str
 		},
-		"allDigitsExceptSixTillTheEnd": func(result *Result, table TransformTable, s ObjectStreamer) Value {
+		"allDigitsExceptSixTillTheEnd": func(result *Result, table TransformTable, s ObjectReader) Value {
 			return table.Transform(result.Value.([]*Result)[0], s)
 		},
 	}
@@ -202,22 +299,6 @@ func TestExbanaProgram(t *testing.T) {
 		TEXT:="Hello world!";
 	END`)
 
-	runeMatch := func(r rune) Pattern {
-		return Unit(func(obj Object) bool {
-			return obj != nil && obj.(rune) == r
-		})
-	}
-
-	runeFuncMatch := func(rf func(rune) bool) Pattern {
-		return Unit(func(obj Object) bool {
-			return obj != nil && rf(obj.(rune))
-		})
-	}
-
-	runeSeries := func(str string) Pattern {
-		return Series(runeEntityEqual, stringToSeries(str)...)
-	}
-
 	minus := runeMatch('-')
 	doubleQuote := runeMatch('"')
 	assignSymbol := runeSeries(":=")
@@ -245,7 +326,7 @@ func TestExbanaProgram(t *testing.T) {
 	)
 
 	transformTable := TransformTable{
-		"assignment": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
+		"assignment": func(result *Result, table TransformTable, stream ObjectReader) Value {
 			elements := result.Value.([]*Result)
 
 			leftSide := table.Transform(elements[0], stream).(*ProgramValue)
@@ -253,7 +334,7 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramAssignment{LeftSide: leftSide, RightSide: rightSide}
 		},
-		"number": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
+		"number": func(result *Result, table TransformTable, stream ObjectReader) Value {
 			elements := result.Value.([]*Result)
 			numContent := ""
 
@@ -269,7 +350,7 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramValue{Content: numContent, Type: ProgramValueTypeNumber}
 		},
-		"string": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
+		"string": func(result *Result, table TransformTable, stream ObjectReader) Value {
 			elements := result.Value.([]*Result)
 			stringContent := ""
 
@@ -279,7 +360,7 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramValue{Content: stringContent, Type: ProgramValueTypeString}
 		},
-		"identifier": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
+		"identifier": func(result *Result, table TransformTable, stream ObjectReader) Value {
 			elements := result.Value.([]*Result)
 			// First character
 			idContent := elements[0].Value.(string)
@@ -290,7 +371,7 @@ func TestExbanaProgram(t *testing.T) {
 
 			return &ProgramValue{Content: idContent, Type: ProgramValueTypeIdentifier}
 		},
-		"program": func(result *Result, table TransformTable, stream ObjectStreamer) Value {
+		"program": func(result *Result, table TransformTable, stream ObjectReader) Value {
 			elements := result.Value.([]*Result)
 			name := table.Transform(elements[2], stream).(*ProgramValue)
 

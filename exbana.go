@@ -409,6 +409,7 @@ type RepPattern struct {
 	Pattern Pattern
 	min     int
 	max     int
+	MaxGen  int
 }
 
 // Repx creates a new repetition pattern
@@ -419,6 +420,7 @@ func Repx(id string, logging bool, pattern Pattern, min int, max int) *RepPatter
 		Pattern: pattern,
 		min:     min,
 		max:     max,
+		MaxGen:  5,
 	}
 }
 
@@ -507,7 +509,7 @@ func (p *RepPattern) Generate(wr ObjectWriter) {
 	max := p.max
 
 	if p.max == 0 {
-		max = min + 5
+		max = min + p.MaxGen
 	}
 
 	n := rand.Intn(max-min+1) + min

@@ -111,10 +111,10 @@ func TestGenerate(t *testing.T) {
 	minus := runeMatch('-')
 	minus.(*UnitPattern).GenerateFunc = func() Object { return '-' }
 	doubleQuote := runeMatch('"')
-	minus.(*UnitPattern).GenerateFunc = func() Object { return '"' }
+	doubleQuote.(*UnitPattern).GenerateFunc = func() Object { return '"' }
 	assignSymbol := runeSeries(":=")
 	semiColon := runeMatch(';')
-	minus.(*UnitPattern).GenerateFunc = func() Object { return ';' }
+	semiColon.(*UnitPattern).GenerateFunc = func() Object { return ';' }
 	allCharacters := runeFuncMatch(unicode.IsGraphic)
 	allCharacters.(*UnitPattern).GenerateFunc = randomRuneFunc("456$#@agsg")
 	allButDoubleQuote := Except(allCharacters, doubleQuote)
@@ -122,6 +122,7 @@ func TestGenerate(t *testing.T) {
 	whiteSpace := runeFuncMatch(unicode.IsSpace)
 	whiteSpace.(*UnitPattern).GenerateFunc = randomRuneFunc(" ")
 	atLeastOneWhiteSpace := Rep(whiteSpace, 1, 0)
+	atLeastOneWhiteSpace.MaxGen = 0
 	digit := runeFuncMatch(unicode.IsDigit)
 	digit.(*UnitPattern).GenerateFunc = randomRuneFunc("1234567890")
 	anyDigit := Any(digit)

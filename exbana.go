@@ -2,6 +2,7 @@ package exbana
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 )
 
@@ -139,7 +140,8 @@ type Logger interface {
 // Pattern can match objects from a stream, has an identifier
 type Pattern interface {
 	Match(ObjectReader, Logger) (bool, *Result, error)
-	Generate(ObjectWriter)
+	Generate(ObjectWriter) error
+	Print(io.Writer) error
 	ID() string
 }
 
@@ -178,6 +180,7 @@ type UnitPattern struct {
 	logging      bool
 	matchFunc    UnitMatchFunc
 	GenerateFunc UnitGenerateFunc
+	PrintOutput  string
 }
 
 // Unitx creates a new unit pattern with identifier and logging
@@ -219,18 +222,31 @@ func (p *UnitPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate writes an object to an object writer
-func (p *UnitPattern) Generate(wr ObjectWriter) {
+func (p *UnitPattern) Generate(wr ObjectWriter) error {
 	if p.GenerateFunc != nil {
-		wr.Write(p.GenerateFunc())
+		return wr.Write(p.GenerateFunc())
 	}
+
+	return nil
+}
+
+// Print writes EBNF to io.Writer
+func (p *UnitPattern) Print(wr io.Writer) error {
+	_, err := wr.Write([]byte(p.PrintOutput))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // SeriesPattern represents a series of objects to match
 type SeriesPattern struct {
-	id      string
-	logging bool
-	eqFunc  ObjectEqualFunc
-	series  []Object
+	id          string
+	logging     bool
+	eqFunc      ObjectEqualFunc
+	series      []Object
+	PrintOutput string
 }
 
 // Seriesx creates a new series pattern with identifier and logging
@@ -278,8 +294,35 @@ func (p *SeriesPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate writes a series of objects to an object writer
-func (p *SeriesPattern) Generate(wr ObjectWriter) {
-	wr.Write(p.series...)
+func (p *SeriesPattern) Generate(wr ObjectWriter) error {
+	return wr.Write(p.series...)
+}
+
+// Print writes EBNF to io.Writer
+func (p *SeriesPattern) Print(wr io.Writer) error {
+	_, err := wr.Write([]byte(p.PrintOutput))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func printChild(wr io.Writer, child Pattern) error {
+	id := child.ID()
+	if id != "" {
+		_, err := wr.Write([]byte(id))
+		if err != nil {
+			return err
+		}
+	} else {
+		err := child.Print(wr)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Concat matches a series of patterns AND style in order (concatenation)
@@ -341,10 +384,44 @@ func (p *ConcatPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate writes a concatenation of patterns to a writer
-func (p *ConcatPattern) Generate(wr ObjectWriter) {
-	for _, childPattern := range p.Patterns {
-		childPattern.Generate(wr)
+func (p *ConcatPattern) Generate(wr ObjectWriter) error {
+	for _, child := range p.Patterns {
+		err := child.Generate(wr)
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
+}
+
+func (p *ConcatPattern) Print(wr io.Writer) error {
+	_, err := wr.Write([]byte("("))
+	if err != nil {
+		return err
+	}
+
+	first := true
+
+	for _, child := range p.Patterns {
+		if !first {
+			_, err = wr.Write([]byte(", "))
+			if err != nil {
+				return err
+			}
+		}
+
+		err = printChild(wr, child)
+		if err != nil {
+			return err
+		}
+
+		first = false
+	}
+
+	_, err = wr.Write([]byte(")"))
+
+	return err
 }
 
 // AltPattern matches a series of patterns OR style in order (alternation)
@@ -398,8 +475,36 @@ func (p *AltPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate writes an alternation of patterns to a writer, randomly chosen
-func (p *AltPattern) Generate(wr ObjectWriter) {
-	p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
+func (p *AltPattern) Generate(wr ObjectWriter) error {
+	return p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
+}
+
+func (p *AltPattern) Print(wr io.Writer) error {
+	_, err := wr.Write([]byte("("))
+	if err != nil {
+		return err
+	}
+
+	first := true
+
+	for _, child := range p.Patterns {
+		if !first {
+			_, err = wr.Write([]byte(" | "))
+			if err != nil {
+				return err
+			}
+		}
+		err = printChild(wr, child)
+		if err != nil {
+			return err
+		}
+
+		first = false
+	}
+
+	_, err = wr.Write([]byte(")"))
+
+	return err
 }
 
 // RepPattern matches a pattern repetition
@@ -504,7 +609,7 @@ func (p *RepPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate writes pattern to a writer a random number of times
-func (p *RepPattern) Generate(wr ObjectWriter) {
+func (p *RepPattern) Generate(wr ObjectWriter) error {
 	min := p.min
 	max := p.max
 
@@ -515,8 +620,92 @@ func (p *RepPattern) Generate(wr ObjectWriter) {
 	n := rand.Intn(max-min+1) + min
 
 	for i := 0; i < n; i += 1 {
-		p.Pattern.Generate(wr)
+		err := p.Pattern.Generate(wr)
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
+}
+
+func (p *RepPattern) PrintAny(wr io.Writer) error {
+	_, err := wr.Write([]byte("{"))
+	if err != nil {
+		return err
+	}
+
+	err = p.Pattern.Print(wr)
+	if err != nil {
+		return err
+	}
+
+	_, err = wr.Write([]byte("}"))
+
+	return err
+}
+
+func (p *RepPattern) PrintOptional(wr io.Writer) error {
+	_, err := wr.Write([]byte("["))
+	if err != nil {
+		return err
+	}
+
+	err = p.Pattern.Print(wr)
+	if err != nil {
+		return err
+	}
+
+	_, err = wr.Write([]byte("]"))
+
+	return err
+}
+
+func (p *RepPattern) Print(wr io.Writer) error {
+	if p.min == 0 && p.max == 0 {
+		return p.PrintAny(wr)
+	} else if p.min == 0 && p.max == 1 {
+		return p.PrintOptional(wr)
+	}
+
+	var err error
+	oneValue := p.min == p.max
+
+	if !oneValue {
+		_, err = wr.Write([]byte("("))
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = wr.Write([]byte(fmt.Sprintf("%v * ", p.min)))
+	if err != nil {
+		return err
+	}
+
+	err = p.Pattern.Print(wr)
+	if err != nil {
+		return err
+	}
+
+	if !oneValue {
+		_, err = wr.Write([]byte(fmt.Sprintf(", %v * [", p.max-p.min)))
+		if err != nil {
+			return err
+		}
+
+		err = p.Pattern.Print(wr)
+		if err != nil {
+			return err
+		}
+
+		_, err = wr.Write([]byte("])"))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // ExceptPattern must not match the Except pattern but must match the MustMatch pattern
@@ -572,8 +761,13 @@ func (p *ExceptPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate let's MustMatch generate to writer
-func (p *ExceptPattern) Generate(wr ObjectWriter) {
-	p.MustMatch.Generate(wr)
+func (p *ExceptPattern) Generate(wr ObjectWriter) error {
+	return p.MustMatch.Generate(wr)
+}
+
+func (p *ExceptPattern) Print(wr io.Writer) error {
+	// wr.Write([]byte("("))
+	return nil
 }
 
 // EndPattern matches the end of stream
@@ -614,6 +808,11 @@ func (p *EndPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
 }
 
 // Generate sends finish to writer
-func (p *EndPattern) Generate(wr ObjectWriter) {
-	wr.Finish()
+func (p *EndPattern) Generate(wr ObjectWriter) error {
+	return wr.Finish()
+}
+
+func (p *EndPattern) Print(wr io.Writer) error {
+	// wr.Write([]byte("("))
+	return nil
 }

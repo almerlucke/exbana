@@ -86,12 +86,6 @@ func runeMatch(r rune) Pattern {
 	})
 }
 
-func runeMatchx(id string, r rune) Pattern {
-	return Unitx(id, false, func(obj Object) bool {
-		return obj != nil && obj.(rune) == r
-	})
-}
-
 func runeFuncMatch(rf func(rune) bool) Pattern {
 	return Unit(func(obj Object) bool {
 		return obj != nil && rf(obj.(rune))

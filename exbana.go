@@ -1,6 +1,7 @@
 package exbana
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math/rand"
@@ -168,6 +169,28 @@ func Scan(stream ObjectReader, pattern Pattern) ([]*Result, error) {
 	return results, nil
 }
 
+// PrintRules prints all rules and returns a string
+func PrintRules(patterns []Pattern) (string, error) {
+	var buf bytes.Buffer
+
+	for _, pattern := range patterns {
+		_, err := buf.WriteString(fmt.Sprintf("%v = ", pattern.ID()))
+		if err != nil {
+			return "", err
+		}
+		err = pattern.Print(&buf)
+		if err != nil {
+			return "", err
+		}
+		_, err = buf.WriteString("\n")
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return buf.String(), nil
+}
+
 // UnitMatchFunc matches a single object
 type UnitMatchFunc func(Object) bool
 
@@ -308,6 +331,7 @@ func (p *SeriesPattern) Print(wr io.Writer) error {
 	return nil
 }
 
+// printChild prints child pattern
 func printChild(wr io.Writer, child Pattern) error {
 	id := child.ID()
 	if id != "" {
@@ -395,6 +419,7 @@ func (p *ConcatPattern) Generate(wr ObjectWriter) error {
 	return nil
 }
 
+// Print EBNF concatenation group
 func (p *ConcatPattern) Print(wr io.Writer) error {
 	_, err := wr.Write([]byte("("))
 	if err != nil {
@@ -479,6 +504,7 @@ func (p *AltPattern) Generate(wr ObjectWriter) error {
 	return p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
 }
 
+// Print EBNF alternation group
 func (p *AltPattern) Print(wr io.Writer) error {
 	_, err := wr.Write([]byte("("))
 	if err != nil {
@@ -629,43 +655,50 @@ func (p *RepPattern) Generate(wr ObjectWriter) error {
 	return nil
 }
 
-func (p *RepPattern) PrintAny(wr io.Writer) error {
-	_, err := wr.Write([]byte("{"))
+// printAny prints EBNF zero or more
+func (p *RepPattern) printAny(wr io.Writer) error {
+	err := p.Pattern.Print(wr)
 	if err != nil {
 		return err
 	}
 
-	err = p.Pattern.Print(wr)
-	if err != nil {
-		return err
-	}
-
-	_, err = wr.Write([]byte("}"))
+	_, err = wr.Write([]byte("*"))
 
 	return err
 }
 
-func (p *RepPattern) PrintOptional(wr io.Writer) error {
-	_, err := wr.Write([]byte("["))
+// printAny prints EBNF optional
+func (p *RepPattern) printOptional(wr io.Writer) error {
+	err := p.Pattern.Print(wr)
 	if err != nil {
 		return err
 	}
 
-	err = p.Pattern.Print(wr)
-	if err != nil {
-		return err
-	}
-
-	_, err = wr.Write([]byte("]"))
+	_, err = wr.Write([]byte("?"))
 
 	return err
 }
 
+// printAny prints EBNF at least one
+func (p *RepPattern) printAtLeastOne(wr io.Writer) error {
+	err := p.Pattern.Print(wr)
+	if err != nil {
+		return err
+	}
+
+	_, err = wr.Write([]byte("+"))
+
+	return err
+}
+
+// Print EBNF repetition pattern
 func (p *RepPattern) Print(wr io.Writer) error {
 	if p.min == 0 && p.max == 0 {
-		return p.PrintAny(wr)
+		return p.printAny(wr)
 	} else if p.min == 0 && p.max == 1 {
-		return p.PrintOptional(wr)
+		return p.printOptional(wr)
+	} else if p.min == 1 && p.max == 0 {
+		return p.printAtLeastOne(wr)
 	}
 
 	var err error
@@ -689,7 +722,7 @@ func (p *RepPattern) Print(wr io.Writer) error {
 	}
 
 	if !oneValue {
-		_, err = wr.Write([]byte(fmt.Sprintf(", %v * [", p.max-p.min)))
+		_, err = wr.Write([]byte(fmt.Sprintf(", %v * ", p.max-p.min)))
 		if err != nil {
 			return err
 		}
@@ -699,7 +732,7 @@ func (p *RepPattern) Print(wr io.Writer) error {
 			return err
 		}
 
-		_, err = wr.Write([]byte("])"))
+		_, err = wr.Write([]byte("?)"))
 		if err != nil {
 			return err
 		}
@@ -765,9 +798,20 @@ func (p *ExceptPattern) Generate(wr ObjectWriter) error {
 	return p.MustMatch.Generate(wr)
 }
 
+// Print EBNF except pattern
 func (p *ExceptPattern) Print(wr io.Writer) error {
-	// wr.Write([]byte("("))
-	return nil
+	err := p.MustMatch.Print(wr)
+	if err != nil {
+		return err
+	}
+	_, err = wr.Write([]byte(" - "))
+	if err != nil {
+		return err
+	}
+
+	err = p.Except.Print(wr)
+
+	return err
 }
 
 // EndPattern matches the end of stream
@@ -812,7 +856,7 @@ func (p *EndPattern) Generate(wr ObjectWriter) error {
 	return wr.Finish()
 }
 
+// Print EBNF end of stream (does nothing)
 func (p *EndPattern) Print(wr io.Writer) error {
-	// wr.Write([]byte("("))
 	return nil
 }

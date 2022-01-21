@@ -86,8 +86,20 @@ func runeMatch(r rune) Pattern {
 	})
 }
 
+func runeMatchx(id string, r rune) Pattern {
+	return Unitx(id, false, func(obj Object) bool {
+		return obj != nil && obj.(rune) == r
+	})
+}
+
 func runeFuncMatch(rf func(rune) bool) Pattern {
 	return Unit(func(obj Object) bool {
+		return obj != nil && rf(obj.(rune))
+	})
+}
+
+func runeFuncMatchx(id string, rf func(rune) bool) Pattern {
+	return Unitx(id, false, func(obj Object) bool {
 		return obj != nil && rf(obj.(rune))
 	})
 }
@@ -101,6 +113,32 @@ func runeSeries(str string) Pattern {
 func randomRuneFunc(str string) func() Object {
 	runes := []rune(str)
 	return func() Object { return runes[rand.Intn(len(runes))] }
+}
+
+func TestPrint(t *testing.T) {
+	zero := runeMatch('0')
+	zero.(*UnitPattern).PrintOutput = "[0]"
+	digit := runeFuncMatchx("digit", unicode.IsDigit)
+	digit.(*UnitPattern).PrintOutput = "[0-9]"
+	alphabeticCharacter := runeFuncMatchx("alphachar", func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
+	alphabeticCharacter.(*UnitPattern).PrintOutput = "[A-Z]"
+	anyAlnum := Any(Alt(alphabeticCharacter, digit))
+	identifier := Concatx("identifier", false, alphabeticCharacter, anyAlnum)
+	digitMinusZero := Exceptx("digit_minus_zero", false, digit, zero)
+
+	output, err := PrintRules([]Pattern{
+		digit,
+		alphabeticCharacter,
+		identifier,
+		digitMinusZero,
+	})
+
+	if err != nil {
+		t.Error(err)
+		t.FailNow()
+	}
+
+	t.Log(output)
 }
 
 func TestGenerate(t *testing.T) {

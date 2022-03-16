@@ -22,3 +22,5 @@ _cgo_export.*
 *.prof
 
 .DS_Store
+
+*.code-workspace

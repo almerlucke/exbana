@@ -10,7 +10,7 @@ import (
 type TestStream struct {
 	values     []rune
 	pos        int
-	mismatches []*Mismatch[int]
+	mismatches []*Mismatch[rune, int]
 }
 
 func NewTestStream(str string) *TestStream {
@@ -51,12 +51,12 @@ func (ts *TestStream) SetPosition(pos int) error {
 	return nil
 }
 
-func (ts *TestStream) Log(mismatch *Mismatch[int]) {
+func (ts *TestStream) Log(mismatch *Mismatch[rune, int]) {
 	ts.mismatches = append(ts.mismatches, mismatch)
 }
 
-func (ts *TestStream) ValueForRange(begin int, end int) any {
-	return string(ts.values[begin:end])
+func (ts *TestStream) Range(begin int, end int) []rune {
+	return ts.values[begin:end]
 }
 
 func (ts *TestStream) Write(objs ...rune) error {
@@ -189,7 +189,7 @@ func TestScan(t *testing.T) {
 	}
 
 	for _, result := range results {
-		t.Logf("result %v", *result)
+		t.Logf("result %v", string(result.Components[1].Value))
 	}
 }
 
@@ -201,16 +201,16 @@ func TestExbana(t *testing.T) {
 	repAB := Repx[rune, int]("ab_repeat", true, altAB, 3, 4)
 
 	transformTable := TransformTable[rune, int]{
-		"is_a_or_b": func(m *Result[int], t TransformTable[rune, int], s ObjectReader[rune, int]) any {
-			return t.Transform(m.Value.(*Result[int]), s)
+		"is_a_or_b": func(m *Result[rune, int], t TransformTable[rune, int], s ObjectReader[rune, int]) any {
+			return t.Transform(m.Components[0], s)
 		},
-		"ab_repeat": func(m *Result[int], t TransformTable[rune, int], s ObjectReader[rune, int]) any {
-			results := m.Value.([]*Result[int])
+		"ab_repeat": func(m *Result[rune, int], t TransformTable[rune, int], s ObjectReader[rune, int]) any {
+			results := m.Components
 
 			str := ""
 
 			for _, r := range results {
-				str += t.Transform(r, s).(string)
+				str += string(t.Transform(r, s).([]rune))
 			}
 
 			return str
@@ -237,7 +237,7 @@ func TestExbanaEntitySeries(t *testing.T) {
 
 	matched, result, _ := isHallo.Match(s, s)
 	if matched {
-		t.Logf("%v", transformTable.Transform(result, s))
+		t.Logf("%v", string(transformTable.Transform(result, s).([]rune)))
 	}
 
 	for _, mismatch := range s.mismatches {

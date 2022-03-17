@@ -223,7 +223,7 @@ func TestExbana(t *testing.T) {
 	}
 
 	for _, mismatch := range s.mismatches {
-		fmt.Printf("mismatch %v %v %v %v", mismatch.Pattern.ID(), mismatch.Begin, mismatch.End, mismatch.Error)
+		fmt.Printf("mismatch %v %v %v", mismatch.Pattern.ID(), mismatch.Begin, mismatch.End)
 	}
 }
 
@@ -241,7 +241,7 @@ func TestExbanaEntitySeries(t *testing.T) {
 	}
 
 	for _, mismatch := range s.mismatches {
-		fmt.Printf("mismatch %v %v %v %v\n", mismatch.Pattern.ID(), mismatch.Begin, mismatch.End, mismatch.Error)
+		fmt.Printf("mismatch %v %v %v\n", mismatch.Pattern.ID(), mismatch.Begin, mismatch.End)
 	}
 }
 

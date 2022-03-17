@@ -23,7 +23,7 @@ type ObjectWriter[T any] interface {
 	Finish() error
 }
 
-// Result contains matched pattern position, identifier, optional value and optional components
+// Result contains matched pattern, position, optional value and optional components
 type Result[T, P any] struct {
 	Pattern    Pattern[T, P]
 	Begin      P
@@ -78,34 +78,37 @@ func (t TransformTable[T, P]) Transform(m *Result[T, P], stream ObjectReader[T, 
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
 // and the sub patterns that matched so far, an optional error can be passed to give more specific information
 type Mismatch[T, P any] struct {
-	Pattern     Pattern[T, P]
-	Begin       P
-	End         P
-	SubMismatch *Result[T, P]
-	SubMatches  []*Result[T, P]
-	Error       error
+	Pattern           Pattern[T, P]
+	Begin             P
+	End               P
+	MismatchComponent *Result[T, P]
+	MatchedComponents []*Result[T, P]
 }
 
-// NewMismatch creates a new pattern mismatch
-func NewMismatch[T, P any](pattern Pattern[T, P], begin P, end P, subMisMatch *Result[T, P], subMatches []*Result[T, P], err error) *Mismatch[T, P] {
+// NewMismatch creates a new minimal pattern mismatch
+func NewMismatch[T, P any](pattern Pattern[T, P], begin P, end P) *Mismatch[T, P] {
+	return NewMismatchx(pattern, begin, end, nil, nil)
+}
+
+// NewMismatchx creates a new pattern mismatch
+func NewMismatchx[T, P any](pattern Pattern[T, P], begin P, end P, mismatchComponent *Result[T, P], matchedComponents []*Result[T, P]) *Mismatch[T, P] {
 	return &Mismatch[T, P]{
-		Pattern:     pattern,
-		Begin:       begin,
-		End:         end,
-		SubMismatch: subMisMatch,
-		SubMatches:  subMatches,
-		Error:       err,
+		Pattern:           pattern,
+		Begin:             begin,
+		End:               end,
+		MismatchComponent: mismatchComponent,
+		MatchedComponents: matchedComponents,
 	}
 }
 
-// Logger can be used to log pattern mismatches during pattern matching
-type Logger[T, P any] interface {
+// MismatchLogger can be used to log pattern mismatches during pattern matching
+type MismatchLogger[T, P any] interface {
 	Log(mismatch *Mismatch[T, P])
 }
 
 // Pattern can match objects from a stream, has an identifier
 type Pattern[T, P any] interface {
-	Match(ObjectReader[T, P], Logger[T, P]) (bool, *Result[T, P], error)
+	Match(ObjectReader[T, P], MismatchLogger[T, P]) (bool, *Result[T, P], error)
 	Generate(ObjectWriter[T]) error
 	Print(io.Writer) error
 	ID() string
@@ -186,7 +189,7 @@ func (p *UnitPattern[T, P]) ID() string {
 }
 
 // Match matches the unit object against a stream
-func (p *UnitPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *UnitPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	pos := s.Position()
 	entity, err := s.Read()
 
@@ -197,7 +200,7 @@ func (p *UnitPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *
 	if p.matchFunc(entity) {
 		return true, NewResult[T, P](p, pos, s.Position(), s.Range(pos, s.Position()), nil), nil
 	} else if p.logging && l != nil {
-		l.Log(NewMismatch[T, P](p, pos, s.Position(), nil, nil, nil))
+		l.Log(NewMismatch[T, P](p, pos, s.Position()))
 	}
 
 	return false, nil, nil
@@ -252,7 +255,7 @@ func (p *SeriesPattern[T, P]) ID() string {
 }
 
 // Match matches the series pattern against a stream
-func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	beginPos := s.Position()
 
 	for _, e1 := range p.series {
@@ -263,7 +266,7 @@ func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 
 		if !p.eqFunc(e1, e2) {
 			if p.logging && l != nil {
-				l.Log(NewMismatch[T, P](p, beginPos, s.Position(), nil, nil, nil))
+				l.Log(NewMismatch[T, P](p, beginPos, s.Position()))
 			}
 
 			return false, nil, nil
@@ -335,7 +338,7 @@ func (p *ConcatPattern[T, P]) ID() string {
 }
 
 // Match matches And against a stream, fails if any of the patterns mismatches
-func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	beginPos := s.Position()
 
 	matches := []*Result[T, P]{}
@@ -354,8 +357,8 @@ func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 			subEndPos := s.Position()
 
 			if p.logging && l != nil {
-				l.Log(NewMismatch[T, P](
-					p, beginPos, subEndPos, NewResult(pm, subBeginPos, subEndPos, nil, nil), matches, nil),
+				l.Log(NewMismatchx[T, P](
+					p, beginPos, subEndPos, NewResult(pm, subBeginPos, subEndPos, nil, nil), matches),
 				)
 			}
 
@@ -435,7 +438,7 @@ func (p *AltPattern[T, P]) ID() string {
 }
 
 // Match matches the OR pattern against a stream, fails if all of the patterns mismatch
-func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	beginPos := s.Position()
 
 	for _, pm := range p.Patterns {
@@ -452,7 +455,7 @@ func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 	}
 
 	if p.logging && l != nil {
-		l.Log(NewMismatch[T, P](p, beginPos, s.Position(), nil, nil, nil))
+		l.Log(NewMismatch[T, P](p, beginPos, s.Position()))
 	}
 
 	return false, nil, nil
@@ -497,8 +500,8 @@ type RepPattern[T, P any] struct {
 	id      string
 	logging bool
 	Pattern Pattern[T, P]
-	min     int
-	max     int
+	Min     int
+	Max     int
 	MaxGen  int
 }
 
@@ -508,8 +511,8 @@ func Repx[T, P any](id string, logging bool, pattern Pattern[T, P], min int, max
 		id:      id,
 		logging: logging,
 		Pattern: pattern,
-		min:     min,
-		max:     max,
+		Min:     min,
+		Max:     max,
 		MaxGen:  5,
 	}
 }
@@ -555,7 +558,7 @@ func (p *RepPattern[T, P]) ID() string {
 }
 
 // Match matches the repetition pattern aginst a stream
-func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	beginPos := s.Position()
 	matches := []*Result[T, P]{}
 
@@ -577,14 +580,14 @@ func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 		}
 
 		matches = append(matches, result)
-		if p.max != 0 && len(matches) == p.max {
+		if p.Max != 0 && len(matches) == p.Max {
 			break
 		}
 	}
 
-	if len(matches) < p.min {
+	if len(matches) < p.Min {
 		if p.logging && l != nil {
-			l.Log(NewMismatch[T, P](p, beginPos, s.Position(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", p.min)))
+			l.Log(NewMismatchx[T, P](p, beginPos, s.Position(), nil, matches))
 		}
 
 		return false, nil, nil
@@ -595,10 +598,10 @@ func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 
 // Generate writes pattern to a writer a random number of times
 func (p *RepPattern[T, P]) Generate(wr ObjectWriter[T]) error {
-	min := p.min
-	max := p.max
+	min := p.Min
+	max := p.Max
 
-	if p.max == 0 {
+	if p.Max == 0 {
 		max = min + p.MaxGen
 	}
 
@@ -652,16 +655,16 @@ func (p *RepPattern[T, P]) printAtLeastOne(wr io.Writer) error {
 
 // Print EBNF repetition pattern
 func (p *RepPattern[T, P]) Print(wr io.Writer) error {
-	if p.min == 0 && p.max == 0 {
+	if p.Min == 0 && p.Max == 0 {
 		return p.printAny(wr)
-	} else if p.min == 0 && p.max == 1 {
+	} else if p.Min == 0 && p.Max == 1 {
 		return p.printOptional(wr)
-	} else if p.min == 1 && p.max == 0 {
+	} else if p.Min == 1 && p.Max == 0 {
 		return p.printAtLeastOne(wr)
 	}
 
 	var err error
-	oneValue := p.min == p.max
+	oneValue := p.Min == p.Max
 
 	if !oneValue {
 		_, err = wr.Write([]byte("("))
@@ -670,7 +673,7 @@ func (p *RepPattern[T, P]) Print(wr io.Writer) error {
 		}
 	}
 
-	_, err = wr.Write([]byte(fmt.Sprintf("%v * ", p.min)))
+	_, err = wr.Write([]byte(fmt.Sprintf("%v * ", p.Min)))
 	if err != nil {
 		return err
 	}
@@ -681,7 +684,7 @@ func (p *RepPattern[T, P]) Print(wr io.Writer) error {
 	}
 
 	if !oneValue {
-		_, err = wr.Write([]byte(fmt.Sprintf(", %v * ", p.max-p.min)))
+		_, err = wr.Write([]byte(fmt.Sprintf(", %v * ", p.Max-p.Min)))
 		if err != nil {
 			return err
 		}
@@ -729,7 +732,7 @@ func (p *ExceptPattern[T, P]) ID() string {
 }
 
 // Match matches the exception against a stream
-func (p *ExceptPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *ExceptPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	beginPos := s.Position()
 
 	// First check for the exception match, we do not want to match the exception
@@ -740,7 +743,7 @@ func (p *ExceptPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 
 	if matched {
 		if p.logging && l != nil {
-			l.Log(NewMismatch[T, P](p, beginPos, s.Position(), result, nil, nil))
+			l.Log(NewMismatchx[T, P](p, beginPos, s.Position(), result, nil))
 		}
 
 		return false, nil, nil
@@ -798,13 +801,13 @@ func (p *EndPattern[T, P]) ID() string {
 }
 
 // Match matches a end of stream pattern against a stream
-func (p *EndPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
+func (p *EndPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	if s.Finished() {
 		return true, NewResult[T, P](p, s.Position(), s.Position(), nil, nil), nil
 	}
 
 	if p.logging && l != nil {
-		l.Log(NewMismatch[T, P](p, s.Position(), s.Position(), nil, nil, nil))
+		l.Log(NewMismatch[T, P](p, s.Position(), s.Position()))
 	}
 
 	return false, nil, nil

@@ -25,7 +25,7 @@ type ObjectWriter[T any] interface {
 
 // Result contains matched pattern position, identifier, optional value and optional components
 type Result[T, P any] struct {
-	ID         string
+	Pattern    Pattern[T, P]
 	Begin      P
 	End        P
 	Value      []T
@@ -33,9 +33,9 @@ type Result[T, P any] struct {
 }
 
 // NewResult creates a new pattern match result
-func NewResult[T, P any](id string, begin P, end P, value []T, components []*Result[T, P]) *Result[T, P] {
+func NewResult[T, P any](pattern Pattern[T, P], begin P, end P, value []T, components []*Result[T, P]) *Result[T, P] {
 	return &Result[T, P]{
-		ID:         id,
+		Pattern:    pattern,
 		Begin:      begin,
 		End:        end,
 		Value:      value,
@@ -67,7 +67,7 @@ type TransformTable[T, P any] map[string]func(*Result[T, P], TransformTable[T, P
 
 // Transform a match result to a value
 func (t TransformTable[T, P]) Transform(m *Result[T, P], stream ObjectReader[T, P]) any {
-	f, ok := t[m.ID]
+	f, ok := t[m.Pattern.ID()]
 	if ok {
 		return f(m, t, stream)
 	}
@@ -78,22 +78,20 @@ func (t TransformTable[T, P]) Transform(m *Result[T, P], stream ObjectReader[T, 
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
 // and the sub patterns that matched so far, an optional error can be passed to give more specific information
 type Mismatch[T, P any] struct {
-	Result[T, P]
+	Pattern     Pattern[T, P]
+	Begin       P
+	End         P
 	SubMismatch *Result[T, P]
 	SubMatches  []*Result[T, P]
 	Error       error
 }
 
 // NewMismatch creates a new pattern mismatch
-func NewMismatch[T, P any](id string, begin P, end P, subMisMatch *Result[T, P], subMatches []*Result[T, P], err error) *Mismatch[T, P] {
+func NewMismatch[T, P any](pattern Pattern[T, P], begin P, end P, subMisMatch *Result[T, P], subMatches []*Result[T, P], err error) *Mismatch[T, P] {
 	return &Mismatch[T, P]{
-		Result: Result[T, P]{
-			ID:         id,
-			Begin:      begin,
-			End:        end,
-			Value:      nil,
-			Components: nil,
-		},
+		Pattern:     pattern,
+		Begin:       begin,
+		End:         end,
 		SubMismatch: subMisMatch,
 		SubMatches:  subMatches,
 		Error:       err,
@@ -197,9 +195,9 @@ func (p *UnitPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *
 	}
 
 	if p.matchFunc(entity) {
-		return true, NewResult(p.id, pos, s.Position(), s.Range(pos, s.Position()), nil), nil
+		return true, NewResult[T, P](p, pos, s.Position(), s.Range(pos, s.Position()), nil), nil
 	} else if p.logging && l != nil {
-		l.Log(NewMismatch[T](p.id, pos, s.Position(), nil, nil, nil))
+		l.Log(NewMismatch[T, P](p, pos, s.Position(), nil, nil, nil))
 	}
 
 	return false, nil, nil
@@ -265,7 +263,7 @@ func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 
 		if !p.eqFunc(e1, e2) {
 			if p.logging && l != nil {
-				l.Log(NewMismatch[T](p.id, beginPos, s.Position(), nil, nil, nil))
+				l.Log(NewMismatch[T, P](p, beginPos, s.Position(), nil, nil, nil))
 			}
 
 			return false, nil, nil
@@ -274,7 +272,7 @@ func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 
 	endPos := s.Position()
 
-	return true, NewResult(p.id, beginPos, endPos, s.Range(beginPos, endPos), nil), nil
+	return true, NewResult[T, P](p, beginPos, endPos, s.Range(beginPos, endPos), nil), nil
 }
 
 // Generate writes a series of objects to an object writer
@@ -356,8 +354,8 @@ func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 			subEndPos := s.Position()
 
 			if p.logging && l != nil {
-				l.Log(NewMismatch(
-					p.id, beginPos, subEndPos, NewResult[T](pm.ID(), subBeginPos, subEndPos, nil, nil), matches, nil),
+				l.Log(NewMismatch[T, P](
+					p, beginPos, subEndPos, NewResult(pm, subBeginPos, subEndPos, nil, nil), matches, nil),
 				)
 			}
 
@@ -365,7 +363,7 @@ func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 		}
 	}
 
-	return true, NewResult(p.id, beginPos, s.Position(), nil, matches), nil
+	return true, NewResult[T, P](p, beginPos, s.Position(), nil, matches), nil
 }
 
 // Generate writes a concatenation of patterns to a writer
@@ -449,12 +447,12 @@ func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 		}
 
 		if matched {
-			return true, NewResult(p.id, beginPos, s.Position(), nil, []*Result[T, P]{result}), nil
+			return true, NewResult[T, P](p, beginPos, s.Position(), nil, []*Result[T, P]{result}), nil
 		}
 	}
 
 	if p.logging && l != nil {
-		l.Log(NewMismatch[T](p.id, beginPos, s.Position(), nil, nil, nil))
+		l.Log(NewMismatch[T, P](p, beginPos, s.Position(), nil, nil, nil))
 	}
 
 	return false, nil, nil
@@ -586,13 +584,13 @@ func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 
 	if len(matches) < p.min {
 		if p.logging && l != nil {
-			l.Log(NewMismatch[T](p.id, beginPos, s.Position(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", p.min)))
+			l.Log(NewMismatch[T, P](p, beginPos, s.Position(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", p.min)))
 		}
 
 		return false, nil, nil
 	}
 
-	return true, NewResult(p.id, beginPos, s.Position(), nil, matches), nil
+	return true, NewResult[T, P](p, beginPos, s.Position(), nil, matches), nil
 }
 
 // Generate writes pattern to a writer a random number of times
@@ -742,7 +740,7 @@ func (p *ExceptPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 
 	if matched {
 		if p.logging && l != nil {
-			l.Log(NewMismatch(p.id, beginPos, s.Position(), result, nil, nil))
+			l.Log(NewMismatch[T, P](p, beginPos, s.Position(), result, nil, nil))
 		}
 
 		return false, nil, nil
@@ -802,11 +800,11 @@ func (p *EndPattern[T, P]) ID() string {
 // Match matches a end of stream pattern against a stream
 func (p *EndPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *Result[T, P], error) {
 	if s.Finished() {
-		return true, NewResult[T](p.id, s.Position(), s.Position(), nil, nil), nil
+		return true, NewResult[T, P](p, s.Position(), s.Position(), nil, nil), nil
 	}
 
 	if p.logging && l != nil {
-		l.Log(NewMismatch[T](p.id, s.Position(), s.Position(), nil, nil, nil))
+		l.Log(NewMismatch[T, P](p, s.Position(), s.Position(), nil, nil, nil))
 	}
 
 	return false, nil, nil

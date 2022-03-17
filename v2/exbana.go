@@ -110,7 +110,6 @@ type Pattern[T, P any] interface {
 	Match(ObjectReader[T, P], Logger[T, P]) (bool, *Result[T, P], error)
 	Generate(ObjectWriter[T]) error
 	Print(io.Writer) error
-	SetPrintOutput(output string)
 	ID() string
 }
 
@@ -215,11 +214,6 @@ func (p *UnitPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return nil
 }
 
-// SetPrintOutput force set the print output
-func (p *UnitPattern[T, P]) SetPrintOutput(output string) {
-	p.PrintOutput = output
-}
-
 // Print writes EBNF to io.Writer
 func (p *UnitPattern[T, P]) Print(wr io.Writer) error {
 	_, err := wr.Write([]byte(p.PrintOutput))
@@ -286,11 +280,6 @@ func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool,
 // Generate writes a series of objects to an object writer
 func (p *SeriesPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return wr.Write(p.series...)
-}
-
-// SetPrintOutput force set the print output
-func (p *SeriesPattern[T, P]) SetPrintOutput(output string) {
-	p.PrintOutput = output
 }
 
 // Print writes EBNF to io.Writer
@@ -391,11 +380,6 @@ func (p *ConcatPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return nil
 }
 
-// SetPrintOutput force set the print output
-func (p *ConcatPattern[T, P]) SetPrintOutput(output string) {
-	// Does nothing in concat
-}
-
 // Print EBNF concatenation group
 func (p *ConcatPattern[T, P]) Print(wr io.Writer) error {
 	_, err := wr.Write([]byte("("))
@@ -479,11 +463,6 @@ func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 // Generate writes an alternation of patterns to a writer, randomly chosen
 func (p *AltPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
-}
-
-// SetPrintOutput force set the print output
-func (p *AltPattern[T, P]) SetPrintOutput(output string) {
-	// Does nothing in alt
 }
 
 // Print EBNF alternation group
@@ -637,11 +616,6 @@ func (p *RepPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return nil
 }
 
-// SetPrintOutput force set the print output
-func (p *RepPattern[T, P]) SetPrintOutput(output string) {
-	// Does nothing in rep
-}
-
 // printAny prints EBNF zero or more
 func (p *RepPattern[T, P]) printAny(wr io.Writer) error {
 	err := p.Pattern.Print(wr)
@@ -785,11 +759,6 @@ func (p *ExceptPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return p.MustMatch.Generate(wr)
 }
 
-// SetPrintOutput force set the print output
-func (p *ExceptPattern[T, P]) SetPrintOutput(output string) {
-	// Does nothing in except
-}
-
 // Print EBNF except pattern
 func (p *ExceptPattern[T, P]) Print(wr io.Writer) error {
 	err := p.MustMatch.Print(wr)
@@ -846,11 +815,6 @@ func (p *EndPattern[T, P]) Match(s ObjectReader[T, P], l Logger[T, P]) (bool, *R
 // Generate sends finish to writer
 func (p *EndPattern[T, P]) Generate(wr ObjectWriter[T]) error {
 	return wr.Finish()
-}
-
-// SetPrintOutput force set the print output
-func (p *EndPattern[T, P]) SetPrintOutput(output string) {
-	// Does nothing in end
 }
 
 // Print EBNF end of stream (does nothing)

@@ -79,25 +79,25 @@ func runeEntityEqual(o1 rune, o2 rune) bool {
 	return o1 == o2
 }
 
-func runeMatch(r rune) Pattern[rune, int] {
+func runeMatch(r rune) *UnitPattern[rune, int] {
 	return Unit[rune, int](func(obj rune) bool {
 		return obj == r
 	})
 }
 
-func runeFuncMatch(rf func(rune) bool) Pattern[rune, int] {
+func runeFuncMatch(rf func(rune) bool) *UnitPattern[rune, int] {
 	return Unit[rune, int](func(obj rune) bool {
 		return rf(obj)
 	})
 }
 
-func runeFuncMatchx(id string, rf func(rune) bool) Pattern[rune, int] {
+func runeFuncMatchx(id string, rf func(rune) bool) *UnitPattern[rune, int] {
 	return Unitx[rune, int](id, false, func(obj rune) bool {
 		return rf(obj)
 	})
 }
 
-func runeSeries(str string) Pattern[rune, int] {
+func runeSeries(str string) *SeriesPattern[rune, int] {
 	return Series[rune, int](runeEntityEqual, []rune(str)...)
 }
 
@@ -110,14 +110,14 @@ func randomRuneFunc(str string) func() rune {
 
 func TestPrint(t *testing.T) {
 	zero := runeMatch('0')
-	zero.(*UnitPattern[rune, int]).PrintOutput = "[0]"
+	zero.PrintOutput = "[0]"
 	digit := runeFuncMatchx("digit", unicode.IsDigit)
-	digit.(*UnitPattern[rune, int]).PrintOutput = "[0-9]"
+	digit.PrintOutput = "[0-9]"
 	alphabeticCharacter := runeFuncMatchx("alphachar", func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
-	alphabeticCharacter.(*UnitPattern[rune, int]).PrintOutput = "[A-Z]"
-	anyAlnum := Any[rune, int](Alt(alphabeticCharacter, digit))
+	alphabeticCharacter.PrintOutput = "[A-Z]"
+	anyAlnum := Any[rune, int](Alt[rune, int](alphabeticCharacter, digit))
 	identifier := Concatx[rune, int]("identifier", false, alphabeticCharacter, anyAlnum)
-	digitMinusZero := Exceptx("digit_minus_zero", false, digit, zero)
+	digitMinusZero := Exceptx[rune, int]("digit_minus_zero", false, digit, zero)
 
 	output, err := PrintRules([]Pattern[rune, int]{
 		digit,
@@ -180,7 +180,7 @@ func TestPrint(t *testing.T) {
 
 func TestScan(t *testing.T) {
 	s := NewTestStream("testing {hallo}hallo this :330ehallo")
-	hallo := Concat(runeMatch('{'), runeSeries("hallo"), runeMatch('}'))
+	hallo := Concat[rune, int](runeMatch('{'), runeSeries("hallo"), runeMatch('}'))
 
 	results, err := Scan[rune, int](s, hallo)
 	if err != nil {

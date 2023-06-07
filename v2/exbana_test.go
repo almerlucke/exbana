@@ -7,20 +7,20 @@ import (
 	"unicode"
 )
 
-type TestStream struct {
+type RuneStream struct {
 	values     []rune
 	pos        int
 	mismatches []*Mismatch[rune, int]
 }
 
-func NewTestStream(str string) *TestStream {
-	return &TestStream{
+func NewRuneStream(str string) *RuneStream {
+	return &RuneStream{
 		values: []rune(str),
 		pos:    0,
 	}
 }
 
-func (ts *TestStream) Peek() (rune, error) {
+func (ts *RuneStream) Peek1() (rune, error) {
 	if ts.pos < len(ts.values) {
 		return ts.values[ts.pos], nil
 	}
@@ -28,38 +28,76 @@ func (ts *TestStream) Peek() (rune, error) {
 	return 0, nil
 }
 
-func (ts *TestStream) Read() (rune, error) {
+func (ts *RuneStream) Peek(n int, buf []rune) (int, error) {
+	i := 0
+	p := ts.pos
+	l := len(ts.values)
+
+	for i < n && p < l {
+		buf[i] = ts.values[p]
+		p++
+		i++
+	}
+
+	return i, nil
+}
+
+func (ts *RuneStream) Read1() (rune, error) {
 	if ts.pos < len(ts.values) {
 		v := ts.values[ts.pos]
-		ts.pos += 1
+		ts.pos++
 		return v, nil
 	}
 
 	return 0, nil
 }
 
-func (ts *TestStream) Finished() bool {
+func (ts *RuneStream) Read(n int, buf []rune) (int, error) {
+	i := 0
+	l := len(ts.values)
+
+	for i < n && ts.pos < l {
+		buf[i] = ts.values[ts.pos]
+		ts.pos++
+		i++
+	}
+
+	return i, nil
+}
+
+func (ts *RuneStream) Skip(n int) int {
+	m := len(ts.values) - ts.pos
+	if n > m {
+		n = m
+	}
+
+	ts.pos += n
+
+	return n
+}
+
+func (ts *RuneStream) Finished() bool {
 	return ts.pos >= len(ts.values)
 }
 
-func (ts *TestStream) Position() int {
+func (ts *RuneStream) Position() int {
 	return ts.pos
 }
 
-func (ts *TestStream) SetPosition(pos int) error {
+func (ts *RuneStream) SetPosition(pos int) error {
 	ts.pos = pos
 	return nil
 }
 
-func (ts *TestStream) Log(mismatch *Mismatch[rune, int]) {
+func (ts *RuneStream) Log(mismatch *Mismatch[rune, int]) {
 	ts.mismatches = append(ts.mismatches, mismatch)
 }
 
-func (ts *TestStream) Range(begin int, end int) []rune {
+func (ts *RuneStream) Range(begin int, end int) []rune {
 	return ts.values[begin:end]
 }
 
-func (ts *TestStream) Write(objs ...rune) error {
+func (ts *RuneStream) Write(objs ...rune) error {
 	for _, obj := range objs {
 		ts.values = append(ts.values, obj)
 	}
@@ -67,11 +105,11 @@ func (ts *TestStream) Write(objs ...rune) error {
 	return nil
 }
 
-func (ts *TestStream) Runes() []rune {
+func (ts *RuneStream) Runes() []rune {
 	return ts.values
 }
 
-func (ts *TestStream) Finish() error {
+func (ts *RuneStream) Finish() error {
 	return nil
 }
 
@@ -179,7 +217,7 @@ func TestPrint(t *testing.T) {
 // }
 
 func TestScan(t *testing.T) {
-	s := NewTestStream("testing {hallo}hallo this :330ehallo")
+	s := NewRuneStream("testing {hallo}hallo this :330ehallo")
 	hallo := Concat[rune, int](runeMatch('{'), runeSeries("hallo"), runeMatch('}'))
 
 	results, err := Scan[rune, int](s, hallo)
@@ -189,12 +227,12 @@ func TestScan(t *testing.T) {
 	}
 
 	for _, result := range results {
-		t.Logf("result %v", string(result.Components[1].Value))
+		t.Logf("result %v", string(result.Components[1].Value.([]rune)))
 	}
 }
 
 func TestExbana(t *testing.T) {
-	s := NewTestStream("abaaa")
+	s := NewRuneStream("abaaa")
 	isA := Unitx[rune, int]("is_a", false, func(obj rune) bool { return obj == 'a' })
 	isB := Unitx[rune, int]("is_b", false, func(obj rune) bool { return obj == 'b' })
 	altAB := Altx[rune, int]("is_a_or_b", false, isA, isB)
@@ -219,7 +257,7 @@ func TestExbana(t *testing.T) {
 
 	matched, result, _ := repAB.Match(s, s)
 	if matched {
-		t.Logf("%v", transformTable.Transform(result, s))
+		t.Logf("%v", result.Transform(transformTable, s))
 	}
 
 	for _, mismatch := range s.mismatches {
@@ -230,7 +268,7 @@ func TestExbana(t *testing.T) {
 // // go test -run TestExbanaEntitySeries -v
 
 func TestExbanaEntitySeries(t *testing.T) {
-	s := NewTestStream("hallo")
+	s := NewRuneStream("hallo")
 	isHallo := Seriesx[rune, int]("hallo", true, runeEntityEqual, []rune("hallo")...)
 
 	transformTable := TransformTable[rune, int]{}

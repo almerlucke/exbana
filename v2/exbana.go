@@ -9,8 +9,11 @@ import (
 
 // ObjectReader interface for a stream that can serve objects to a pattern matcher
 type ObjectReader[T, P any] interface {
-	Peek() (T, error)
-	Read() (T, error)
+	Peek1() (T, error)
+	Read1() (T, error)
+	Peek(int, []T) (int, error)
+	Read(int, []T) (int, error)
+	Skip(int) int
 	Finished() bool
 	Position() P
 	SetPosition(P) error
@@ -28,7 +31,7 @@ type Result[T, P any] struct {
 	Pattern    Pattern[T, P]
 	Begin      P
 	End        P
-	Value      []T
+	Value      any
 	Components []*Result[T, P]
 }
 
@@ -44,9 +47,9 @@ func NewResult[T, P any](pattern Pattern[T, P], begin P, end P, value []T, compo
 }
 
 // Values for components (Concat & Repeat)
-func (r *Result[T, P]) Values() [][]T {
+func (r *Result[T, P]) Values() []any {
 	components := r.Components
-	values := make([][]T, len(components))
+	values := make([]any, len(components))
 	for index, component := range components {
 		values[index] = component.Value
 	}
@@ -60,6 +63,11 @@ func (r *Result[T, P]) Optional() *Result[T, P] {
 	}
 
 	return nil
+}
+
+// Transform result
+func (r *Result[T, P]) Transform(t TransformTable[T, P], stream ObjectReader[T, P]) any {
+	return t.Transform(r, stream)
 }
 
 // TransformTable is used to map matcher identifiers to a transform function
@@ -76,7 +84,7 @@ func (t TransformTable[T, P]) Transform(m *Result[T, P], stream ObjectReader[T, 
 }
 
 // Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
-// and the sub patterns that matched so far, an optional error can be passed to give more specific information
+// and the sub patterns that matched so far
 type Mismatch[T, P any] struct {
 	Pattern           Pattern[T, P]
 	Begin             P
@@ -106,7 +114,7 @@ type MismatchLogger[T, P any] interface {
 	Log(mismatch *Mismatch[T, P])
 }
 
-// Pattern can match objects from a stream, has an identifier
+// Pattern can match objects from a stream, generate objects to a stream, print and has an identifier
 type Pattern[T, P any] interface {
 	Match(ObjectReader[T, P], MismatchLogger[T, P]) (bool, *Result[T, P], error)
 	Generate(ObjectWriter[T]) error
@@ -130,7 +138,7 @@ func Scan[T, P any](stream ObjectReader[T, P], pattern Pattern[T, P]) ([]*Result
 			results = append(results, result)
 		} else {
 			stream.SetPosition(pos)
-			stream.Read()
+			stream.Skip(1)
 		}
 	}
 
@@ -191,7 +199,7 @@ func (p *UnitPattern[T, P]) ID() string {
 // Match matches the unit object against a stream
 func (p *UnitPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
 	pos := s.Position()
-	entity, err := s.Read()
+	entity, err := s.Read1()
 
 	if err != nil {
 		return false, nil, err
@@ -259,7 +267,7 @@ func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]
 	beginPos := s.Position()
 
 	for _, e1 := range p.series {
-		e2, err := s.Read()
+		e2, err := s.Read1()
 		if err != nil {
 			return false, nil, err
 		}

@@ -2,6 +2,7 @@ package exbana
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 	"testing"
 	"unicode"
@@ -25,7 +26,7 @@ func (ts *RuneStream) Peek1() (rune, error) {
 		return ts.values[ts.pos], nil
 	}
 
-	return 0, nil
+	return 0, io.EOF
 }
 
 func (ts *RuneStream) Peek(n int, buf []rune) (int, error) {
@@ -39,6 +40,10 @@ func (ts *RuneStream) Peek(n int, buf []rune) (int, error) {
 		i++
 	}
 
+	if i != n {
+		return i, io.EOF
+	}
+
 	return i, nil
 }
 
@@ -49,7 +54,7 @@ func (ts *RuneStream) Read1() (rune, error) {
 		return v, nil
 	}
 
-	return 0, nil
+	return 0, io.EOF
 }
 
 func (ts *RuneStream) Read(n int, buf []rune) (int, error) {
@@ -62,10 +67,14 @@ func (ts *RuneStream) Read(n int, buf []rune) (int, error) {
 		i++
 	}
 
+	if i != n {
+		return i, io.EOF
+	}
+
 	return i, nil
 }
 
-func (ts *RuneStream) Skip(n int) int {
+func (ts *RuneStream) Skip(n int) (int, error) {
 	m := len(ts.values) - ts.pos
 	if n > m {
 		n = m
@@ -73,19 +82,31 @@ func (ts *RuneStream) Skip(n int) int {
 
 	ts.pos += n
 
-	return n
+	if n == m {
+		return n, io.EOF
+	}
+
+	return n, nil
 }
 
 func (ts *RuneStream) Finished() bool {
 	return ts.pos >= len(ts.values)
 }
 
-func (ts *RuneStream) Position() int {
-	return ts.pos
+func (ts *RuneStream) Position() (int, error) {
+	if ts.pos >= len(ts.values) {
+		return ts.pos, io.EOF
+	}
+
+	return ts.pos, nil
 }
 
 func (ts *RuneStream) SetPosition(pos int) error {
 	ts.pos = pos
+	if ts.pos >= len(ts.values) {
+		return io.EOF
+	}
+
 	return nil
 }
 
@@ -93,8 +114,8 @@ func (ts *RuneStream) Log(mismatch *Mismatch[rune, int]) {
 	ts.mismatches = append(ts.mismatches, mismatch)
 }
 
-func (ts *RuneStream) Range(begin int, end int) []rune {
-	return ts.values[begin:end]
+func (ts *RuneStream) Range(begin int, end int) ([]rune, error) {
+	return ts.values[begin:end], nil
 }
 
 func (ts *RuneStream) Write(objs ...rune) error {

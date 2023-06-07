@@ -13,11 +13,11 @@ type ObjectReader[T, P any] interface {
 	Read1() (T, error)
 	Peek(int, []T) (int, error)
 	Read(int, []T) (int, error)
-	Skip(int) int
+	Skip(int) (int, error)
 	Finished() bool
-	Position() P
+	Position() (P, error)
 	SetPosition(P) error
-	Range(P, P) []T
+	Range(P, P) ([]T, error)
 }
 
 // ObjectWriter interface to write generated objects
@@ -125,11 +125,19 @@ type Pattern[T, P any] interface {
 // Patterns is a convenience type for a slice of pattern interfaces
 type Patterns[T, P any] []Pattern[T, P]
 
+// IsStreamError check if err is set and not io.EOF
+func IsStreamError(err error) bool {
+	return err != nil && err != io.EOF
+}
+
 // Scan stream for pattern and return all results
 func Scan[T, P any](stream ObjectReader[T, P], pattern Pattern[T, P]) ([]*Result[T, P], error) {
 	results := []*Result[T, P]{}
 	for !stream.Finished() {
-		pos := stream.Position()
+		pos, err := stream.Position()
+		if IsStreamError(err) {
+			return nil, err
+		}
 		matched, result, err := pattern.Match(stream, nil)
 		if err != nil {
 			return nil, err
@@ -137,8 +145,14 @@ func Scan[T, P any](stream ObjectReader[T, P], pattern Pattern[T, P]) ([]*Result
 		if matched {
 			results = append(results, result)
 		} else {
-			stream.SetPosition(pos)
-			stream.Skip(1)
+			err = stream.SetPosition(pos)
+			if IsStreamError(err) {
+				return nil, err
+			}
+			_, err = stream.Skip(1)
+			if IsStreamError(err) {
+				return nil, err
+			}
 		}
 	}
 
@@ -198,17 +212,35 @@ func (p *UnitPattern[T, P]) ID() string {
 
 // Match matches the unit object against a stream
 func (p *UnitPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
-	pos := s.Position()
-	entity, err := s.Read1()
+	pos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
-	if err != nil {
+	entity, err := s.Read1()
+	if IsStreamError(err) {
 		return false, nil, err
 	}
 
 	if p.matchFunc(entity) {
-		return true, NewResult[T, P](p, pos, s.Position(), s.Range(pos, s.Position()), nil), nil
+		endPos, err := s.Position()
+		if IsStreamError(err) {
+			return false, nil, err
+		}
+
+		val, err := s.Range(pos, endPos)
+		if err != nil {
+			return false, nil, err
+		}
+
+		return true, NewResult[T, P](p, pos, endPos, val, nil), nil
 	} else if p.logging && l != nil {
-		l.Log(NewMismatch[T, P](p, pos, s.Position()))
+		endPos, err := s.Position()
+		if IsStreamError(err) {
+			return false, nil, err
+		}
+
+		l.Log(NewMismatch[T, P](p, pos, endPos))
 	}
 
 	return false, nil, nil
@@ -264,26 +296,42 @@ func (p *SeriesPattern[T, P]) ID() string {
 
 // Match matches the series pattern against a stream
 func (p *SeriesPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
-	beginPos := s.Position()
+	beginPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
 	for _, e1 := range p.series {
 		e2, err := s.Read1()
-		if err != nil {
+		if IsStreamError(err) {
 			return false, nil, err
 		}
 
 		if !p.eqFunc(e1, e2) {
 			if p.logging && l != nil {
-				l.Log(NewMismatch[T, P](p, beginPos, s.Position()))
+				endPos, err := s.Position()
+				if IsStreamError(err) {
+					return false, nil, err
+				}
+
+				l.Log(NewMismatch[T, P](p, beginPos, endPos))
 			}
 
 			return false, nil, nil
 		}
 	}
 
-	endPos := s.Position()
+	endPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
-	return true, NewResult[T, P](p, beginPos, endPos, s.Range(beginPos, endPos), nil), nil
+	val, err := s.Range(beginPos, endPos)
+	if err != nil {
+		return false, nil, err
+	}
+
+	return true, NewResult[T, P](p, beginPos, endPos, val, nil), nil
 }
 
 // Generate writes a series of objects to an object writer
@@ -347,12 +395,18 @@ func (p *ConcatPattern[T, P]) ID() string {
 
 // Match matches And against a stream, fails if any of the patterns mismatches
 func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
-	beginPos := s.Position()
+	beginPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
 	matches := []*Result[T, P]{}
 
 	for _, pm := range p.Patterns {
-		subBeginPos := s.Position()
+		subBeginPos, err := s.Position()
+		if IsStreamError(err) {
+			return false, nil, err
+		}
 
 		matched, result, err := pm.Match(s, l)
 		if err != nil {
@@ -362,7 +416,10 @@ func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]
 		if matched {
 			matches = append(matches, result)
 		} else {
-			subEndPos := s.Position()
+			subEndPos, err := s.Position()
+			if IsStreamError(err) {
+				return false, nil, err
+			}
 
 			if p.logging && l != nil {
 				l.Log(NewMismatchx[T, P](
@@ -374,7 +431,12 @@ func (p *ConcatPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]
 		}
 	}
 
-	return true, NewResult[T, P](p, beginPos, s.Position(), nil, matches), nil
+	endPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
+
+	return true, NewResult[T, P](p, beginPos, endPos, nil, matches), nil
 }
 
 // Generate writes a concatenation of patterns to a writer
@@ -447,10 +509,16 @@ func (p *AltPattern[T, P]) ID() string {
 
 // Match matches the OR pattern against a stream, fails if all of the patterns mismatch
 func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
-	beginPos := s.Position()
+	beginPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
 	for _, pm := range p.Patterns {
-		s.SetPosition(beginPos)
+		err := s.SetPosition(beginPos)
+		if IsStreamError(err) {
+			return false, nil, err
+		}
 
 		matched, result, err := pm.Match(s, l)
 		if err != nil {
@@ -458,12 +526,22 @@ func (p *AltPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (
 		}
 
 		if matched {
-			return true, NewResult[T, P](p, beginPos, s.Position(), nil, []*Result[T, P]{result}), nil
+			endPos, err := s.Position()
+			if IsStreamError(err) {
+				return false, nil, err
+			}
+
+			return true, NewResult[T, P](p, beginPos, endPos, nil, []*Result[T, P]{result}), nil
 		}
 	}
 
 	if p.logging && l != nil {
-		l.Log(NewMismatch[T, P](p, beginPos, s.Position()))
+		endPos, err := s.Position()
+		if IsStreamError(err) {
+			return false, nil, err
+		}
+
+		l.Log(NewMismatch[T, P](p, beginPos, endPos))
 	}
 
 	return false, nil, nil
@@ -567,7 +645,11 @@ func (p *RepPattern[T, P]) ID() string {
 
 // Match matches the repetition pattern aginst a stream
 func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
-	beginPos := s.Position()
+	beginPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
+
 	matches := []*Result[T, P]{}
 
 	for {
@@ -575,7 +657,10 @@ func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (
 			break
 		}
 
-		resetPos := s.Position()
+		resetPos, err := s.Position()
+		if IsStreamError(err) {
+			return false, nil, err
+		}
 
 		matched, result, err := p.Pattern.Match(s, l)
 		if err != nil {
@@ -583,7 +668,11 @@ func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (
 		}
 
 		if !matched {
-			s.SetPosition(resetPos)
+			err = s.SetPosition(resetPos)
+			if IsStreamError(err) {
+				return false, nil, err
+			}
+
 			break
 		}
 
@@ -595,13 +684,23 @@ func (p *RepPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (
 
 	if len(matches) < p.Min {
 		if p.logging && l != nil {
-			l.Log(NewMismatchx[T, P](p, beginPos, s.Position(), nil, matches))
+			endPos, err := s.Position()
+			if IsStreamError(err) {
+				return false, nil, err
+			}
+
+			l.Log(NewMismatchx[T, P](p, beginPos, endPos, nil, matches))
 		}
 
 		return false, nil, nil
 	}
 
-	return true, NewResult[T, P](p, beginPos, s.Position(), nil, matches), nil
+	endPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
+
+	return true, NewResult[T, P](p, beginPos, endPos, nil, matches), nil
 }
 
 // Generate writes pattern to a writer a random number of times
@@ -741,7 +840,10 @@ func (p *ExceptPattern[T, P]) ID() string {
 
 // Match matches the exception against a stream
 func (p *ExceptPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
-	beginPos := s.Position()
+	beginPos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
 	// First check for the exception match, we do not want to match the exception
 	matched, result, err := p.Except.Match(s, l)
@@ -751,14 +853,22 @@ func (p *ExceptPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]
 
 	if matched {
 		if p.logging && l != nil {
-			l.Log(NewMismatchx[T, P](p, beginPos, s.Position(), result, nil))
+			endPos, err := s.Position()
+			if IsStreamError(err) {
+				return false, nil, err
+			}
+
+			l.Log(NewMismatchx[T, P](p, beginPos, endPos, result, nil))
 		}
 
 		return false, nil, nil
 	}
 
 	// Reset the position and return the mustMatch result
-	s.SetPosition(beginPos)
+	err = s.SetPosition(beginPos)
+	if IsStreamError(err) {
+		return false, nil, err
+	}
 
 	return p.MustMatch.Match(s, l)
 }
@@ -810,12 +920,17 @@ func (p *EndPattern[T, P]) ID() string {
 
 // Match matches a end of stream pattern against a stream
 func (p *EndPattern[T, P]) Match(s ObjectReader[T, P], l MismatchLogger[T, P]) (bool, *Result[T, P], error) {
+	pos, err := s.Position()
+	if IsStreamError(err) {
+		return false, nil, err
+	}
+
 	if s.Finished() {
-		return true, NewResult[T, P](p, s.Position(), s.Position(), nil, nil), nil
+		return true, NewResult[T, P](p, pos, pos, nil, nil), nil
 	}
 
 	if p.logging && l != nil {
-		l.Log(NewMismatch[T, P](p, s.Position(), s.Position()))
+		l.Log(NewMismatch[T, P](p, pos, pos))
 	}
 
 	return false, nil, nil

@@ -24,3 +24,6 @@ _cgo_export.*
 .DS_Store
 
 *.code-workspace
+
+go.work
+go.work.sum

@@ -4,165 +4,37 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"math/rand"
 )
 
-// Object returned from streamer, a real implementation could have rune as object type
-type Object interface{}
-
-// ObjectEqualFunc test if two objects are equal
-type ObjectEqualFunc func(Object, Object) bool
-
-// Position is an abstract position from a stream implementation
-type Position interface{}
-
-// Value is an abstract return value from result
-type Value interface{}
-
-// ObjectReader interface for a stream that can serve objects to a pattern matcher
-type ObjectReader interface {
-	Peek() (Object, error)
-	Read() (Object, error)
-	Finished() bool
-	Position() Position
-	SetPosition(Position) error
-	ValueForRange(Position, Position) Value
+// IsStreamError check if err is set and not io.EOF
+func IsStreamError(err error) bool {
+	return err != nil && err != io.EOF
 }
-
-// ObjectWriter interface to write generated objects
-type ObjectWriter interface {
-	Write(...Object) error
-	Finish() error
-}
-
-// Result contains matched pattern position, identifier and value
-type Result struct {
-	ID    string
-	Begin Position
-	End   Position
-	Value Value
-}
-
-// NewResult creates a new pattern match result
-func NewResult(id string, begin Position, end Position, value Value) *Result {
-	return &Result{
-		ID:    id,
-		Begin: begin,
-		End:   end,
-		Value: value,
-	}
-}
-
-// Components (Concat & Alt)
-func (r *Result) Components() []*Result {
-	return r.Value.([]*Result)
-}
-
-// Component at index (Concat & Alt)
-func (r *Result) Component(index int) *Result {
-	return r.Value.([]*Result)[index]
-}
-
-// Values for components (Concat & Alt)
-func (r *Result) Values() []Value {
-	components := r.Value.([]*Result)
-	values := make([]Value, len(components))
-	for index, component := range components {
-		values[index] = component.Value
-	}
-	return values
-}
-
-// NestedResult for Alt
-func (r *Result) NestedResult() *Result {
-	return r.Value.(*Result)
-}
-
-// NestedValue for Alt
-func (r *Result) NestedValue() Value {
-	return r.Value.(*Result).Value
-}
-
-// Optional result
-func (r *Result) Optional() *Result {
-	components := r.Value.([]*Result)
-	if len(components) > 0 {
-		return components[0]
-	}
-
-	return nil
-}
-
-// TransformFunc can transform match result to final value
-type TransformFunc func(*Result, TransformTable, ObjectReader) Value
-
-// TransformTable is used to map matcher identifiers to a transform function
-type TransformTable map[string]TransformFunc
-
-// Transform a match result to a value
-func (t TransformTable) Transform(m *Result, stream ObjectReader) Value {
-	f, ok := t[m.ID]
-	if ok {
-		return f(m, t, stream)
-	}
-
-	return m.Value
-}
-
-// Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
-// and the sub patterns that matched so far, an optional error can be passed to give more specific information
-type Mismatch struct {
-	Result
-	SubMismatch *Result
-	SubMatches  []*Result
-	Error       error
-}
-
-// NewMismatch creates a new pattern mismatch
-func NewMismatch(id string, begin Position, end Position, subMisMatch *Result, subMatches []*Result, err error) *Mismatch {
-	return &Mismatch{
-		Result: Result{
-			ID:    id,
-			Begin: begin,
-			End:   end,
-			Value: nil,
-		},
-		SubMismatch: subMisMatch,
-		SubMatches:  subMatches,
-		Error:       err,
-	}
-}
-
-// Logger can be used to log pattern mismatches during pattern matching
-type Logger interface {
-	Log(mismatch *Mismatch)
-}
-
-// Pattern can match objects from a stream, has an identifier
-type Pattern interface {
-	Match(ObjectReader, Logger) (bool, *Result, error)
-	Generate(ObjectWriter) error
-	Print(io.Writer) error
-	ID() string
-}
-
-// Patterns is a convenience type for a slice of pattern interfaces
-type Patterns []Pattern
 
 // Scan stream for pattern and return all results
-func Scan(stream ObjectReader, pattern Pattern) ([]*Result, error) {
-	results := []*Result{}
+func Scan[T, P any](stream Reader[T, P], pattern Pattern[T, P]) ([]*Match[T, P], error) {
+	var results []*Match[T, P]
+
 	for !stream.Finished() {
-		pos := stream.Position()
-		matched, result, err := pattern.Match(stream, nil)
+		pos, err := stream.Position()
+		if IsStreamError(err) {
+			return nil, err
+		}
+		matched, result, err := pattern.Match(stream)
 		if err != nil {
 			return nil, err
 		}
 		if matched {
 			results = append(results, result)
 		} else {
-			stream.SetPosition(pos)
-			stream.Read()
+			err = stream.SetPosition(pos)
+			if IsStreamError(err) {
+				return nil, err
+			}
+			_, err = stream.Skip(1)
+			if IsStreamError(err) {
+				return nil, err
+			}
 		}
 	}
 
@@ -170,7 +42,7 @@ func Scan(stream ObjectReader, pattern Pattern) ([]*Result, error) {
 }
 
 // PrintRules prints all rules and returns a string
-func PrintRules(patterns []Pattern) (string, error) {
+func PrintRules[T, P any](patterns []Pattern[T, P]) (string, error) {
 	var buf bytes.Buffer
 
 	for _, pattern := range patterns {
@@ -191,156 +63,15 @@ func PrintRules(patterns []Pattern) (string, error) {
 	return buf.String(), nil
 }
 
-// UnitMatchFunc matches a single object
-type UnitMatchFunc func(Object) bool
-
-// UnitGenerateFunc generates a single object
-type UnitGenerateFunc func() Object
-
-// UnitPattern represents a single object pattern
-type UnitPattern struct {
-	id           string
-	logging      bool
-	matchFunc    UnitMatchFunc
-	GenerateFunc UnitGenerateFunc
-	PrintOutput  string
-}
-
-// Unitx creates a new unit pattern with identifier and logging
-func Unitx(id string, logging bool, matchFunc UnitMatchFunc) *UnitPattern {
-	return &UnitPattern{
-		id:           id,
-		logging:      logging,
-		matchFunc:    matchFunc,
-		GenerateFunc: nil,
-	}
-}
-
-// Unit creates a new unit pattern
-func Unit(matchFunction UnitMatchFunc) *UnitPattern {
-	return Unitx("", false, matchFunction)
-}
-
-// ID returns the unit pattern ID
-func (p *UnitPattern) ID() string {
-	return p.id
-}
-
-// Match matches the unit object against a stream
-func (p *UnitPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	pos := s.Position()
-	entity, err := s.Read()
-
-	if err != nil {
-		return false, nil, err
-	}
-
-	if p.matchFunc(entity) {
-		return true, NewResult(p.id, pos, s.Position(), s.ValueForRange(pos, s.Position())), nil
-	} else if p.logging && l != nil {
-		l.Log(NewMismatch(p.id, pos, s.Position(), nil, nil, nil))
-	}
-
-	return false, nil, nil
-}
-
-// Generate writes an object to an object writer
-func (p *UnitPattern) Generate(wr ObjectWriter) error {
-	if p.GenerateFunc != nil {
-		return wr.Write(p.GenerateFunc())
-	}
-
-	return nil
-}
-
-// Print writes EBNF to io.Writer
-func (p *UnitPattern) Print(wr io.Writer) error {
-	_, err := wr.Write([]byte(p.PrintOutput))
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// SeriesPattern represents a series of objects to match
-type SeriesPattern struct {
-	id          string
-	logging     bool
-	eqFunc      ObjectEqualFunc
-	series      []Object
-	PrintOutput string
-}
-
-// Seriesx creates a new series pattern with identifier and logging
-func Seriesx(id string, logging bool, eqFunc ObjectEqualFunc, series ...Object) *SeriesPattern {
-	return &SeriesPattern{
-		id:      id,
-		logging: logging,
-		series:  series,
-		eqFunc:  eqFunc,
-	}
-}
-
-// Series creates a new series pattern
-func Series(eqFunc ObjectEqualFunc, series ...Object) *SeriesPattern {
-	return Seriesx("", false, eqFunc, series...)
-}
-
-// ID return the series pattern ID
-func (p *SeriesPattern) ID() string {
-	return p.id
-}
-
-// Match matches the series pattern against a stream
-func (p *SeriesPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	beginPos := s.Position()
-
-	for _, e1 := range p.series {
-		e2, err := s.Read()
-		if err != nil {
-			return false, nil, err
-		}
-
-		if !p.eqFunc(e1, e2) {
-			if p.logging && l != nil {
-				l.Log(NewMismatch(p.id, beginPos, s.Position(), nil, nil, nil))
-			}
-
-			return false, nil, nil
-		}
-	}
-
-	endPos := s.Position()
-
-	return true, NewResult(p.id, beginPos, endPos, s.ValueForRange(beginPos, endPos)), nil
-}
-
-// Generate writes a series of objects to an object writer
-func (p *SeriesPattern) Generate(wr ObjectWriter) error {
-	return wr.Write(p.series...)
-}
-
-// Print writes EBNF to io.Writer
-func (p *SeriesPattern) Print(wr io.Writer) error {
-	_, err := wr.Write([]byte(p.PrintOutput))
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// printChild prints child pattern
-func printChild(wr io.Writer, child Pattern) error {
+func PrintChild[T, P any](w io.Writer, child Pattern[T, P]) error {
 	id := child.ID()
 	if id != "" {
-		_, err := wr.Write([]byte(id))
+		_, err := w.Write([]byte(id))
 		if err != nil {
 			return err
 		}
 	} else {
-		err := child.Print(wr)
+		err := child.Print(w)
 		if err != nil {
 			return err
 		}
@@ -349,514 +80,488 @@ func printChild(wr io.Writer, child Pattern) error {
 	return nil
 }
 
-// Concat matches a series of patterns AND style in order (concatenation)
-type ConcatPattern struct {
-	id       string
-	logging  bool
-	Patterns Patterns
-}
-
-// Concatx creates a new concat pattern with identifier and logging
-func Concatx(id string, logging bool, patterns ...Pattern) *ConcatPattern {
-	return &ConcatPattern{
-		id:       id,
-		logging:  logging,
-		Patterns: patterns,
-	}
-}
-
-// Concat creates a new AND pattern
-func Concat(patterns ...Pattern) *ConcatPattern {
-	return Concatx("", false, patterns...)
-}
-
-// ID returns the AND pattern ID
-func (p *ConcatPattern) ID() string {
-	return p.id
-}
-
-// Match matches And against a stream, fails if any of the patterns mismatches
-func (p *ConcatPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	beginPos := s.Position()
-
-	matches := []*Result{}
-
-	for _, pm := range p.Patterns {
-		subBeginPos := s.Position()
-
-		matched, result, err := pm.Match(s, l)
-		if err != nil {
-			return false, nil, err
-		}
-
-		if matched {
-			matches = append(matches, result)
-		} else {
-			subEndPos := s.Position()
-
-			if p.logging && l != nil {
-				l.Log(NewMismatch(
-					p.id, beginPos, subEndPos, NewResult(pm.ID(), subBeginPos, subEndPos, nil), matches, nil),
-				)
-			}
-
-			return false, nil, nil
-		}
-	}
-
-	return true, NewResult(p.id, beginPos, s.Position(), matches), nil
-}
-
-// Generate writes a concatenation of patterns to a writer
-func (p *ConcatPattern) Generate(wr ObjectWriter) error {
-	for _, child := range p.Patterns {
-		err := child.Generate(wr)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// Print EBNF concatenation group
-func (p *ConcatPattern) Print(wr io.Writer) error {
-	_, err := wr.Write([]byte("("))
-	if err != nil {
-		return err
-	}
-
-	first := true
-
-	for _, child := range p.Patterns {
-		if !first {
-			_, err = wr.Write([]byte(", "))
-			if err != nil {
-				return err
-			}
-		}
-
-		err = printChild(wr, child)
-		if err != nil {
-			return err
-		}
-
-		first = false
-	}
-
-	_, err = wr.Write([]byte(")"))
-
-	return err
-}
-
-// AltPattern matches a series of patterns OR style in order (alternation)
-type AltPattern struct {
-	id       string
-	logging  bool
-	Patterns Patterns
-}
-
-// Altx creates a new Alt pattern with identifier and logging
-func Altx(id string, logging bool, patterns ...Pattern) *AltPattern {
-	return &AltPattern{
-		id:       id,
-		logging:  logging,
-		Patterns: patterns,
-	}
-}
-
-// Alt creates a new OR pattern
-func Alt(patterns ...Pattern) *AltPattern {
-	return Altx("", false, patterns...)
-}
-
-// ID returns the ID of the OR pattern
-func (p *AltPattern) ID() string {
-	return p.id
-}
-
-// Match matches the OR pattern against a stream, fails if all of the patterns mismatch
-func (p *AltPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	beginPos := s.Position()
-
-	for _, pm := range p.Patterns {
-		s.SetPosition(beginPos)
-
-		matched, result, err := pm.Match(s, l)
-		if err != nil {
-			return false, nil, err
-		}
-
-		if matched {
-			return true, NewResult(p.id, beginPos, s.Position(), result), nil
-		}
-	}
-
-	if p.logging && l != nil {
-		l.Log(NewMismatch(p.id, beginPos, s.Position(), nil, nil, nil))
-	}
-
-	return false, nil, nil
-}
-
-// Generate writes an alternation of patterns to a writer, randomly chosen
-func (p *AltPattern) Generate(wr ObjectWriter) error {
-	return p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
-}
-
-// Print EBNF alternation group
-func (p *AltPattern) Print(wr io.Writer) error {
-	_, err := wr.Write([]byte("("))
-	if err != nil {
-		return err
-	}
-
-	first := true
-
-	for _, child := range p.Patterns {
-		if !first {
-			_, err = wr.Write([]byte(" | "))
-			if err != nil {
-				return err
-			}
-		}
-		err = printChild(wr, child)
-		if err != nil {
-			return err
-		}
-
-		first = false
-	}
-
-	_, err = wr.Write([]byte(")"))
-
-	return err
-}
-
-// RepPattern matches a pattern repetition
-type RepPattern struct {
-	id      string
-	logging bool
-	Pattern Pattern
-	min     int
-	max     int
-	MaxGen  int
-}
-
-// Repx creates a new repetition pattern
-func Repx(id string, logging bool, pattern Pattern, min int, max int) *RepPattern {
-	return &RepPattern{
-		id:      id,
-		logging: logging,
-		Pattern: pattern,
-		min:     min,
-		max:     max,
-		MaxGen:  5,
-	}
-}
-
-// Rep creates a new repetition pattern
-func Rep(pattern Pattern, min int, max int) *RepPattern {
-	return Repx("", false, pattern, min, max)
-}
-
-// Optx creates a new optional pattern
-func Optx(id string, logging bool, pattern Pattern) *RepPattern {
-	return Repx(id, logging, pattern, 0, 1)
-}
-
-// Opt creates a new optional pattern
-func Opt(pattern Pattern) *RepPattern {
-	return Optx("", false, pattern)
-}
-
-// Anyx creates a new any repetition pattern
-func Anyx(id string, logging bool, pattern Pattern) *RepPattern {
-	return Repx(id, logging, pattern, 0, 0)
-}
-
-// Any creates a new any repetition pattern
-func Any(pattern Pattern) *RepPattern {
-	return Anyx("", false, pattern)
-}
-
-// Nx creates a new repetition pattern for exactly n times
-func Nx(id string, logging bool, pattern Pattern, n int) *RepPattern {
-	return Repx(id, logging, pattern, n, n)
-}
-
-// N creates a new repetition pattern for exactly n times
-func N(pattern Pattern, n int) *RepPattern {
-	return Nx("", false, pattern, n)
-}
-
-// ID returns the ID of the repetition pattern
-func (p *RepPattern) ID() string {
-	return p.id
-}
-
-// Match matches the repetition pattern aginst a stream
-func (p *RepPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	beginPos := s.Position()
-	matches := []*Result{}
-
-	for {
-		if s.Finished() {
-			break
-		}
-
-		resetPos := s.Position()
-
-		matched, result, err := p.Pattern.Match(s, l)
-		if err != nil {
-			return false, nil, err
-		}
-
-		if !matched {
-			s.SetPosition(resetPos)
-			break
-		}
-
-		matches = append(matches, result)
-		if p.max != 0 && len(matches) == p.max {
-			break
-		}
-	}
-
-	if len(matches) < p.min {
-		if p.logging && l != nil {
-			l.Log(NewMismatch(p.id, beginPos, s.Position(), nil, nil, fmt.Errorf("expected minimum of %d repetitions", p.min)))
-		}
-
-		return false, nil, nil
-	}
-
-	return true, NewResult(p.id, beginPos, s.Position(), matches), nil
-}
-
-// Generate writes pattern to a writer a random number of times
-func (p *RepPattern) Generate(wr ObjectWriter) error {
-	min := p.min
-	max := p.max
-
-	if p.max == 0 {
-		max = min + p.MaxGen
-	}
-
-	n := rand.Intn(max-min+1) + min
-
-	for i := 0; i < n; i += 1 {
-		err := p.Pattern.Generate(wr)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// printAny prints EBNF zero or more
-func (p *RepPattern) printAny(wr io.Writer) error {
-	err := p.Pattern.Print(wr)
-	if err != nil {
-		return err
-	}
-
-	_, err = wr.Write([]byte("*"))
-
-	return err
-}
-
-// printAny prints EBNF optional
-func (p *RepPattern) printOptional(wr io.Writer) error {
-	err := p.Pattern.Print(wr)
-	if err != nil {
-		return err
-	}
-
-	_, err = wr.Write([]byte("?"))
-
-	return err
-}
-
-// printAny prints EBNF at least one
-func (p *RepPattern) printAtLeastOne(wr io.Writer) error {
-	err := p.Pattern.Print(wr)
-	if err != nil {
-		return err
-	}
-
-	_, err = wr.Write([]byte("+"))
-
-	return err
-}
-
-// Print EBNF repetition pattern
-func (p *RepPattern) Print(wr io.Writer) error {
-	if p.min == 0 && p.max == 0 {
-		return p.printAny(wr)
-	} else if p.min == 0 && p.max == 1 {
-		return p.printOptional(wr)
-	} else if p.min == 1 && p.max == 0 {
-		return p.printAtLeastOne(wr)
-	}
-
-	var err error
-	oneValue := p.min == p.max
-
-	if !oneValue {
-		_, err = wr.Write([]byte("("))
-		if err != nil {
-			return err
-		}
-	}
-
-	_, err = wr.Write([]byte(fmt.Sprintf("%v * ", p.min)))
-	if err != nil {
-		return err
-	}
-
-	err = p.Pattern.Print(wr)
-	if err != nil {
-		return err
-	}
-
-	if !oneValue {
-		_, err = wr.Write([]byte(fmt.Sprintf(", %v * ", p.max-p.min)))
-		if err != nil {
-			return err
-		}
-
-		err = p.Pattern.Print(wr)
-		if err != nil {
-			return err
-		}
-
-		_, err = wr.Write([]byte("?)"))
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// ExceptPattern must not match the Except pattern but must match the MustMatch pattern
-type ExceptPattern struct {
-	id        string
-	logging   bool
-	MustMatch Pattern
-	Except    Pattern
-}
-
-// Exceptx creates a new except pattern
-func Exceptx(id string, logging bool, mustMatch Pattern, except Pattern) *ExceptPattern {
-	return &ExceptPattern{
-		id:        id,
-		logging:   logging,
-		MustMatch: mustMatch,
-		Except:    except,
-	}
-}
-
-// Except creates a new except pattern
-func Except(mustMatch Pattern, except Pattern) *ExceptPattern {
-	return Exceptx("", false, mustMatch, except)
-}
-
-// ID returns the except pattern ID
-func (p *ExceptPattern) ID() string {
-	return p.id
-}
-
-// Match matches the exception against a stream
-func (p *ExceptPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	beginPos := s.Position()
-
-	// First check for the exception match, we do not want to match the exception
-	matched, result, err := p.Except.Match(s, l)
-	if err != nil {
-		return false, nil, err
-	}
-
-	if matched {
-		if p.logging && l != nil {
-			l.Log(NewMismatch(p.id, beginPos, s.Position(), result, nil, nil))
-		}
-
-		return false, nil, nil
-	}
-
-	// Reset the position and return the mustMatch result
-	s.SetPosition(beginPos)
-
-	return p.MustMatch.Match(s, l)
-}
-
-// Generate let's MustMatch generate to writer
-func (p *ExceptPattern) Generate(wr ObjectWriter) error {
-	return p.MustMatch.Generate(wr)
-}
-
-// Print EBNF except pattern
-func (p *ExceptPattern) Print(wr io.Writer) error {
-	err := p.MustMatch.Print(wr)
-	if err != nil {
-		return err
-	}
-	_, err = wr.Write([]byte(" - "))
-	if err != nil {
-		return err
-	}
-
-	err = p.Except.Print(wr)
-
-	return err
-}
-
-// EndPattern matches the end of stream
-type EndPattern struct {
-	id      string
-	logging bool
-}
-
-// EndF creates a new end of stream pattern
-func Endx(id string, logging bool) *EndPattern {
-	return &EndPattern{
-		id:      id,
-		logging: logging,
-	}
-}
-
-// End creates a new end of stream pattern
-func End() *EndPattern {
-	return Endx("", false)
-}
-
-// ID returns end of stream pattern ID
-func (p *EndPattern) ID() string {
-	return p.id
-}
-
-// Match matches a end of stream pattern against a stream
-func (p *EndPattern) Match(s ObjectReader, l Logger) (bool, *Result, error) {
-	if s.Finished() {
-		return true, NewResult(p.id, s.Position(), s.Position(), nil), nil
-	}
-
-	if p.logging && l != nil {
-		l.Log(NewMismatch(p.id, s.Position(), s.Position(), nil, nil, nil))
-	}
-
-	return false, nil, nil
-}
-
-// Generate sends finish to writer
-func (p *EndPattern) Generate(wr ObjectWriter) error {
-	return wr.Finish()
-}
-
-// Print EBNF end of stream (does nothing)
-func (p *EndPattern) Print(wr io.Writer) error {
-	return nil
-}
+//
+//// printChild prints child pattern
+//func printChild[T, P any](wr io.Writer, child Pattern[T, P]) error {
+//	id := child.ID()
+//	if id != "" {
+//		_, err := wr.Write([]byte(id))
+//		if err != nil {
+//			return err
+//		}
+//	} else {
+//		err := child.Print(wr)
+//		if err != nil {
+//			return err
+//		}
+//	}
+//
+//	return nil
+//}
+//
+
+//
+//// AltPattern matches a series of patterns OR style in order (alternation)
+//type AltPattern[T, P any] struct {
+//	id       string
+//	logging  bool
+//	Patterns Patterns[T, P]
+//}
+//
+//// Altx creates a new Alt pattern with identifier and logging
+//func Altx[T, P any](id string, logging bool, patterns ...Pattern[T, P]) *AltPattern[T, P] {
+//	return &AltPattern[T, P]{
+//		id:       id,
+//		logging:  logging,
+//		Patterns: patterns,
+//	}
+//}
+//
+//// Alt creates a new OR pattern
+//func Alt[T, P any](patterns ...Pattern[T, P]) *AltPattern[T, P] {
+//	return Altx("", false, patterns...)
+//}
+//
+//// ID returns the ID of the OR pattern
+//func (p *AltPattern[T, P]) ID() string {
+//	return p.id
+//}
+//
+//// Match matches the OR pattern against a stream, fails if all of the patterns mismatch
+//func (p *AltPattern[T, P]) Match(s Reader[T, P], l MismatchLogger[T, P]) (bool, *Match[T, P], error) {
+//	beginPos, err := s.Position()
+//	if IsStreamError(err) {
+//		return false, nil, err
+//	}
+//
+//	for _, pm := range p.Patterns {
+//		err := s.SetPosition(beginPos)
+//		if IsStreamError(err) {
+//			return false, nil, err
+//		}
+//
+//		matched, result, err := pm.Match(s, l)
+//		if err != nil {
+//			return false, nil, err
+//		}
+//
+//		if matched {
+//			endPos, err := s.Position()
+//			if IsStreamError(err) {
+//				return false, nil, err
+//			}
+//
+//			return true, NewMatch[T, P](p, beginPos, endPos, nil, []*Match[T, P]{result}), nil
+//		}
+//	}
+//
+//	if p.logging && l != nil {
+//		endPos, err := s.Position()
+//		if IsStreamError(err) {
+//			return false, nil, err
+//		}
+//
+//		l.Log(NewMismatch[T, P](p, beginPos, endPos))
+//	}
+//
+//	return false, nil, nil
+//}
+//
+//// Generate writes an alternation of patterns to a writer, randomly chosen
+//func (p *AltPattern[T, P]) Generate(wr Writer[T]) error {
+//	return p.Patterns[rand.Intn(len(p.Patterns))].Generate(wr)
+//}
+//
+//// Print EBNF alternation group
+//func (p *AltPattern[T, P]) Print(wr io.Writer) error {
+//	_, err := wr.Write([]byte("("))
+//	if err != nil {
+//		return err
+//	}
+//
+//	first := true
+//
+//	for _, child := range p.Patterns {
+//		if !first {
+//			_, err = wr.Write([]byte(" | "))
+//			if err != nil {
+//				return err
+//			}
+//		}
+//		err = printChild(wr, child)
+//		if err != nil {
+//			return err
+//		}
+//
+//		first = false
+//	}
+//
+//	_, err = wr.Write([]byte(")"))
+//
+//	return err
+//}
+//
+//// RepPattern matches a pattern repetition
+//type RepPattern[T, P any] struct {
+//	id      string
+//	logging bool
+//	Pattern Pattern[T, P]
+//	Min     int
+//	Max     int
+//	MaxGen  int
+//}
+//
+//// Repx creates a new repetition pattern
+//func Repx[T, P any](id string, logging bool, pattern Pattern[T, P], min int, max int) *RepPattern[T, P] {
+//	return &RepPattern[T, P]{
+//		id:      id,
+//		logging: logging,
+//		Pattern: pattern,
+//		Min:     min,
+//		Max:     max,
+//		MaxGen:  5,
+//	}
+//}
+//
+//// Rep creates a new repetition pattern
+//func Rep[T, P any](pattern Pattern[T, P], min int, max int) *RepPattern[T, P] {
+//	return Repx("", false, pattern, min, max)
+//}
+//
+//// Optx creates a new optional pattern
+//func Optx[T, P any](id string, logging bool, pattern Pattern[T, P]) *RepPattern[T, P] {
+//	return Repx(id, logging, pattern, 0, 1)
+//}
+//
+//// Opt creates a new optional pattern
+//func Opt[T, P any](pattern Pattern[T, P]) *RepPattern[T, P] {
+//	return Optx("", false, pattern)
+//}
+//
+//// Anyx creates a new any repetition pattern
+//func Anyx[T, P any](id string, logging bool, pattern Pattern[T, P]) *RepPattern[T, P] {
+//	return Repx(id, logging, pattern, 0, 0)
+//}
+//
+//// Any creates a new any repetition pattern
+//func Any[T, P any](pattern Pattern[T, P]) *RepPattern[T, P] {
+//	return Anyx("", false, pattern)
+//}
+//
+//// Nx creates a new repetition pattern for exactly n times
+//func Nx[T, P any](id string, logging bool, pattern Pattern[T, P], n int) *RepPattern[T, P] {
+//	return Repx(id, logging, pattern, n, n)
+//}
+//
+//// N creates a new repetition pattern for exactly n times
+//func N[T, P any](pattern Pattern[T, P], n int) *RepPattern[T, P] {
+//	return Nx("", false, pattern, n)
+//}
+//
+//// ID returns the ID of the repetition pattern
+//func (p *RepPattern[T, P]) ID() string {
+//	return p.id
+//}
+//
+//// Match matches the repetition pattern aginst a stream
+//func (p *RepPattern[T, P]) Match(s Reader[T, P], l MismatchLogger[T, P]) (bool, *Match[T, P], error) {
+//	beginPos, err := s.Position()
+//	if IsStreamError(err) {
+//		return false, nil, err
+//	}
+//
+//	matches := []*Match[T, P]{}
+//
+//	for {
+//		if s.Finished() {
+//			break
+//		}
+//
+//		resetPos, err := s.Position()
+//		if IsStreamError(err) {
+//			return false, nil, err
+//		}
+//
+//		matched, result, err := p.Pattern.Match(s, l)
+//		if err != nil {
+//			return false, nil, err
+//		}
+//
+//		if !matched {
+//			err = s.SetPosition(resetPos)
+//			if IsStreamError(err) {
+//				return false, nil, err
+//			}
+//
+//			break
+//		}
+//
+//		matches = append(matches, result)
+//		if p.Max != 0 && len(matches) == p.Max {
+//			break
+//		}
+//	}
+//
+//	if len(matches) < p.Min {
+//		if p.logging && l != nil {
+//			endPos, err := s.Position()
+//			if IsStreamError(err) {
+//				return false, nil, err
+//			}
+//
+//			l.Log(NewMismatchx[T, P](p, beginPos, endPos, nil, matches))
+//		}
+//
+//		return false, nil, nil
+//	}
+//
+//	endPos, err := s.Position()
+//	if IsStreamError(err) {
+//		return false, nil, err
+//	}
+//
+//	return true, NewMatch[T, P](p, beginPos, endPos, nil, matches), nil
+//}
+//
+//// Generate writes pattern to a writer a random number of times
+//func (p *RepPattern[T, P]) Generate(wr Writer[T]) error {
+//	min := p.Min
+//	max := p.Max
+//
+//	if p.Max == 0 {
+//		max = min + p.MaxGen
+//	}
+//
+//	n := rand.Intn(max-min+1) + min
+//
+//	for i := 0; i < n; i += 1 {
+//		err := p.Pattern.Generate(wr)
+//		if err != nil {
+//			return err
+//		}
+//	}
+//
+//	return nil
+//}
+//
+//// printAny prints EBNF zero or more
+//func (p *RepPattern[T, P]) printAny(wr io.Writer) error {
+//	err := p.Pattern.Print(wr)
+//	if err != nil {
+//		return err
+//	}
+//
+//	_, err = wr.Write([]byte("*"))
+//
+//	return err
+//}
+//
+//// printAny prints EBNF optional
+//func (p *RepPattern[T, P]) printOptional(wr io.Writer) error {
+//	err := p.Pattern.Print(wr)
+//	if err != nil {
+//		return err
+//	}
+//
+//	_, err = wr.Write([]byte("?"))
+//
+//	return err
+//}
+//
+//// printAny prints EBNF at least one
+//func (p *RepPattern[T, P]) printAtLeastOne(wr io.Writer) error {
+//	err := p.Pattern.Print(wr)
+//	if err != nil {
+//		return err
+//	}
+//
+//	_, err = wr.Write([]byte("+"))
+//
+//	return err
+//}
+//
+//// Print EBNF repetition pattern
+//func (p *RepPattern[T, P]) Print(wr io.Writer) error {
+//	if p.Min == 0 && p.Max == 0 {
+//		return p.printAny(wr)
+//	} else if p.Min == 0 && p.Max == 1 {
+//		return p.printOptional(wr)
+//	} else if p.Min == 1 && p.Max == 0 {
+//		return p.printAtLeastOne(wr)
+//	}
+//
+//	var err error
+//	oneValue := p.Min == p.Max
+//
+//	if !oneValue {
+//		_, err = wr.Write([]byte("("))
+//		if err != nil {
+//			return err
+//		}
+//	}
+//
+//	_, err = wr.Write([]byte(fmt.Sprintf("%v * ", p.Min)))
+//	if err != nil {
+//		return err
+//	}
+//
+//	err = p.Pattern.Print(wr)
+//	if err != nil {
+//		return err
+//	}
+//
+//	if !oneValue {
+//		_, err = wr.Write([]byte(fmt.Sprintf(", %v * ", p.Max-p.Min)))
+//		if err != nil {
+//			return err
+//		}
+//
+//		err = p.Pattern.Print(wr)
+//		if err != nil {
+//			return err
+//		}
+//
+//		_, err = wr.Write([]byte("?)"))
+//		if err != nil {
+//			return err
+//		}
+//	}
+//
+//	return nil
+//}
+//
+//// ExceptPattern must not match the Except pattern but must match the MustMatch pattern
+//type ExceptPattern[T, P any] struct {
+//	id        string
+//	logging   bool
+//	MustMatch Pattern[T, P]
+//	Except    Pattern[T, P]
+//}
+//
+//// Exceptx creates a new except pattern
+//func Exceptx[T, P any](id string, logging bool, mustMatch Pattern[T, P], except Pattern[T, P]) *ExceptPattern[T, P] {
+//	return &ExceptPattern[T, P]{
+//		id:        id,
+//		logging:   logging,
+//		MustMatch: mustMatch,
+//		Except:    except,
+//	}
+//}
+//
+//// Except creates a new except pattern
+//func Except[T, P any](mustMatch Pattern[T, P], except Pattern[T, P]) *ExceptPattern[T, P] {
+//	return Exceptx("", false, mustMatch, except)
+//}
+//
+//// ID returns the except pattern ID
+//func (p *ExceptPattern[T, P]) ID() string {
+//	return p.id
+//}
+//
+//// Match matches the exception against a stream
+//func (p *ExceptPattern[T, P]) Match(s Reader[T, P], l MismatchLogger[T, P]) (bool, *Match[T, P], error) {
+//	beginPos, err := s.Position()
+//	if IsStreamError(err) {
+//		return false, nil, err
+//	}
+//
+//	// First check for the exception match, we do not want to match the exception
+//	matched, result, err := p.Except.Match(s, l)
+//	if err != nil {
+//		return false, nil, err
+//	}
+//
+//	if matched {
+//		if p.logging && l != nil {
+//			endPos, err := s.Position()
+//			if IsStreamError(err) {
+//				return false, nil, err
+//			}
+//
+//			l.Log(NewMismatchx[T, P](p, beginPos, endPos, result, nil))
+//		}
+//
+//		return false, nil, nil
+//	}
+//
+//	// Reset the position and return the mustMatch result
+//	err = s.SetPosition(beginPos)
+//	if IsStreamError(err) {
+//		return false, nil, err
+//	}
+//
+//	return p.MustMatch.Match(s, l)
+//}
+//
+//// Generate let's MustMatch generate to writer
+//func (p *ExceptPattern[T, P]) Generate(wr Writer[T]) error {
+//	return p.MustMatch.Generate(wr)
+//}
+//
+//// Print EBNF except pattern
+//func (p *ExceptPattern[T, P]) Print(wr io.Writer) error {
+//	err := p.MustMatch.Print(wr)
+//	if err != nil {
+//		return err
+//	}
+//	_, err = wr.Write([]byte(" - "))
+//	if err != nil {
+//		return err
+//	}
+//
+//	err = p.Except.Print(wr)
+//
+//	return err
+//}
+//
+//// EndPattern matches the end of stream
+//type EndPattern[T, P any] struct {
+//	id      string
+//	logging bool
+//}
+//
+//// EndF creates a new end of stream pattern
+//func Endx[T, P any](id string, logging bool) *EndPattern[T, P] {
+//	return &EndPattern[T, P]{
+//		id:      id,
+//		logging: logging,
+//	}
+//}
+//
+//// End creates a new end of stream pattern
+//func End[T, P any]() *EndPattern[T, P] {
+//	return Endx[T, P]("", false)
+//}
+//
+//// ID returns end of stream pattern ID
+//func (p *EndPattern[T, P]) ID() string {
+//	return p.id
+//}
+//
+//// Match matches a end of stream pattern against a stream
+//func (p *EndPattern[T, P]) Match(s Reader[T, P], l MismatchLogger[T, P]) (bool, *Match[T, P], error) {
+//	pos, err := s.Position()
+//	if IsStreamError(err) {
+//		return false, nil, err
+//	}
+//
+//	if s.Finished() {
+//		return true, NewMatch[T, P](p, pos, pos, nil, nil), nil
+//	}
+//
+//	if p.logging && l != nil {
+//		l.Log(NewMismatch[T, P](p, pos, pos))
+//	}
+//
+//	return false, nil, nil
+//}
+//
+//// Generate sends finish to writer
+//func (p *EndPattern[T, P]) Generate(wr Writer[T]) error {
+//	return wr.Finish()
+//}
+//
+//// Print EBNF end of stream (does nothing)
+//func (p *EndPattern[T, P]) Print(wr io.Writer) error {
+//	return nil
+//}

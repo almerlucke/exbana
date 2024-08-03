@@ -1,4 +1,4 @@
-package exbana
+package examples
 
 func Example_jsonSpec() {
 	// s := NewRuneStream("testing {hallo}hallo this :330ehallo")

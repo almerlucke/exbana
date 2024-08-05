@@ -2,137 +2,13 @@ package tests
 
 import (
 	ebnf "github.com/almerlucke/exbana/v2"
-	"github.com/almerlucke/exbana/v2/patterns/concat"
-	"github.com/almerlucke/exbana/v2/patterns/entity"
-	"github.com/almerlucke/exbana/v2/patterns/vector"
+	alt "github.com/almerlucke/exbana/v2/patterns/alternation"
+	vec "github.com/almerlucke/exbana/v2/patterns/vector"
 	"github.com/almerlucke/exbana/v2/readers/runes"
-	"io"
 	"math/rand"
 	"strings"
 	"testing"
-	"unicode"
 )
-
-type RuneStream struct {
-	values []rune
-	pos    int
-}
-
-func NewRuneStream(str string) *RuneStream {
-	return &RuneStream{
-		values: []rune(str),
-		pos:    0,
-	}
-}
-
-func (ts *RuneStream) Peek1() (rune, error) {
-	if ts.pos < len(ts.values) {
-		return ts.values[ts.pos], nil
-	}
-
-	return 0, io.EOF
-}
-
-func (ts *RuneStream) Peek(n int, buf []rune) (int, error) {
-	i := 0
-	p := ts.pos
-	l := len(ts.values)
-
-	for i < n && p < l {
-		buf[i] = ts.values[p]
-		p++
-		i++
-	}
-
-	if i != n {
-		return i, io.EOF
-	}
-
-	return i, nil
-}
-
-func (ts *RuneStream) Read1() (rune, error) {
-	if ts.pos < len(ts.values) {
-		v := ts.values[ts.pos]
-		ts.pos++
-		return v, nil
-	}
-
-	return 0, io.EOF
-}
-
-func (ts *RuneStream) Read(n int, buf []rune) (int, error) {
-	i := 0
-	l := len(ts.values)
-
-	for i < n && ts.pos < l {
-		buf[i] = ts.values[ts.pos]
-		ts.pos++
-		i++
-	}
-
-	if i != n {
-		return i, io.EOF
-	}
-
-	return i, nil
-}
-
-func (ts *RuneStream) Skip(n int) (int, error) {
-	m := len(ts.values) - ts.pos
-	if n > m {
-		n = m
-	}
-
-	ts.pos += n
-
-	if n == m {
-		return n, io.EOF
-	}
-
-	return n, nil
-}
-
-func (ts *RuneStream) Finished() bool {
-	return ts.pos >= len(ts.values)
-}
-
-func (ts *RuneStream) Position() (int, error) {
-	if ts.pos >= len(ts.values) {
-		return ts.pos, io.EOF
-	}
-
-	return ts.pos, nil
-}
-
-func (ts *RuneStream) SetPosition(pos int) error {
-	ts.pos = pos
-	if ts.pos >= len(ts.values) {
-		return io.EOF
-	}
-
-	return nil
-}
-
-func (ts *RuneStream) Range(begin int, end int) ([]rune, error) {
-	return ts.values[begin:end], nil
-}
-
-func (ts *RuneStream) Write(objs ...rune) error {
-	for _, obj := range objs {
-		ts.values = append(ts.values, obj)
-	}
-
-	return nil
-}
-
-func (ts *RuneStream) Runes() []rune {
-	return ts.values
-}
-
-func (ts *RuneStream) Finish() error {
-	return nil
-}
 
 func runeEntityEqual(o1 rune, o2 rune) bool {
 	return o1 == o2
@@ -174,7 +50,7 @@ func randomRuneFunc(str string) func() rune {
 //	digit.PrintOutput = "[0-9]"
 //	alphabeticCharacter := runeFuncMatchx("alphachar", func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
 //	alphabeticCharacter.PrintOutput = "[A-Z]"
-//	anyAlnum := Any[rune, int](Alt[rune, int](alphabeticCharacter, digit))
+//	anyAlnum := Any[rune, int](Alternation[rune, int](alphabeticCharacter, digit))
 //	identifier := Concatx[rune, int]("identifier", false, alphabeticCharacter, anyAlnum)
 //	digitMinusZero := Exceptx[rune, int]("digit_minus_zero", false, digit, zero)
 //
@@ -218,10 +94,10 @@ func randomRuneFunc(str string) func() rune {
 // 	anyDigit := Any(digit)
 // 	alphabeticCharacter := runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
 // 	alphabeticCharacter.(*UnitPattern).GenerateFunc = randomRuneFunc("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-// 	anyAlnum := Any(Alt(alphabeticCharacter, digit))
+// 	anyAlnum := Any(Alternation(alphabeticCharacter, digit))
 // 	identifier := Concatx("identifier", false, alphabeticCharacter, anyAlnum)
 // 	number := Concatx("number", false, Opt(minus), digit, anyDigit)
-// 	assignmentRightSide := Alt(number, identifier, stringValue)
+// 	assignmentRightSide := Alternation(number, identifier, stringValue)
 // 	assignment := Concatx("assignment", false, identifier, assignSymbol, assignmentRightSide)
 // 	programTerminal := runeSeries("PROGRAM")
 // 	beginTerminal := runeSeries("BEGIN")
@@ -272,18 +148,19 @@ func runeEq(o1 rune, o2 rune) bool {
 //	})
 //}
 
-func runeVector(vec []rune) *vector.Vector[rune, runes.Pos] {
-	return vector.New[rune, runes.Pos](runeEq, vec...)
+func runeVector(v []rune) *vec.Vector[rune, runes.Pos] {
+	return vec.New[rune, runes.Pos](runeEq, v...)
 }
 
 func TestExbana(t *testing.T) {
-	r, _ := runes.New(strings.NewReader("test\r\nad1:=3da"))
+	r, _ := runes.New(strings.NewReader("test\r\nad1:==3da"))
 
-	isDigit := entity.New[rune, runes.Pos](unicode.IsDigit)
-	assignment := runeVector([]rune(":="))
-	conc := concat.New[rune, runes.Pos](isDigit, assignment, isDigit).SetID("digit assign digit")
+	// isDigit := entity.New[rune, runes.Pos](unicode.IsDigit)
+	as1 := runeVector([]rune(":="))
+	as2 := runeVector([]rune(":=="))
+	alt := alt.New[rune, runes.Pos](as1, as2).SetID("assign length")
 
-	results, err := ebnf.Scan(r, conc)
+	results, err := ebnf.Scan(r, alt)
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
@@ -422,10 +299,10 @@ func TestExbana(t *testing.T) {
 // 	digit := runeFuncMatch(unicode.IsDigit)
 // 	anyDigit := Any(digit)
 // 	alphabeticCharacter := runeFuncMatch(func(r rune) bool { return unicode.IsUpper(r) && unicode.IsLetter(r) })
-// 	anyAlnum := Any(Alt(alphabeticCharacter, digit))
+// 	anyAlnum := Any(Alternation(alphabeticCharacter, digit))
 // 	identifier := Concatx("identifier", false, alphabeticCharacter, anyAlnum)
 // 	number := Concatx("number", false, Opt(minus), digit, anyDigit)
-// 	assignmentRightSide := Alt(number, identifier, stringValue)
+// 	assignmentRightSide := Alternation(number, identifier, stringValue)
 // 	assignment := Concatx("assignment", false, identifier, assignSymbol, assignmentRightSide)
 // 	programTerminal := runeSeries("PROGRAM")
 // 	beginTerminal := runeSeries("BEGIN")

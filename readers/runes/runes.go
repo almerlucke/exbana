@@ -157,3 +157,7 @@ func (r *Reader) Range(p1 Pos, p2 Pos) ([]rune, error) {
 
 	return r.data[p1.Index:p2.Index], nil
 }
+
+func (r *Reader) Length(p1 Pos, p2 Pos) int {
+	return p2.Index - p1.Index
+}

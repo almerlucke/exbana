@@ -1,19 +1,19 @@
-package concat
+package concatenation
 
 import (
 	ebnf "github.com/almerlucke/exbana/v2"
 	"io"
 )
 
-// Concat matches a series of patterns AND style in order (concatenation)
-type Concat[T, P any] struct {
+// Concatenation matches a series of patterns AND style in order (concatenation)
+type Concatenation[T, P any] struct {
 	*ebnf.BasePattern[T, P]
 	patterns ebnf.Patterns[T, P]
 }
 
-// New creates a new concat pattern
-func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Concat[T, P] {
-	c := &Concat[T, P]{
+// New creates a new concatenation pattern
+func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Concatenation[T, P] {
+	c := &Concatenation[T, P]{
 		BasePattern: ebnf.NewBasePattern[T, P](),
 		patterns:    patterns,
 	}
@@ -23,8 +23,8 @@ func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Concat[T, P] {
 	return c
 }
 
-// Match matches AND against a stream, fails if any of the patterns mismatches
-func (c *Concat[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) {
+// Match matches AND against a stream, fails if any of the sub patterns mismatches
+func (c *Concatenation[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) {
 	var matches []*ebnf.Match[T, P]
 
 	beginPos, err := rd.Position()
@@ -66,7 +66,7 @@ func (c *Concat[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 }
 
 // Generate writes a concatenation of patterns to a writer
-func (c *Concat[T, P]) Generate(w ebnf.Writer[T]) error {
+func (c *Concatenation[T, P]) Generate(w ebnf.Writer[T]) error {
 	for _, child := range c.patterns {
 		err := child.Generate(w)
 		if err != nil {
@@ -78,7 +78,7 @@ func (c *Concat[T, P]) Generate(w ebnf.Writer[T]) error {
 }
 
 // Print EBNF concatenation group
-func (c *Concat[T, P]) Print(w io.Writer) error {
+func (c *Concatenation[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte("("))
 	if err != nil {
 		return err

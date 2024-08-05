@@ -12,4 +12,5 @@ type Reader[T, P any] interface {
 	Position() (P, error)
 	SetPosition(P) error
 	Range(P, P) ([]T, error)
+	Length(P, P) int
 }

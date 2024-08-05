@@ -25,5 +25,13 @@ _cgo_export.*
 
 *.code-workspace
 
+# Work
 go.work
 go.work.sum
+
+# GoLand
+.idea/
+
+# VSCode
+.vscode/
+

@@ -19,9 +19,10 @@ type Repetition[T, P any] struct {
 // New creates a new repetition pattern
 func New[T, P any](pattern ebnf.Pattern[T, P], min int, max int) *Repetition[T, P] {
 	rep := &Repetition[T, P]{
-		pattern: pattern,
-		min:     min,
-		max:     max,
+		BasePattern: ebnf.NewBasePattern[T, P](),
+		pattern:     pattern,
+		min:         min,
+		max:         max,
 	}
 
 	rep.SetSelf(rep)
@@ -86,7 +87,7 @@ func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P]
 			return false, nil, err
 		}
 
-		rep.Logger().LogMismatch(ebnf.NewMismatch[T, P](rep, beginPos, endPos, nil, matches))
+		rep.Logger().LogMismatch(ebnf.NewMismatch(rep, beginPos, endPos, nil, matches))
 
 		return false, nil, nil
 	}
@@ -96,7 +97,7 @@ func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P]
 		return false, nil, err
 	}
 
-	return true, ebnf.NewMatch[T, P](rep, beginPos, endPos, nil, matches), nil
+	return true, ebnf.NewMatch(rep, beginPos, endPos, nil, matches), nil
 }
 
 // SetMaxGen sets the maximum generated entities on top of min

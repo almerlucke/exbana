@@ -94,7 +94,7 @@ func (c *Concatenation[T, P]) Print(w io.Writer) error {
 			}
 		}
 
-		err = ebnf.PrintChild(w, child)
+		err = child.PrintAsChild(w)
 		if err != nil {
 			return err
 		}

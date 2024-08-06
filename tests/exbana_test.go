@@ -2,7 +2,8 @@ package tests
 
 import (
 	ebnf "github.com/almerlucke/exbana/v2"
-	alt "github.com/almerlucke/exbana/v2/patterns/alternation"
+	ent "github.com/almerlucke/exbana/v2/patterns/entity"
+	rep "github.com/almerlucke/exbana/v2/patterns/repetition"
 	vec "github.com/almerlucke/exbana/v2/patterns/vector"
 	"github.com/almerlucke/exbana/v2/readers/runes"
 	"math/rand"
@@ -122,19 +123,20 @@ func randomRuneFunc(str string) func() rune {
 
 //}
 
-func evalToString(m *ebnf.Match[rune, int], _ ebnf.Reader[rune, int]) (any, error) {
-	return string(m.Value.([]rune)), nil
-}
+//func evalToString(m *ebnf.Match[rune, int], _ ebnf.Reader[rune, int]) (any, error) {
+//	return string(m.Value.([]rune)), nil
+//}
 
 func runeEq(o1 rune, o2 rune) bool {
 	return o1 == o2
 }
 
-//func runeMatch(r rune) *UnitPattern[rune, int] {
-//	return Unit[rune, int](func(obj rune) bool {
-//		return obj == r
-//	})
-//}
+func runeMatch(r rune) *ent.Entity[rune, runes.Pos] {
+	return ent.New[rune, runes.Pos](func(obj rune) bool {
+		return obj == r
+	})
+}
+
 //
 //func runeFuncMatch(rf func(rune) bool) *UnitPattern[rune, int] {
 //	return Unit[rune, int](func(obj rune) bool {
@@ -153,14 +155,15 @@ func runeVector(v []rune) *vec.Vector[rune, runes.Pos] {
 }
 
 func TestExbana(t *testing.T) {
-	r, _ := runes.New(strings.NewReader("test\r\nad1:==3da"))
+	r, _ := runes.New(strings.NewReader("test\r\nad1:==333da"))
 
 	// isDigit := entity.New[rune, runes.Pos](unicode.IsDigit)
-	as1 := runeVector([]rune(":="))
-	as2 := runeVector([]rune(":=="))
-	alt := alt.New[rune, runes.Pos](as1, as2).SetID("assign length")
+	//as1 := runeVector([]rune(":="))
+	//as2 := runeVector([]rune(":=="))
+	//alt := alt.New[rune, runes.Pos](as1, as2).SetID("assign length")
+	rpt := rep.New[rune, runes.Pos](runeMatch('3'), 1, 3)
 
-	results, err := ebnf.Scan(r, alt)
+	results, err := ebnf.Scan[rune, runes.Pos](r, rpt)
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}

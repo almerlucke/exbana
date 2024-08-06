@@ -52,7 +52,7 @@ func (a *Alternation[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P],
 				return false, nil, err
 			}
 
-			matches = append(matches, ebnf.NewMatch[T, P](a, beginPos, endPos, nil, []*ebnf.Match[T, P]{result}))
+			matches = append(matches, ebnf.NewMatch(a, beginPos, endPos, nil, []*ebnf.Match[T, P]{result}))
 		}
 	}
 
@@ -105,7 +105,7 @@ func (a *Alternation[T, P]) Print(w io.Writer) error {
 			}
 		}
 
-		err = ebnf.PrintChild(w, child)
+		err = child.PrintAsChild(w)
 		if err != nil {
 			return err
 		}

@@ -15,6 +15,7 @@ type Pattern[T, P any] interface {
 	Eval(*Match[T, P], Reader[T, P]) (any, error)
 	Generate(Writer[T]) error
 	Print(io.Writer) error
+	PrintAsChild(io.Writer) error
 	PrintOutput() string
 	SetPrintOutput(string) Pattern[T, P]
 }
@@ -69,6 +70,22 @@ func (p *BasePattern[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte(p.self.PrintOutput()))
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (p *BasePattern[T, P]) PrintAsChild(w io.Writer) error {
+	if id := p.self.ID(); id != "" {
+		_, err := w.Write([]byte(id))
+		if err != nil {
+			return err
+		}
+	} else {
+		err := p.self.Print(w)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

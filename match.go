@@ -39,6 +39,21 @@ func (m *Match[T, P]) Optional() (*Match[T, P], bool) {
 	return nil, false
 }
 
+func (m *Match[T, P]) Unpack() *Match[T, P] {
+	// Unpack components until we can not unpack anymore (useful to get to the first real match in Alternation pattern for example)
+	u := m
+
+	for u.Pattern.CanUnpack() && len(u.Components) > 0 && u.Pattern.ID() == NoID {
+		u = u.Components[0]
+	}
+
+	return u
+}
+
+func (m *Match[T, P]) ID() string {
+	return m.Pattern.ID()
+}
+
 func (m *Match[T, P]) Eval(r Reader[T, P]) (any, error) {
 	return m.Pattern.Eval(m, r)
 }

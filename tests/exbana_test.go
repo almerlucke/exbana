@@ -2,14 +2,51 @@ package tests
 
 import (
 	ebnf "github.com/almerlucke/exbana/v2"
+	"github.com/almerlucke/exbana/v2/patterns/alternation"
+	"github.com/almerlucke/exbana/v2/patterns/concatenation"
 	ent "github.com/almerlucke/exbana/v2/patterns/entity"
-	rep "github.com/almerlucke/exbana/v2/patterns/repetition"
+	"github.com/almerlucke/exbana/v2/patterns/repetition"
 	vec "github.com/almerlucke/exbana/v2/patterns/vector"
 	"github.com/almerlucke/exbana/v2/readers/runes"
 	"math/rand"
 	"strings"
 	"testing"
+	"unicode"
 )
+
+/*
+Comments serve as program documentation. There are two forms:
+
+Line comments start with the character sequence / and stop at the end of the line.
+General comments start with the character sequence and stop with the first subsequent character sequence
+A comment cannot start inside a rune or string literal, or inside a comment. A general comment containing no newlines acts like a space. Any other comment acts like a newline.
+
+Tokens form the vocabulary of the Go language. There are four classes: identifiers, keywords, operators and punctuation, and literals. White space, formed from spaces (U+0020),
+horizontal tabs (U+0009), carriage returns (U+000D), and newlines (U+000A),
+is ignored except as it separates tokens that would otherwise combine into a single token. Also, a newline or end of file may trigger the insertion of a semicolon.
+While breaking the input into tokens, the next token is the longest sequence of characters that form a valid token.
+
+
+func test(a float64) {
+
+}
+
+func test(a [int], b {string:int}) bool {
+
+}
+
+var a [int]
+var m {int:int}
+
+for i, v in a {
+	test(a: 2)
+}
+
+for k, v in m {
+
+}
+
+*/
 
 func runeEntityEqual(o1 rune, o2 rune) bool {
 	return o1 == o2
@@ -40,8 +77,8 @@ func runeEntityEqual(o1 rune, o2 rune) bool {
 // go test -run TestExbanaEntitySeries -v
 
 func randomRuneFunc(str string) func() rune {
-	runes := []rune(str)
-	return func() rune { return runes[rand.Intn(len(runes))] }
+	rs := []rune(str)
+	return func() rune { return rs[rand.Intn(len(rs))] }
 }
 
 //func TestPrint(t *testing.T) {
@@ -137,12 +174,24 @@ func runeMatch(r rune) *ent.Entity[rune, runes.Pos] {
 	})
 }
 
-//
-//func runeFuncMatch(rf func(rune) bool) *UnitPattern[rune, int] {
-//	return Unit[rune, int](func(obj rune) bool {
-//		return rf(obj)
-//	})
-//}
+func runeFuncMatch(rf func(rune) bool) *ent.Entity[rune, runes.Pos] {
+	return ent.New[rune, runes.Pos](func(obj rune) bool {
+		return rf(obj)
+	})
+}
+
+func runeMatch2(r1 rune, r2 rune) *ent.Entity[rune, runes.Pos] {
+	return ent.New[rune, runes.Pos](func(obj rune) bool {
+		return obj == r1 || obj == r2
+	})
+}
+
+func runeBetween(r1 rune, r2 rune) *ent.Entity[rune, runes.Pos] {
+	return ent.New[rune, runes.Pos](func(obj rune) bool {
+		return obj >= r1 && obj <= r2
+	})
+}
+
 //
 //func runeFuncMatchx(id string, rf func(rune) bool) *UnitPattern[rune, int] {
 //	return Unitx[rune, int](id, false, func(obj rune) bool {
@@ -154,22 +203,79 @@ func runeVector(v []rune) *vec.Vector[rune, runes.Pos] {
 	return vec.New[rune, runes.Pos](runeEq, v...)
 }
 
+func conc(patterns ...ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+	return concatenation.New[rune, runes.Pos](patterns...)
+}
+
+func rep(pattern ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+	return repetition.New[rune, runes.Pos](pattern, 0, 0)
+}
+
+func alt(patterns ...ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+	return alternation.New[rune, runes.Pos](patterns...)
+}
+
+func opt(pattern ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+	return repetition.New[rune, runes.Pos](pattern, 0, 1)
+}
+
+// https://go.dev/ref/spec#byte_value
 func TestExbana(t *testing.T) {
-	r, _ := runes.New(strings.NewReader("test\r\nad1:==333da"))
+	rd, _ := runes.New(strings.NewReader("_identifier 123 0.23 2e3 tipie 0x7ff"))
 
-	// isDigit := entity.New[rune, runes.Pos](unicode.IsDigit)
-	//as1 := runeVector([]rune(":="))
-	//as2 := runeVector([]rune(":=="))
-	//alt := alt.New[rune, runes.Pos](as1, as2).SetID("assign length")
-	rpt := rep.New[rune, runes.Pos](runeMatch('3'), 1, 3)
+	//newLine := runeMatch('\n')
+	//unicodeChar := runeFuncMatch(func(r rune) bool { return r != '\n' })
+	//unicodeLetter := runeFuncMatch(unicode.IsLetter)
+	underscore := runeMatch('_')
+	dot := runeMatch('.')
+	zero := runeMatch('0')
 
-	results, err := ebnf.Scan[rune, runes.Pos](r, rpt)
+	unicodeDigit := runeFuncMatch(unicode.IsDigit)
+
+	letter := runeFuncMatch(func(r rune) bool { return unicode.IsLetter(r) || r == '_' })
+
+	decimalDigit := runeFuncMatch(unicode.IsDigit)
+	binaryDigit := runeMatch2('0', '1')
+	octalDigit := runeBetween('0', '7')
+	hexDigit := runeFuncMatch(func(r rune) bool {
+		return (r >= '0' && r <= '9') || (r >= 'A' && r <= 'F') || (r >= 'a' && r <= 'f')
+	})
+
+	identifier := conc(letter, rep(alt(letter, unicodeDigit))).SetID("identifier")
+
+	hexDigits := conc(hexDigit, rep(conc(opt(underscore), hexDigit)))
+	hexLit := conc(zero, runeMatch2('x', 'X'), opt(underscore), hexDigits).SetID("hexLit")
+
+	octalDigits := conc(octalDigit, rep(conc(opt(underscore), octalDigit)))
+	octalLit := conc(zero, opt(runeMatch2('o', 'O')), opt(underscore), octalDigits).SetID("octalLit")
+
+	binaryDigits := conc(binaryDigit, rep(conc(opt(underscore), binaryDigit)))
+	binaryLit := conc(zero, runeMatch2('b', 'B'), opt(underscore), binaryDigits).SetID("binaryLit")
+
+	decimalDigits := conc(decimalDigit, rep(conc(opt(underscore), decimalDigit)))
+	decimalLit := conc(alt(zero, runeBetween('1', '9')), opt(conc(opt(underscore), decimalDigits))).SetID("decimalLit")
+
+	intLit := alt(decimalLit, binaryLit, octalLit, hexLit)
+
+	decimalExponent := conc(runeMatch2('e', 'E'), opt(runeMatch2('+', '-')), decimalDigits)
+	decimalFloatLit := alt(conc(decimalDigits, dot, opt(decimalDigits), opt(decimalExponent)), conc(decimalDigits, decimalExponent), conc(dot, decimalDigits, opt(decimalExponent))).SetID("decimalFloatLit")
+
+	hexMantissa := alt(conc(opt(underscore), hexDigits, dot, opt(hexDigits)), conc(opt(underscore), hexDigits), conc(dot, hexDigits))
+	hexExponent := conc(runeMatch2('p', 'P'), opt(runeMatch2('+', '-')), decimalDigits)
+	hexFloatLit := conc(zero, runeMatch2('x', 'X'), hexMantissa, hexExponent).SetID("hexFloatLit")
+
+	floatLit := alt(decimalFloatLit, hexFloatLit)
+
+	token := alt(identifier, intLit, floatLit)
+
+	results, err := ebnf.Scan[rune, runes.Pos](rd, token)
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
 
 	for _, result := range results {
-		s, _ := r.Range(result.Begin, result.End)
+		result = result.Unpack()
+		s, _ := rd.Range(result.Begin, result.End)
 		t.Logf("result %v: %v - pos %d", result.Pattern.ID(), string(s), result.Begin)
 	}
 

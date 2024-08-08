@@ -2,9 +2,14 @@ package exbana
 
 import "io"
 
+const (
+	NoID = ""
+)
+
 // Pattern can match objects from a stream, generate objects to write to a stream, print and has an identifier
 type Pattern[T, P any] interface {
 	Match(Reader[T, P]) (bool, *Match[T, P], error)
+	CanUnpack() bool
 	ID() string
 	SetID(string) Pattern[T, P]
 	Logger() Logger[T, P]
@@ -93,6 +98,10 @@ func (p *BasePattern[T, P]) PrintAsChild(w io.Writer) error {
 
 func (p *BasePattern[T, P]) Generate(_ Writer[T]) error {
 	return nil
+}
+
+func (p *BasePattern[T, P]) CanUnpack() bool {
+	return false
 }
 
 func (p *BasePattern[T, P]) Match(_ Reader[T, P]) (bool, *Match[T, P], error) {

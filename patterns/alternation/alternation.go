@@ -9,7 +9,8 @@ import (
 // Alternation matches a series of patterns OR style in order (alternation)
 type Alternation[T, P any] struct {
 	*ebnf.BasePattern[T, P]
-	patterns ebnf.Patterns[T, P]
+	patterns     ebnf.Patterns[T, P]
+	isOrthogonal bool // if orthogonal we stop at first match as we know input is not related
 }
 
 // New creates a new Alternation pattern
@@ -21,6 +22,12 @@ func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Alternation[T, P] {
 
 	a.SetSelf(a)
 
+	return a
+}
+
+// SetOrthogonal sets orthogonal or not
+func (a *Alternation[T, P]) SetOrthogonal(ortho bool) *Alternation[T, P] {
+	a.isOrthogonal = ortho
 	return a
 }
 
@@ -36,7 +43,7 @@ func (a *Alternation[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P],
 	}
 
 	for _, pm := range a.patterns {
-		err := r.SetPosition(beginPos)
+		err = r.SetPosition(beginPos)
 		if ebnf.IsStreamError(err) {
 			return false, nil, err
 		}
@@ -52,14 +59,22 @@ func (a *Alternation[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P],
 				return false, nil, err
 			}
 
-			matches = append(matches, ebnf.NewMatch(a, beginPos, endPos, nil, []*ebnf.Match[T, P]{result}))
+			match := ebnf.NewMatch(a, beginPos, endPos, nil, []*ebnf.Match[T, P]{result})
+
+			// if set of alternations is orthogonal we know there is no relation between the entities in the set
+			// so we can stop at first match
+			if a.isOrthogonal {
+				return true, match, nil
+			}
+
+			matches = append(matches, match)
 		}
 	}
 
 	if len(matches) > 0 {
 		var (
 			longestMatch *ebnf.Match[T, P]
-			length       int
+			length       = -1
 		)
 
 		for _, match := range matches {
@@ -67,6 +82,13 @@ func (a *Alternation[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P],
 			if matchLength > length {
 				length = matchLength
 				longestMatch = match
+			}
+		}
+
+		if longestMatch != nil {
+			err = r.SetPosition(longestMatch.End)
+			if ebnf.IsStreamError(err) {
+				return false, nil, err
 			}
 		}
 
@@ -81,6 +103,10 @@ func (a *Alternation[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P],
 	a.Logger().LogMismatch(ebnf.NewMismatch[T, P](a, beginPos, endPos, nil, nil))
 
 	return false, nil, nil
+}
+
+func (a *Alternation[T, P]) CanUnpack() bool {
+	return true
 }
 
 // Generate writes an alternation of patterns to a writer, randomly chosen

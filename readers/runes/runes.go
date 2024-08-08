@@ -2,7 +2,7 @@ package runes
 
 import (
 	"bufio"
-	"errors"
+	"fmt"
 	"io"
 )
 
@@ -143,16 +143,16 @@ func (r *Reader) Position() (Pos, error) {
 }
 
 func (r *Reader) SetPosition(p Pos) error {
-	if p.Index < 0 || p.Index >= len(r.data) {
-		return errors.New("position out of bounds")
+	if p.Index < 0 || p.Index > len(r.data) {
+		return fmt.Errorf("position out of bounds: %v", p)
 	}
 	r.pos = p
 	return nil
 }
 
 func (r *Reader) Range(p1 Pos, p2 Pos) ([]rune, error) {
-	if p1.Index < 0 || p1.Index >= len(r.data) || p2.Index < 0 || p2.Index >= len(r.data) {
-		return nil, errors.New("position out of bounds")
+	if p1.Index < 0 || p1.Index >= len(r.data) || p2.Index < 0 || p2.Index > len(r.data) {
+		return nil, fmt.Errorf("len(%d) -> position(s) out of bounds: %v - %v", len(r.data), p1, p2)
 	}
 
 	return r.data[p1.Index:p2.Index], nil

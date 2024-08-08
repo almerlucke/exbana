@@ -11,9 +11,13 @@ type End[T, P any] struct {
 
 // New creates a new end of stream pattern
 func New[T, P any]() *End[T, P] {
-	return &End[T, P]{
+	e := &End[T, P]{
 		BasePattern: ebnf.NewBasePattern[T, P](),
 	}
+
+	e.SetSelf(e)
+
+	return e
 }
 
 // Match matches a end of stream pattern against a stream

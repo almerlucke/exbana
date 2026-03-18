@@ -1,3 +1,5 @@
+// Package exbana is a versatile and generic EBNF-based pattern matching and generation library for Go.
+// It allows you to define complex patterns using common EBNF constructs and match them against any stream of objects.
 package exbana
 
 import (
@@ -11,7 +13,8 @@ func IsStreamError(err error) bool {
 	return err != nil && err != io.EOF
 }
 
-// Scan stream for pattern and return all results
+// Scan scans a stream for a pattern and returns all match results.
+// It skips one element at a time if the pattern does not match at the current position.
 func Scan[T, P any](stream Reader[T, P], pattern Pattern[T, P]) ([]*Match[T, P], error) {
 	var results []*Match[T, P]
 
@@ -41,7 +44,7 @@ func Scan[T, P any](stream Reader[T, P], pattern Pattern[T, P]) ([]*Match[T, P],
 	return results, nil
 }
 
-// PrintRules prints all rules and returns a string
+// PrintRules prints a slice of patterns in EBNF rule format (e.g., "id = pattern") and returns the result as a string.
 func PrintRules[T, P any](patterns []Pattern[T, P]) (string, error) {
 	var buf bytes.Buffer
 

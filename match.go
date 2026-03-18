@@ -20,7 +20,8 @@ func NewMatch[T, P any](pattern Pattern[T, P], begin P, end P, value []T, compon
 	}
 }
 
-// Values for components (Concat & Repeat)
+// Match returns the matched components' values.
+// This is particularly useful for patterns like Concatenation or Repetition that have multiple sub-matches.
 func (m *Match[T, P]) Values() []any {
 	components := m.Components
 	values := make([]any, len(components))
@@ -30,7 +31,8 @@ func (m *Match[T, P]) Values() []any {
 	return values
 }
 
-// Optional match (Alt)
+// Optional returns the first component match and true if it exists, nil and false otherwise.
+// This is useful for Alternation or Optional Repetition patterns.
 func (m *Match[T, P]) Optional() (*Match[T, P], bool) {
 	if len(m.Components) > 0 {
 		return m.Components[0], true
@@ -39,8 +41,10 @@ func (m *Match[T, P]) Optional() (*Match[T, P], bool) {
 	return nil, false
 }
 
+// Unpack navigates through the match hierarchy to find the first match from a pattern with an ID,
+// or the deepest match if no ID is set. This is useful for stripping away wrapper patterns (like Alternation)
+// that don't have their own ID.
 func (m *Match[T, P]) Unpack() *Match[T, P] {
-	// Unpack components until we can not unpack anymore (useful to get to the first real match in Alternation pattern for example)
 	u := m
 
 	for u.Pattern.CanUnpack() && len(u.Components) > 0 && u.Pattern.ID() == NoID {

@@ -12,6 +12,10 @@ type Pos struct {
 	Index int
 }
 
+func (p Pos) Compare(op Pos) int {
+	return p.Index - op.Index
+}
+
 type Reader struct {
 	data []rune
 	pos  Pos

@@ -1,16 +1,16 @@
 package exbana
 
-// Mismatch can hold information about a pattern mismatch and possibly the sub pattern that caused the mismatch
-// and the sub patterns that matched so far
+// Mismatch stores information about a failed pattern match.
+// It can include the pattern that failed, the position, and sub-patterns that either matched or failed.
 type Mismatch[T, P any] struct {
-	Pattern   Pattern[T, P]
-	Begin     P
-	End       P
-	Unmatched *Match[T, P]
-	Matched   []*Match[T, P]
+	Pattern   Pattern[T, P]  // The pattern that failed to match.
+	Begin     P              // The position where the match attempt began.
+	End       P              // The position where the match attempt failed.
+	Unmatched *Match[T, P]   // The sub-match that caused the overall failure.
+	Matched   []*Match[T, P] // Sub-matches that were successful before the failure.
 }
 
-// NewMismatch creates a new pattern mismatch
+// NewMismatch creates a new Mismatch instance.
 func NewMismatch[T, P any](pattern Pattern[T, P], begin P, end P, unmatched *Match[T, P], matched []*Match[T, P]) *Mismatch[T, P] {
 	return &Mismatch[T, P]{
 		Pattern:   pattern,

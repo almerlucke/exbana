@@ -1,6 +1,8 @@
 package vector
 
 import (
+	"io"
+
 	ebnf "github.com/almerlucke/exbana/v2"
 )
 
@@ -65,4 +67,9 @@ func (v *Vector[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 // Generate writes a series of entities to a writer
 func (v *Vector[T, P]) Generate(wr ebnf.Writer[T]) error {
 	return wr.Write(v.vector...)
+}
+
+func (v *Vector[T, P]) Print(w io.Writer) error {
+	_, err := w.Write([]byte(v.PrintOutput()))
+	return err
 }

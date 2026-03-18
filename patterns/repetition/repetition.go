@@ -2,18 +2,22 @@ package repetition
 
 import (
 	"fmt"
-	ebnf "github.com/almerlucke/exbana/v2"
 	"io"
 	"math/rand"
+
+	ebnf "github.com/almerlucke/exbana/v2"
 )
 
-// Repetition matches a pattern repetition
+// Repetition matches a sub-pattern multiple times.
+// By default, it's greedy and allows backtracking in concatenation patterns.
+// If Possessive is set to true, it will not give back matches during backtracking.
 type Repetition[T, P any] struct {
 	*ebnf.BasePattern[T, P]
-	pattern ebnf.Pattern[T, P]
-	min     int
-	max     int
-	maxGen  int
+	pattern    ebnf.Pattern[T, P]
+	min        int
+	max        int
+	maxGen     int
+	possessive bool
 }
 
 // New creates a new repetition pattern
@@ -23,6 +27,7 @@ func New[T, P any](pattern ebnf.Pattern[T, P], min int, max int) *Repetition[T, 
 		pattern:     pattern,
 		min:         min,
 		max:         max,
+		maxGen:      1,
 	}
 
 	rep.SetSelf(rep)
@@ -40,6 +45,23 @@ func Any[T, P any](pattern ebnf.Pattern[T, P]) *Repetition[T, P] {
 
 func OneOrMore[T, P any](pattern ebnf.Pattern[T, P]) *Repetition[T, P] {
 	return New[T, P](pattern, 1, 0)
+}
+
+func (rep *Repetition[T, P]) Possessive() bool {
+	return rep.possessive
+}
+
+func (rep *Repetition[T, P]) SetPossessive(possessive bool) *Repetition[T, P] {
+	rep.possessive = possessive
+	return rep
+}
+
+func (rep *Repetition[T, P]) Min() int {
+	return rep.min
+}
+
+func (rep *Repetition[T, P]) Max() int {
+	return rep.max
 }
 
 // Match matches the repetition pattern aginst a stream
@@ -76,6 +98,7 @@ func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P]
 		}
 
 		matches = append(matches, result)
+
 		if rep.max != 0 && len(matches) == rep.max {
 			break
 		}
@@ -101,8 +124,9 @@ func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P]
 }
 
 // SetMaxGen sets the maximum generated entities on top of min
-func (rep *Repetition[T, P]) SetMaxGen(maxGen int) {
+func (rep *Repetition[T, P]) SetMaxGen(maxGen int) *Repetition[T, P] {
 	rep.maxGen = maxGen
+	return rep
 }
 
 // Generate writes pattern to a writer a random number of times
@@ -114,7 +138,7 @@ func (rep *Repetition[T, P]) Generate(w ebnf.Writer[T]) error {
 		repMax = repMin + rep.maxGen
 	}
 
-	n := rand.Intn(repMax-repMin+1) + repMin
+	n := rand.Intn(repMax+1-repMin) + repMin
 
 	for i := 0; i < n; i++ {
 		err := rep.pattern.Generate(w)

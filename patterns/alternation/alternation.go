@@ -1,9 +1,10 @@
 package alternation
 
 import (
-	ebnf "github.com/almerlucke/exbana/v2"
 	"io"
 	"math/rand"
+
+	ebnf "github.com/almerlucke/exbana/v2"
 )
 
 // Alternation matches a series of patterns OR style in order (alternation)
@@ -142,4 +143,9 @@ func (a *Alternation[T, P]) Print(w io.Writer) error {
 	_, err = w.Write([]byte(")"))
 
 	return err
+}
+
+func (a *Alternation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Alternation[T, P] {
+	a.patterns = patterns
+	return a
 }

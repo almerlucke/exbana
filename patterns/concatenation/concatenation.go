@@ -1,8 +1,10 @@
 package concatenation
 
 import (
-	ebnf "github.com/almerlucke/exbana/v2"
 	"io"
+
+	ebnf "github.com/almerlucke/exbana/v2"
+	"github.com/almerlucke/exbana/v2/patterns/repetition"
 )
 
 // Concatenation matches a series of patterns AND style in order (concatenation)
@@ -33,6 +35,7 @@ func (c *Concatenation[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, 
 	}
 
 	for _, pm := range c.patterns {
+	subPatternMatch:
 		subBeginPos, err := rd.Position()
 		if ebnf.IsStreamError(err) {
 			return false, nil, err
@@ -46,6 +49,29 @@ func (c *Concatenation[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, 
 		if matched {
 			matches = append(matches, result)
 		} else {
+			if len(matches) > 0 {
+				// check if we can backtrack if last match was a repetition. We try tp give back components as long
+				// as the repetition still matches, and we try to match the next pattern again
+				lastMatch := matches[len(matches)-1]
+				if rep, ok := lastMatch.Pattern.(*repetition.Repetition[T, P]); ok {
+					if !rep.Possessive() && len(lastMatch.Components) > 0 && rep.Min() < len(lastMatch.Components) {
+						lastMatch.Components = lastMatch.Components[:len(lastMatch.Components)-1]
+						if len(lastMatch.Components) == 0 {
+							lastMatch.End = lastMatch.Begin
+							err = rd.SetPosition(lastMatch.Begin)
+						} else {
+							lastComponent := lastMatch.Components[len(lastMatch.Components)-1]
+							lastMatch.End = lastComponent.End
+							err = rd.SetPosition(lastComponent.End)
+						}
+						if ebnf.IsStreamError(err) {
+							return false, nil, err
+						}
+						goto subPatternMatch
+					}
+				}
+			}
+
 			subEndPos, err := rd.Position()
 			if ebnf.IsStreamError(err) {
 				return false, nil, err
@@ -105,4 +131,9 @@ func (c *Concatenation[T, P]) Print(w io.Writer) error {
 	_, err = w.Write([]byte(")"))
 
 	return err
+}
+
+func (c *Concatenation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Concatenation[T, P] {
+	c.patterns = patterns
+	return c
 }

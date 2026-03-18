@@ -1,6 +1,8 @@
 package entity
 
 import (
+	"io"
+
 	ebnf "github.com/almerlucke/exbana/v2"
 )
 
@@ -72,4 +74,9 @@ func (e *Entity[T, P]) Generate(w ebnf.Writer[T]) error {
 	}
 
 	return nil
+}
+
+func (e *Entity[T, P]) Print(w io.Writer) error {
+	_, err := w.Write([]byte(e.PrintOutput()))
+	return err
 }

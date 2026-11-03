@@ -123,6 +123,26 @@ This remembers failures only (a pattern with no match at a position; a concatena
 already failed from a position), so catastrophic cases like `(a*)*, c` stay polynomial. It does not cache successes.
 Use one wrapper per input; it assumes the input does not change. Mismatches already seen are not logged again.
 
+## Syntax Errors
+
+`FarthestLog` turns the mismatch log into a syntax error: it keeps the failure that got furthest into the input and
+what would have matched there.
+
+```go
+rd, _ := runes.New(strings.NewReader("(12x)"))
+log := runes.NewFarthestLog(rd)
+ebnf.SetLogger[rune, runes.Pos](grammar, log) // attaches the logger to every pattern in the grammar
+
+if matched, _, _ := grammar.Match(rd); !matched {
+	fmt.Println(log.Err()) // syntax error at 1:4: unexpected 'x', expected digit or ")"
+}
+```
+
+Give the leaf patterns of your grammar an ID (`SetID("digit")`) or print output (`SetPrintOutput("\")\"")`), they are used
+as the "expected" descriptions; leaves without either are left out. `Last()` returns the `*SyntaxError` with the
+position, the expected list and the unexpected element for your own formatting. Exception patterns are not attached
+by `SetLogger` because they are lookahead: they are supposed to fail on every successful match.
+
 ## EBNF Printing
 
 Exbana can output your defined patterns as EBNF strings:

@@ -139,3 +139,8 @@ func (c *Concatenation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Concate
 	c.patterns = patterns
 	return c
 }
+
+// Children returns the sub patterns
+func (c *Concatenation[T, P]) Children() ebnf.Patterns[T, P] {
+	return c.patterns
+}

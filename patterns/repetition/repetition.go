@@ -340,3 +340,8 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 
 	return nil
 }
+
+// Children returns the repeated pattern
+func (rep *Repetition[T, P]) Children() ebnf.Patterns[T, P] {
+	return ebnf.Patterns[T, P]{rep.pattern}
+}

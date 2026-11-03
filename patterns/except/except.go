@@ -88,3 +88,9 @@ func (e *Except[T, P]) Print(w io.Writer) error {
 
 	return err
 }
+
+// Children returns the must pattern. The exception is left out on purpose: it is lookahead, so it is supposed to
+// fail on every successful match and its failures are not syntax errors.
+func (e *Except[T, P]) Children() ebnf.Patterns[T, P] {
+	return ebnf.Patterns[T, P]{e.must}
+}

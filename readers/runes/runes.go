@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strconv"
+
+	ebnf "github.com/almerlucke/exbana/v2"
 )
 
 type Pos struct {
@@ -164,4 +167,23 @@ func (r *Reader) Range(p1 Pos, p2 Pos) ([]rune, error) {
 
 func (r *Reader) Length(p1 Pos, p2 Pos) int {
 	return p2.Index - p1.Index
+}
+
+// FormatPos formats a position as line:col, counting from 1
+func FormatPos(p Pos) string {
+	return fmt.Sprintf("%d:%d", p.Line+1, p.Col+1)
+}
+
+// FormatRune formats a rune as a quoted character
+func FormatRune(r rune) string {
+	return strconv.QuoteRune(r)
+}
+
+// NewFarthestLog creates a FarthestLog for a rune reader that formats errors as "syntax error at line:col: unexpected 'x', expected ..."
+func NewFarthestLog(r ebnf.Reader[rune, Pos]) *ebnf.FarthestLog[rune, Pos] {
+	l := ebnf.NewFarthestLog(r)
+	l.FormatPos = FormatPos
+	l.FormatElem = FormatRune
+
+	return l
 }

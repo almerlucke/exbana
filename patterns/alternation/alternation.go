@@ -182,3 +182,8 @@ func (a *Alternation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Alternati
 	a.patterns = patterns
 	return a
 }
+
+// Children returns the sub patterns
+func (a *Alternation[T, P]) Children() ebnf.Patterns[T, P] {
+	return a.patterns
+}

@@ -239,3 +239,26 @@ func (a *Alternation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Alternati
 func (a *Alternation[T, P]) Children() ebnf.Patterns[T, P] {
 	return a.patterns
 }
+
+// Recognize implements ebnf.Recognizer: an alternation matches if one of the sub patterns matches. It can only tell
+// when no sub pattern matches if all of them can tell.
+func (a *Alternation[T, P]) Recognize(values []T) (bool, bool) {
+	known := true
+
+	for _, p := range a.patterns {
+		r, ok := p.(ebnf.Recognizer[T])
+		if !ok {
+			known = false
+			continue
+		}
+
+		matched, k := r.Recognize(values)
+		if !k {
+			known = false
+		} else if matched {
+			return true, true
+		}
+	}
+
+	return false, known
+}

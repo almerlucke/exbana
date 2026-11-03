@@ -102,3 +102,14 @@ func (c *GenContext) Choose(weights []float64) (int, error) {
 
 	return 0, errors.New("exbana: weights must not all be zero")
 }
+
+// Recognizer is implemented by patterns that can tell, without a reader, whether they match the start of a list of
+// values. Except uses it during generation to check the exception against what was generated.
+type Recognizer[T any] interface {
+	// Recognize returns whether the pattern matches a prefix of values. If known is false the pattern can't tell,
+	// and matched is meaningless.
+	Recognize(values []T) (matched bool, known bool)
+}
+
+// ErrNoGenerator is returned when an entity has to generate but has no generate function
+var ErrNoGenerator = errors.New("exbana: entity has no generate function")

@@ -137,9 +137,16 @@ err := pattern.Generate(ctx, writer)
   generate, from `ctx.State` (free for your own use, e.g. a key or the previous note) or `ctx.Depth()`.
 - `ctx.MaxDepth` (default 1000) limits the nesting of composite patterns. Generating a recursive grammar that doesn't end returns `ebnf.ErrMaxDepth`
   instead of overflowing the stack; use a weight function on `ctx.Depth()` to steer a recursive grammar to its end instead.
-- Invalid weights (wrong count, negative, all zero) and an empty alternation return an error.
+- `repetition.SetCountWeights(w0, w1, ...)` sets the odds of `min`, `min+1`, ... repetitions; `SetCountFunc(func(*ebnf.GenContext) int)` decides the count
+  on every generate. A count outside min and max is an error.
+- Invalid weights (wrong count, negative, all zero) and an empty alternation return an error. So does an `entity` without a generate function.
+- `except` generates from its `must` pattern and tries again (100 times by default, `SetGenerateAttempts`) while the exception matches what was
+  generated. The exception is checked through `ebnf.Recognizer`, which `entity`, `vector` and `alternation` implement; for any other exception
+  provide `SetAcceptFunc`, otherwise `Generate` returns an error. The exception counts as matching if it matches a prefix of the generated values.
 
-Generation ignores `Possessive`, `Orthogonal` and exceptions: `Except` generates its `must` pattern without checking the exception.
+`examples/melody` generates seeded melodies with all of this: weighted bar rhythms, a weighted random walk over scale degrees whose weights depend on the previous note (kept in `ctx.State`), and a cadence.
+
+Generation is forward only: a rule can't look ahead, so a melody can't "plan" its way to the cadence (see the example). Use state and weight functions to steer, or enumerate the endings in the grammar.
 
 ## Syntax Errors
 

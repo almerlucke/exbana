@@ -13,11 +13,13 @@ import (
 // If Possessive is set to true, it will not give back matches during backtracking.
 type Repetition[T, P any] struct {
 	*ebnf.BasePattern[T, P]
-	pattern    ebnf.Pattern[T, P]
-	min        int
-	max        int
-	maxGen     int
-	possessive bool
+	pattern      ebnf.Pattern[T, P]
+	min          int
+	max          int
+	maxGen       int
+	possessive   bool
+	countWeights []float64
+	countFunc    func(*ebnf.GenContext) int
 }
 
 // New creates a new repetition pattern
@@ -205,6 +207,21 @@ func (rep *Repetition[T, P]) SetMaxGen(maxGen int) *Repetition[T, P] {
 	return rep
 }
 
+// SetCountWeights sets the relative odds of the number of repetitions when generating: weights[i] is the weight of
+// min+i repetitions. With a max, min+len(weights)-1 must not be more than max. Weights do not influence matching.
+func (rep *Repetition[T, P]) SetCountWeights(weights ...float64) *Repetition[T, P] {
+	rep.countWeights = weights
+	return rep
+}
+
+// SetCountFunc sets a function that decides the number of repetitions each time the repetition generates, for counts
+// that depend on the generation state or depth. The count must be between min and max (if there is a max).
+// It takes precedence over SetCountWeights and SetMaxGen.
+func (rep *Repetition[T, P]) SetCountFunc(f func(*ebnf.GenContext) int) *Repetition[T, P] {
+	rep.countFunc = f
+	return rep
+}
+
 // Generate writes pattern to a writer a random number of times
 func (rep *Repetition[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
 	if err := ctx.Enter(); err != nil {
@@ -212,14 +229,10 @@ func (rep *Repetition[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) er
 	}
 	defer ctx.Leave()
 
-	repMin := rep.min
-	repMax := rep.max
-
-	if rep.max == 0 {
-		repMax = repMin + rep.maxGen
+	n, err := rep.generateCount(ctx)
+	if err != nil {
+		return err
 	}
-
-	n := ctx.Intn(repMax+1-repMin) + repMin
 
 	for i := 0; i < n; i++ {
 		err := rep.pattern.Generate(ctx, w)
@@ -229,6 +242,35 @@ func (rep *Repetition[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) er
 	}
 
 	return nil
+}
+
+func (rep *Repetition[T, P]) generateCount(ctx *ebnf.GenContext) (int, error) {
+	var n int
+
+	switch {
+	case rep.countFunc != nil:
+		n = rep.countFunc(ctx)
+	case rep.countWeights != nil:
+		i, err := ctx.Choose(rep.countWeights)
+		if err != nil {
+			return 0, err
+		}
+
+		n = rep.min + i
+	default:
+		repMax := rep.max
+		if rep.max == 0 {
+			repMax = rep.min + rep.maxGen
+		}
+
+		n = ctx.Intn(repMax+1-rep.min) + rep.min
+	}
+
+	if n < rep.min || (rep.max != 0 && n > rep.max) {
+		return 0, fmt.Errorf("exbana: repetition count %d is outside min %d and max %d", n, rep.min, rep.max)
+	}
+
+	return n, nil
 }
 
 // printAny prints EBNF zero or more

@@ -69,6 +69,21 @@ func (v *Vector[T, P]) Generate(_ *ebnf.GenContext, wr ebnf.Writer[T]) error {
 	return wr.Write(v.vector...)
 }
 
+// Recognize implements ebnf.Recognizer: a vector matches if values start with it
+func (v *Vector[T, P]) Recognize(values []T) (bool, bool) {
+	if len(values) < len(v.vector) {
+		return false, true
+	}
+
+	for i, e := range v.vector {
+		if !v.eq(e, values[i]) {
+			return false, true
+		}
+	}
+
+	return true, true
+}
+
 func (v *Vector[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte(v.PrintOutput()))
 	return err

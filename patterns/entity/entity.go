@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"fmt"
 	"io"
 
 	ebnf "github.com/almerlucke/exbana/v2"
@@ -87,7 +88,20 @@ func (e *Entity[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
 		return w.Write(e.genFunc(ctx))
 	}
 
-	return nil
+	return fmt.Errorf("%w (%s)", ebnf.ErrNoGenerator, describe(e))
+}
+
+// Recognize implements ebnf.Recognizer: an entity matches if its first value matches
+func (e *Entity[T, P]) Recognize(values []T) (bool, bool) {
+	return len(values) > 0 && e.matchFunc(values[0]), true
+}
+
+func describe[T, P any](p ebnf.Pattern[T, P]) string {
+	if d := ebnf.Describe(p); d != "" {
+		return d
+	}
+
+	return "unnamed"
 }
 
 func (e *Entity[T, P]) Print(w io.Writer) error {

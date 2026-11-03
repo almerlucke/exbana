@@ -732,3 +732,110 @@ func TestGenerateFuncCtxUsesSeed(t *testing.T) {
 		t.Errorf("%q %q %q", a, b, c)
 	}
 }
+
+func TestGenerateRepetitionCountWeights(t *testing.T) {
+	// counts 2, 3, 4 with odds 1:0:3
+	counts := map[int]int{}
+	g := repR(runeR('a'), 2, 0).SetCountWeights(1, 0, 3)
+	ctx := ebnf.NewGenContext(3)
+	for range 4000 {
+		s, err := gen(t, g, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts[len(s)]++
+	}
+	if counts[3] != 0 || counts[2]+counts[4] != 4000 || counts[4] < 2850 || counts[4] > 3150 {
+		t.Errorf("unexpected counts %v", counts)
+	}
+
+	// weights that reach past max give an error when such a count is picked (3 of 4 equal weights are past max)
+	over := repR(runeR('a'), 0, 1).SetCountWeights(1, 1, 1, 1)
+	errs := 0
+	for range 100 {
+		if _, err := gen(t, over, ctx); err != nil {
+			errs++
+		}
+	}
+	if errs < 50 || errs == 100 {
+		t.Errorf("expected about 75 errors out of 100, got %d", errs)
+	}
+}
+
+func TestGenerateRepetitionCountFunc(t *testing.T) {
+	g := repR(runeR('a'), 1, 5).SetCountFunc(func(ctx *ebnf.GenContext) int { return ctx.State.(int) })
+	ctx := ebnf.NewGenContext(1)
+	for _, n := range []int{1, 3, 5} {
+		ctx.State = n
+		if s, err := gen(t, g, ctx); err != nil || len(s) != n {
+			t.Errorf("count %d: got %q, %v", n, s, err)
+		}
+	}
+	for _, n := range []int{0, 6} {
+		ctx.State = n
+		if _, err := gen(t, g, ctx); err == nil {
+			t.Errorf("count %d: expected error", n)
+		}
+	}
+}
+
+func TestGenerateEntityWithoutGenerator(t *testing.T) {
+	_, err := gen(t, entR(unicode.IsDigit).SetID("digit"), ebnf.NewGenContext(1))
+	if !errors.Is(err, ebnf.ErrNoGenerator) || !strings.Contains(err.Error(), "digit") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestGenerateExceptHonoursException(t *testing.T) {
+	// any lowercase letter except a, b or c
+	letter := entR(func(r rune) bool { return r >= 'a' && r <= 'z' }).SetGenerateFuncCtx(func(ctx *ebnf.GenContext) rune {
+		return rune('a' + ctx.Intn(26))
+	})
+	g := exceptR(letter, altR(runeR('a'), runeR('b'), runeR('c')))
+
+	ctx := ebnf.NewGenContext(1)
+	for range 500 {
+		s, err := gen(t, g, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s == "a" || s == "b" || s == "c" || len(s) != 1 {
+			t.Fatalf("generated %q which the exception forbids", s)
+		}
+	}
+
+	// a vector as exception is recognized as a prefix
+	two := repR(entR(func(r rune) bool { return r == 'a' || r == 'b' }).SetGenerateFuncCtx(func(ctx *ebnf.GenContext) rune { return rune('a' + ctx.Intn(2)) }), 2, 2)
+	g2 := exceptR(two, vecR("ab"))
+	for range 200 {
+		s, err := gen(t, g2, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s == "ab" {
+			t.Fatal("generated the excepted vector")
+		}
+	}
+}
+
+func TestGenerateExceptCannotCheck(t *testing.T) {
+	letter := entR(unicode.IsLetter).SetGenerateFunc(func() rune { return 'q' })
+
+	// an exception that is not recognizable (a concatenation) is an error without an accept function
+	g := exceptR(letter, concR(runeR('a'), runeR('b')))
+	if _, err := gen(t, g, ebnf.NewGenContext(1)); err == nil {
+		t.Error("expected an error for an exception that can't be checked")
+	}
+
+	// ... but fine with one
+	g = exceptR(letter, concR(runeR('a'), runeR('b'))).SetAcceptFunc(func(v []rune) bool { return string(v) != "ab" })
+	if s, err := gen(t, g, ebnf.NewGenContext(1)); err != nil || s != "q" {
+		t.Errorf("got %q, %v", s, err)
+	}
+
+	// an exception that always matches leaves nothing to generate
+	always := exceptR(letter, entR(unicode.IsLetter))
+	if _, err := gen(t, always, ebnf.NewGenContext(1)); err == nil {
+		t.Error("expected an error when every attempt is excepted")
+	}
+}

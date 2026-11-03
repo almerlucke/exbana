@@ -10,7 +10,7 @@ import (
 type Entity[T, P any] struct {
 	*ebnf.BasePattern[T, P]
 	matchFunc func(T) bool
-	genFunc   func() T
+	genFunc   func(*ebnf.GenContext) T
 }
 
 // New creates a new entity pattern
@@ -26,7 +26,15 @@ func New[T, P any](matchFunc func(T) bool) *Entity[T, P] {
 	return e
 }
 
+// SetGenerateFunc sets the function that creates the object to generate
 func (e *Entity[T, P]) SetGenerateFunc(f func() T) *Entity[T, P] {
+	e.genFunc = func(*ebnf.GenContext) T { return f() }
+	return e
+}
+
+// SetGenerateFuncCtx sets the function that creates the object to generate, it gets the generate context so it can
+// use the seeded random source and the user state
+func (e *Entity[T, P]) SetGenerateFuncCtx(f func(*ebnf.GenContext) T) *Entity[T, P] {
 	e.genFunc = f
 	return e
 }
@@ -74,9 +82,9 @@ func (e *Entity[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 }
 
 // Generate writes an entity to a writer
-func (e *Entity[T, P]) Generate(w ebnf.Writer[T]) error {
+func (e *Entity[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
 	if e.genFunc != nil {
-		return w.Write(e.genFunc())
+		return w.Write(e.genFunc(ctx))
 	}
 
 	return nil

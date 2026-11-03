@@ -123,6 +123,24 @@ This remembers failures only (a pattern with no match at a position; a concatena
 already failed from a position), so catastrophic cases like `(a*)*, c` stay polynomial. It does not cache successes.
 Use one wrapper per input; it assumes the input does not change. Mismatches already seen are not logged again.
 
+## Generation
+
+Every pattern can also generate output. All randomness comes from a `GenContext`, so output is reproducible per seed:
+
+```go
+ctx := ebnf.NewGenContext(42) // same seed, same output
+err := pattern.Generate(ctx, writer)
+```
+
+- `entity.SetGenerateFuncCtx(func(ctx *ebnf.GenContext) T)` creates the generated object, draw from `ctx.Intn` / `ctx.Float64` to stay seedable (`SetGenerateFunc` is the version without context).
+- `alternation.SetWeights(3, 1, 0)` sets relative odds per sub pattern (0 means never generated). `SetWeightFunc` decides the weights on every
+  generate, from `ctx.State` (free for your own use, e.g. a key or the previous note) or `ctx.Depth()`.
+- `ctx.MaxDepth` (default 1000) limits the nesting of composite patterns. Generating a recursive grammar that doesn't end returns `ebnf.ErrMaxDepth`
+  instead of overflowing the stack; use a weight function on `ctx.Depth()` to steer a recursive grammar to its end instead.
+- Invalid weights (wrong count, negative, all zero) and an empty alternation return an error.
+
+Generation ignores `Possessive`, `Orthogonal` and exceptions: `Except` generates its `must` pattern without checking the exception.
+
 ## Syntax Errors
 
 `FarthestLog` turns the mismatch log into a syntax error: it keeps the failure that got furthest into the input and

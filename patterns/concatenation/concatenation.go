@@ -94,9 +94,14 @@ func (c *Concatenation[T, P]) matchCont(rd ebnf.Reader[T, P], k ebnf.Continuatio
 }
 
 // Generate writes a concatenation of patterns to a writer
-func (c *Concatenation[T, P]) Generate(w ebnf.Writer[T]) error {
+func (c *Concatenation[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
+	if err := ctx.Enter(); err != nil {
+		return err
+	}
+	defer ctx.Leave()
+
 	for _, child := range c.patterns {
-		err := child.Generate(w)
+		err := child.Generate(ctx, w)
 		if err != nil {
 			return err
 		}

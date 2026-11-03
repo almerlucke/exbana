@@ -65,7 +65,7 @@ func (v *Vector[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 }
 
 // Generate writes a series of entities to a writer
-func (v *Vector[T, P]) Generate(wr ebnf.Writer[T]) error {
+func (v *Vector[T, P]) Generate(_ *ebnf.GenContext, wr ebnf.Writer[T]) error {
 	return wr.Write(v.vector...)
 }
 

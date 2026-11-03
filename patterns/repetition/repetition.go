@@ -3,7 +3,6 @@ package repetition
 import (
 	"fmt"
 	"io"
-	"math/rand"
 	"slices"
 
 	ebnf "github.com/almerlucke/exbana/v2"
@@ -207,7 +206,12 @@ func (rep *Repetition[T, P]) SetMaxGen(maxGen int) *Repetition[T, P] {
 }
 
 // Generate writes pattern to a writer a random number of times
-func (rep *Repetition[T, P]) Generate(w ebnf.Writer[T]) error {
+func (rep *Repetition[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
+	if err := ctx.Enter(); err != nil {
+		return err
+	}
+	defer ctx.Leave()
+
 	repMin := rep.min
 	repMax := rep.max
 
@@ -215,10 +219,10 @@ func (rep *Repetition[T, P]) Generate(w ebnf.Writer[T]) error {
 		repMax = repMin + rep.maxGen
 	}
 
-	n := rand.Intn(repMax+1-repMin) + repMin
+	n := ctx.Intn(repMax+1-repMin) + repMin
 
 	for i := 0; i < n; i++ {
-		err := rep.pattern.Generate(w)
+		err := rep.pattern.Generate(ctx, w)
 		if err != nil {
 			return err
 		}

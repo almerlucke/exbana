@@ -39,7 +39,7 @@ func (v *Vector[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 			return false, nil, err
 		}
 
-		if !v.eq(e1, e2) {
+		if err == io.EOF || !v.eq(e1, e2) {
 			endPos, err := rd.Position()
 			if ebnf.IsStreamError(err) {
 				return false, nil, err

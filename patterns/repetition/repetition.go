@@ -99,6 +99,16 @@ func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P]
 
 		matches = append(matches, result)
 
+		// a match that consumed nothing would match forever, stop repeating
+		endPos, err := r.Position()
+		if ebnf.IsStreamError(err) {
+			return false, nil, err
+		}
+
+		if r.Length(resetPos, endPos) <= 0 {
+			break
+		}
+
 		if rep.max != 0 && len(matches) == rep.max {
 			break
 		}
@@ -152,7 +162,7 @@ func (rep *Repetition[T, P]) Generate(w ebnf.Writer[T]) error {
 
 // printAny prints EBNF zero or more
 func (rep *Repetition[T, P]) printAny(w io.Writer) error {
-	err := rep.pattern.Print(w)
+	err := rep.pattern.PrintAsChild(w)
 	if err != nil {
 		return err
 	}
@@ -164,7 +174,7 @@ func (rep *Repetition[T, P]) printAny(w io.Writer) error {
 
 // printAny prints EBNF optional
 func (rep *Repetition[T, P]) printOptional(w io.Writer) error {
-	err := rep.pattern.Print(w)
+	err := rep.pattern.PrintAsChild(w)
 	if err != nil {
 		return err
 	}
@@ -176,7 +186,7 @@ func (rep *Repetition[T, P]) printOptional(w io.Writer) error {
 
 // printAny prints EBNF at least one
 func (rep *Repetition[T, P]) printAtLeastOne(w io.Writer) error {
-	err := rep.pattern.Print(w)
+	err := rep.pattern.PrintAsChild(w)
 	if err != nil {
 		return err
 	}
@@ -197,6 +207,34 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 	}
 
 	var err error
+
+	// n or more: "n * x, x*"
+	if rep.max == 0 {
+		_, err = w.Write([]byte(fmt.Sprintf("(%v * ", rep.min)))
+		if err != nil {
+			return err
+		}
+
+		err = rep.pattern.PrintAsChild(w)
+		if err != nil {
+			return err
+		}
+
+		_, err = w.Write([]byte(", "))
+		if err != nil {
+			return err
+		}
+
+		err = rep.printAny(w)
+		if err != nil {
+			return err
+		}
+
+		_, err = w.Write([]byte(")"))
+
+		return err
+	}
+
 	oneValue := rep.min == rep.max
 
 	if !oneValue {
@@ -211,7 +249,7 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 		return err
 	}
 
-	err = rep.pattern.Print(w)
+	err = rep.pattern.PrintAsChild(w)
 	if err != nil {
 		return err
 	}
@@ -222,7 +260,7 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 			return err
 		}
 
-		err = rep.pattern.Print(w)
+		err = rep.pattern.PrintAsChild(w)
 		if err != nil {
 			return err
 		}

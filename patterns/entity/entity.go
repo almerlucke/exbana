@@ -43,6 +43,12 @@ func (e *Entity[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 		return false, nil, err
 	}
 
+	// at end of stream there is no object to test, never call matchFunc with a zero value
+	if err == io.EOF {
+		e.Logger().LogMismatch(ebnf.NewMismatch[T, P](e, pos, pos, nil, nil))
+		return false, nil, nil
+	}
+
 	if e.matchFunc(obj) {
 		endPos, err := rd.Position()
 		if ebnf.IsStreamError(err) {

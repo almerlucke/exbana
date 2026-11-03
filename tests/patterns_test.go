@@ -1,8 +1,10 @@
 package tests
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	ebnf "github.com/almerlucke/exbana/v2"
@@ -243,13 +245,99 @@ func TestPrint(t *testing.T) {
 
 	buf.Reset()
 	_ = r.Print(&buf)
-	if buf.String() != "(x, Alt)*" {
-		t.Errorf("expected (x, Alt)*, got %s", buf.String())
+	if buf.String() != "Conc*" {
+		t.Errorf("expected Conc*, got %s", buf.String())
 	}
 
 	buf.Reset()
 	_ = ex.Print(&buf)
 	if buf.String() != "a - b" {
 		t.Errorf("expected a - b, got %s", buf.String())
+	}
+}
+
+func newRunes(s string) *runes.Reader {
+	rd, _ := runes.New(strings.NewReader(s))
+	return rd
+}
+
+func TestEntityAndVectorAtEOF(t *testing.T) {
+	notQuote := entR(func(r rune) bool { return r != '"' })
+	matched, _, err := notQuote.Match(newRunes(""))
+	if err != nil || matched {
+		t.Errorf("entity at EOF: expected clean mismatch, got %v, %v", matched, err)
+	}
+
+	matched, _, err = vecR("ab").Match(newRunes("a"))
+	if err != nil || matched {
+		t.Errorf("vector past EOF: expected clean mismatch, got %v, %v", matched, err)
+	}
+
+	rd := newRunes("a")
+	rd.Skip(1)
+	matched, _, err = vecR("").Match(rd)
+	if err != nil || !matched {
+		t.Errorf("empty vector at EOF: expected match, got %v, %v", matched, err)
+	}
+}
+
+func TestRepetitionEmptyMatchTerminates(t *testing.T) {
+	// Any(Optional(a)) can match without consuming input
+	p := repetition.Any[rune, runes.Pos](repetition.Optional[rune, runes.Pos](runeR('a')))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		matched, _, err := p.Match(newRunes("b"))
+		if err != nil || !matched {
+			t.Errorf("expected (empty) match, got %v, %v", matched, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("repetition did not terminate on empty sub-match")
+	}
+}
+
+func TestScanEmptyMatchTerminates(t *testing.T) {
+	p := repetition.Any[rune, runes.Pos](runeR('a'))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err := ebnf.Scan[rune, runes.Pos](newRunes("baab"), p)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(res) == 0 {
+			t.Errorf("expected results")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Scan did not terminate on empty match")
+	}
+}
+
+func TestPrintRepetitionUnbounded(t *testing.T) {
+	x := runeR('x')
+	x.SetPrintOutput(`"x"`)
+
+	var buf bytes.Buffer
+	if err := repR(x, 2, 0).Print(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), `(2 * "x", "x"*)`; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+
+	// children with an ID are printed by reference
+	x.SetID("ex")
+	buf.Reset()
+	if err := repR(x, 1, 3).Print(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), `(1 * ex, 2 * ex?)`; got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }

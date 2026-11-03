@@ -29,15 +29,26 @@ func Scan[T, P any](stream Reader[T, P], pattern Pattern[T, P]) ([]*Match[T, P],
 		}
 		if matched {
 			results = append(results, result)
-		} else {
-			err = stream.SetPosition(pos)
+
+			endPos, err := stream.Position()
 			if IsStreamError(err) {
 				return nil, err
 			}
-			_, err = stream.Skip(1)
-			if IsStreamError(err) {
-				return nil, err
+
+			// the match consumed input, continue after it
+			if stream.Length(pos, endPos) > 0 {
+				continue
 			}
+		}
+
+		// no match, or an empty match: step one element so we always make progress
+		err = stream.SetPosition(pos)
+		if IsStreamError(err) {
+			return nil, err
+		}
+		_, err = stream.Skip(1)
+		if IsStreamError(err) {
+			return nil, err
 		}
 	}
 

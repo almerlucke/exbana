@@ -155,7 +155,7 @@ func (r *Reader) SetPosition(p Pos) error {
 }
 
 func (r *Reader) Range(p1 Pos, p2 Pos) ([]rune, error) {
-	if p1.Index < 0 || p1.Index >= len(r.data) || p2.Index < 0 || p2.Index > len(r.data) {
+	if p1.Index < 0 || p1.Index > len(r.data) || p2.Index < 0 || p2.Index > len(r.data) {
 		return nil, fmt.Errorf("len(%d) -> position(s) out of bounds: %v - %v", len(r.data), p1, p2)
 	}
 

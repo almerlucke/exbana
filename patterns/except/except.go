@@ -28,35 +28,44 @@ func New[T, P any](must ebnf.Pattern[T, P], exception ebnf.Pattern[T, P]) *Excep
 
 // Match matches the exception against a stream
 func (e *Except[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) {
+	return ebnf.FirstMatch(r, e.MatchCont)
+}
+
+// MatchCont offers the matches of the must pattern, unless the exception pattern matches at the same position
+func (e *Except[T, P]) MatchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.MatchMemo(ebnf.Pattern[T, P](e), r, k, e.matchCont)
+}
+
+func (e *Except[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
 	beginPos, err := r.Position()
 	if ebnf.IsStreamError(err) {
-		return false, nil, err
+		return false, err
 	}
 
 	// First check for the exception match, we do not want to match the exception
 	matched, result, err := e.exception.Match(r)
 	if err != nil {
-		return false, nil, err
+		return false, err
 	}
 
 	if matched {
 		endPos, err := r.Position()
 		if ebnf.IsStreamError(err) {
-			return false, nil, err
+			return false, err
 		}
 
 		e.Logger().LogMismatch(ebnf.NewMismatch(e, beginPos, endPos, result, nil))
 
-		return false, nil, nil
+		return false, nil
 	}
 
-	// Reset the position and return must match result
+	// Reset the position and offer the must matches
 	err = r.SetPosition(beginPos)
 	if ebnf.IsStreamError(err) {
-		return false, nil, err
+		return false, err
 	}
 
-	return e.must.Match(r)
+	return e.must.MatchCont(r, k)
 }
 
 // Generate let's MustMatch generate to writer

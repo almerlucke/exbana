@@ -12,6 +12,14 @@ type Pattern[T, P any] interface {
 	// It returns true if matched, along with the match result.
 	Match(Reader[T, P]) (bool, *Match[T, P], error)
 
+	// MatchCont is like Match, but instead of returning a single result it offers every possible match to the
+	// continuation, in order of preference, until the continuation accepts one. This is what makes backtracking
+	// possible: if what follows a pattern fails, the continuation rejects the candidate and the pattern offers
+	// its next alternative. Returns true if a candidate was accepted.
+	// The reader is positioned at the end of the offered match when the continuation is called. If MatchCont
+	// returns false the reader position is undefined, callers must reset it.
+	MatchCont(Reader[T, P], Continuation[T, P]) (bool, error)
+
 	// CanUnpack returns true if the match result for this pattern can be unpacked.
 	CanUnpack() bool
 
@@ -132,6 +140,16 @@ func (p *BasePattern[T, P]) CanUnpack() bool {
 
 func (p *BasePattern[T, P]) Match(_ Reader[T, P]) (bool, *Match[T, P], error) {
 	return false, nil, nil
+}
+
+// MatchCont is the default for deterministic patterns: they have exactly one candidate, the result of Match.
+func (p *BasePattern[T, P]) MatchCont(r Reader[T, P], k Continuation[T, P]) (bool, error) {
+	matched, result, err := p.self.Match(r)
+	if err != nil || !matched {
+		return false, err
+	}
+
+	return k(result)
 }
 
 func (p *BasePattern[T, P]) SetEvalFunc(f func(*Match[T, P], Reader[T, P]) (any, error)) Pattern[T, P] {

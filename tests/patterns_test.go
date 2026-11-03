@@ -341,3 +341,105 @@ func TestPrintRepetitionUnbounded(t *testing.T) {
 		t.Errorf("got %s, want %s", got, want)
 	}
 }
+
+func anyR(p ebnf.Pattern[rune, runes.Pos]) *repetition.Repetition[rune, runes.Pos] {
+	return repetition.Any[rune, runes.Pos](p)
+}
+
+func TestBacktrackingDeep(t *testing.T) {
+	cases := []struct {
+		name    string
+		pattern ebnf.Pattern[rune, runes.Pos]
+		input   string
+		want    bool
+	}{
+		{"two repetitions", concR(anyR(runeR('a')), anyR(runeR('a')), runeR('b')), "aab", true},
+		{"repetition inside alternation", concR(altR(anyR(runeR('a'))), runeR('a')), "aa", true},
+		{"alternation longest first then shorter", concR(altR(vecR("a"), vecR("ab")), vecR("bc")), "abc", true},
+		{"repetition of alternation", concR(anyR(altR(vecR("a"), vecR("ab"))), vecR("bc")), "aabc", true},
+		{"nested concatenation", concR(concR(anyR(runeR('a')), runeR('b')), anyR(runeR('b')), runeR('b')), "abbb", true},
+		{"except inside repetition", concR(anyR(exceptR(entR(unicode.IsLetter), runeR('x'))), runeR('x')), "abx", true},
+		{"still fails", concR(anyR(runeR('a')), runeR('b')), "aac", false},
+		{"min is respected", concR(repR(runeR('a'), 2, 0), runeR('a')), "aa", false},
+		{"max is respected", concR(repR(runeR('a'), 0, 2), runeR('a'), endR()), "aaaa", false},
+	}
+
+	for _, c := range cases {
+		matched, result, err := c.pattern.Match(newRunes(c.input))
+		if err != nil || matched != c.want {
+			t.Errorf("%s: got %v, %v, want %v", c.name, matched, err, c.want)
+			continue
+		}
+		if matched && result.End.Index != len(c.input) && c.name != "max is respected" {
+			t.Errorf("%s: match ended at %d, want %d", c.name, result.End.Index, len(c.input))
+		}
+	}
+}
+
+func TestPossessiveAndOrthogonalDoNotBacktrack(t *testing.T) {
+	p := concR(anyR(runeR('a')).SetPossessive(true), runeR('a'))
+	if matched, _, _ := p.Match(newRunes("aaa")); matched {
+		t.Error("possessive repetition gave back a match")
+	}
+
+	o := concR(altR(vecR("ab"), vecR("a")).SetOrthogonal(true), vecR("bc"))
+	if matched, _, _ := o.Match(newRunes("abc")); matched {
+		t.Error("orthogonal alternation backtracked")
+	}
+}
+
+func TestPositionAfterMatch(t *testing.T) {
+	rd := newRunes("aaab")
+	p := concR(anyR(runeR('a')), runeR('a'))
+	matched, result, err := p.Match(rd)
+	if err != nil || !matched {
+		t.Fatal(matched, err)
+	}
+	if pos, _ := rd.Position(); pos.Index != result.End.Index || pos.Index != 3 {
+		t.Errorf("reader at %d, match ends at %d, want 3", pos.Index, result.End.Index)
+	}
+}
+
+func TestMemoGivesSameResult(t *testing.T) {
+	build := func() ebnf.Pattern[rune, runes.Pos] {
+		return concR(anyR(altR(vecR("a"), vecR("ab"), vecR("b"))), vecR("c"), endR())
+	}
+	for _, in := range []string{"abababc", "aabbc", "abx", "", "c"} {
+		m1, r1, _ := build().Match(newRunes(in))
+		m2, r2, _ := build().Match(ebnf.WithMemo[rune, runes.Pos](newRunes(in), func(p runes.Pos) int { return p.Index }))
+		if m1 != m2 || (m1 && r1.End.Index != r2.End.Index) {
+			t.Errorf("%q: plain %v, memo %v", in, m1, m2)
+		}
+	}
+}
+
+// (a*)* is the classic catastrophic backtracking case, it can only finish quickly if failures are remembered
+func TestMemoAvoidsExponentialBlowup(t *testing.T) {
+	in := strings.Repeat("a", 28) + "b"
+	build := func() ebnf.Pattern[rune, runes.Pos] {
+		return concR(anyR(anyR(runeR('a'))), runeR('c'))
+	}
+
+	rd := ebnf.WithMemo[rune, runes.Pos](newRunes(in), func(p runes.Pos) int { return p.Index })
+	done := make(chan bool)
+	go func() {
+		matched, _, _ := build().Match(rd)
+		done <- matched
+	}()
+	select {
+	case matched := <-done:
+		if matched {
+			t.Error("unexpected match")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("memoization did not prevent exponential backtracking")
+	}
+}
+
+func TestLongNonPossessiveRepetition(t *testing.T) {
+	in := strings.Repeat("a", 200000)
+	matched, _, err := concR(anyR(runeR('a')), runeR('a')).Match(newRunes(in))
+	if err != nil || !matched {
+		t.Errorf("got %v, %v", matched, err)
+	}
+}

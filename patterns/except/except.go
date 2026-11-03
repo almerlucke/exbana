@@ -69,8 +69,13 @@ func (e *Except[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P])
 }
 
 // Generate let's MustMatch generate to writer
-func (e *Except[T, P]) Generate(w ebnf.Writer[T]) error {
-	return e.must.Generate(w)
+func (e *Except[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
+	if err := ctx.Enter(); err != nil {
+		return err
+	}
+	defer ctx.Leave()
+
+	return e.must.Generate(ctx, w)
 }
 
 // Print EBNF exception pattern

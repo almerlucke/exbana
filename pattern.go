@@ -47,8 +47,9 @@ type Pattern[T, P any] interface {
 	// Eval executes the evaluation function for the pattern's match result.
 	Eval(*Match[T, P], Reader[T, P]) (any, error)
 
-	// Generate generates output to a writer based on the pattern.
-	Generate(Writer[T]) error
+	// Generate generates output to a writer based on the pattern. The context carries the random source,
+	// the depth limit and user state, and must not be nil.
+	Generate(*GenContext, Writer[T]) error
 
 	// Print prints the pattern to a writer in EBNF format.
 	Print(io.Writer) error
@@ -130,7 +131,7 @@ func (p *BasePattern[T, P]) PrintAsChild(w io.Writer) error {
 	return nil
 }
 
-func (p *BasePattern[T, P]) Generate(_ Writer[T]) error {
+func (p *BasePattern[T, P]) Generate(_ *GenContext, _ Writer[T]) error {
 	return nil
 }
 

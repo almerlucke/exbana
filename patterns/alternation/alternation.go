@@ -1,8 +1,9 @@
 package alternation
 
 import (
+	"errors"
+	"fmt"
 	"io"
-	"math/rand"
 	"slices"
 
 	ebnf "github.com/almerlucke/exbana/v2"
@@ -13,6 +14,8 @@ type Alternation[T, P any] struct {
 	*ebnf.BasePattern[T, P]
 	patterns     ebnf.Patterns[T, P]
 	isOrthogonal bool // if orthogonal we stop at first match as we know input is not related
+	weights      []float64
+	weightFunc   func(*ebnf.GenContext) []float64
 }
 
 // New creates a new Alternation pattern
@@ -143,9 +146,58 @@ func (a *Alternation[T, P]) CanUnpack() bool {
 	return true
 }
 
-// Generate writes an alternation of patterns to a writer, randomly chosen
-func (a *Alternation[T, P]) Generate(w ebnf.Writer[T]) error {
-	return a.patterns[rand.Intn(len(a.patterns))].Generate(w)
+// SetWeights sets the relative odds of the sub patterns when generating, one weight per sub pattern (in order).
+// Weights are relative, {3, 1} means the first is chosen three times as often as the second. A weight of zero
+// means the sub pattern is never generated. Without weights all sub patterns are equally likely.
+// Weights do not influence matching.
+func (a *Alternation[T, P]) SetWeights(weights ...float64) *Alternation[T, P] {
+	a.weights = weights
+	return a
+}
+
+// SetWeightFunc sets a function that decides the weights each time the alternation generates, for weights that depend on
+// the generation state or depth, for example to steer a recursive grammar toward its end. The function must return one
+// weight per sub pattern. It takes precedence over SetWeights.
+func (a *Alternation[T, P]) SetWeightFunc(f func(*ebnf.GenContext) []float64) *Alternation[T, P] {
+	a.weightFunc = f
+	return a
+}
+
+// Generate writes one of the sub patterns to a writer, randomly chosen, by weight if weights are set
+func (a *Alternation[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
+	if len(a.patterns) == 0 {
+		return errors.New("exbana: cannot generate an alternation without patterns")
+	}
+
+	if err := ctx.Enter(); err != nil {
+		return err
+	}
+	defer ctx.Leave()
+
+	weights := a.weights
+	if a.weightFunc != nil {
+		weights = a.weightFunc(ctx)
+	}
+
+	index := 0
+
+	switch {
+	case weights != nil:
+		if len(weights) != len(a.patterns) {
+			return fmt.Errorf("exbana: alternation has %d patterns but %d weights", len(a.patterns), len(weights))
+		}
+
+		var err error
+
+		index, err = ctx.Choose(weights)
+		if err != nil {
+			return err
+		}
+	default:
+		index = ctx.Intn(len(a.patterns))
+	}
+
+	return a.patterns[index].Generate(ctx, w)
 }
 
 // Print EBNF alternation group

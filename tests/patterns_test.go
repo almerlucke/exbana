@@ -2,6 +2,7 @@ package tests
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -574,5 +575,160 @@ func TestSetLoggerRecursiveGrammar(t *testing.T) {
 	}
 	if e := log.Last(); e == nil || e.Pos.Index != 4 || e.Found != 'y' {
 		t.Errorf("got %+v", e)
+	}
+}
+
+type sliceWriter struct{ out []rune }
+
+func (w *sliceWriter) Write(rs ...rune) error { w.out = append(w.out, rs...); return nil }
+func (w *sliceWriter) Finish() error          { return nil }
+
+func gen(t *testing.T, p ebnf.Pattern[rune, runes.Pos], ctx *ebnf.GenContext) (string, error) {
+	t.Helper()
+	w := &sliceWriter{}
+	err := p.Generate(ctx, w)
+	return string(w.out), err
+}
+
+// a random grammar: (a | b | c){0,6}
+func randomGrammar() ebnf.Pattern[rune, runes.Pos] {
+	return repR(altR(runeR('a'), runeR('b'), runeR('c')), 3, 6)
+}
+
+func TestGenerateSeedIsReproducible(t *testing.T) {
+	g := randomGrammar()
+	run := func(seed int64) string {
+		var sb strings.Builder
+		ctx := ebnf.NewGenContext(seed)
+		for range 20 {
+			s, err := gen(t, g, ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sb.WriteString(s + ",")
+		}
+		return sb.String()
+	}
+
+	if run(42) != run(42) {
+		t.Error("same seed gave different output")
+	}
+	if run(42) == run(43) {
+		t.Error("different seeds gave the same output")
+	}
+}
+
+func TestGenerateWeights(t *testing.T) {
+	count := func(weights ...float64) (a, b int) {
+		alt := altR(runeR('a'), runeR('b')).SetWeights(weights...)
+		ctx := ebnf.NewGenContext(7)
+		for range 4000 {
+			s, err := gen(t, alt, ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s == "a" {
+				a++
+			} else {
+				b++
+			}
+		}
+		return
+	}
+
+	if a, b := count(1, 0); a != 4000 || b != 0 {
+		t.Errorf("weight 0 chosen: %d %d", a, b)
+	}
+	if a, b := count(0, 5); a != 0 || b != 4000 {
+		t.Errorf("weight 0 chosen: %d %d", a, b)
+	}
+	// 3:1 should give about 3000 : 1000
+	if a, b := count(3, 1); a < 2850 || a > 3150 {
+		t.Errorf("3:1 gave %d : %d", a, b)
+	}
+	if a, b := count(1, 1); a < 1850 || a > 2150 {
+		t.Errorf("1:1 gave %d : %d", a, b)
+	}
+}
+
+func TestGenerateWeightFuncUsesState(t *testing.T) {
+	alt := altR(runeR('a'), runeR('b')).SetWeightFunc(func(ctx *ebnf.GenContext) []float64 {
+		if ctx.State.(string) == "first" {
+			return []float64{1, 0}
+		}
+		return []float64{0, 1}
+	})
+
+	ctx := ebnf.NewGenContext(1)
+	ctx.State = "first"
+	if s, _ := gen(t, alt, ctx); s != "a" {
+		t.Errorf("got %q", s)
+	}
+	ctx.State = "second"
+	if s, _ := gen(t, alt, ctx); s != "b" {
+		t.Errorf("got %q", s)
+	}
+}
+
+func TestGenerateWeightErrors(t *testing.T) {
+	ctx := ebnf.NewGenContext(1)
+
+	if _, err := gen(t, altR(runeR('a'), runeR('b')).SetWeights(1), ctx); err == nil {
+		t.Error("expected error for wrong number of weights")
+	}
+	if _, err := gen(t, altR(runeR('a'), runeR('b')).SetWeights(0, 0), ctx); err == nil {
+		t.Error("expected error for all zero weights")
+	}
+	if _, err := gen(t, altR(runeR('a'), runeR('b')).SetWeights(-1, 2), ctx); err == nil {
+		t.Error("expected error for negative weight")
+	}
+	if _, err := gen(t, altR(), ctx); err == nil {
+		t.Error("expected error for empty alternation, not a panic")
+	}
+}
+
+func TestGenerateMaxDepth(t *testing.T) {
+	// always recurse: must stop with ErrMaxDepth instead of overflowing the stack
+	deep := concR()
+	deep.SetPatterns(ebnf.Patterns[rune, runes.Pos]{runeR('('), altR(deep).SetWeights(1), runeR(')')})
+	ctx := ebnf.NewGenContext(1)
+	ctx.MaxDepth = 50
+	if _, err := gen(t, deep, ctx); !errors.Is(err, ebnf.ErrMaxDepth) {
+		t.Errorf("expected ErrMaxDepth, got %v", err)
+	}
+	if ctx.Depth() != 0 {
+		t.Errorf("depth not restored after error: %d", ctx.Depth())
+	}
+
+	// the depth is available to weight functions, so a grammar can steer itself to its end
+	steered := concR()
+	alt := altR(steered, runeR('x')).SetWeightFunc(func(ctx *ebnf.GenContext) []float64 {
+		if ctx.Depth() >= 10 {
+			return []float64{0, 1}
+		}
+		return []float64{1, 0}
+	})
+	steered.SetPatterns(ebnf.Patterns[rune, runes.Pos]{runeR('('), alt, runeR(')')})
+	ctx = ebnf.NewGenContext(1)
+	s, err := gen(t, steered, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s, "x") || strings.Count(s, "(") != strings.Count(s, ")") {
+		t.Errorf("unexpected output %q", s)
+	}
+	if ctx.Depth() != 0 {
+		t.Errorf("depth not restored: %d", ctx.Depth())
+	}
+}
+
+func TestGenerateFuncCtxUsesSeed(t *testing.T) {
+	digit := entR(unicode.IsDigit).SetGenerateFuncCtx(func(ctx *ebnf.GenContext) rune { return rune('0' + ctx.Intn(10)) })
+	g := repR(digit, 8, 8)
+	a, _ := gen(t, g, ebnf.NewGenContext(5))
+	b, _ := gen(t, g, ebnf.NewGenContext(5))
+	c, _ := gen(t, g, ebnf.NewGenContext(6))
+	if a != b || a == c || len(a) != 8 {
+		t.Errorf("%q %q %q", a, b, c)
 	}
 }

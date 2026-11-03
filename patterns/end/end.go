@@ -37,6 +37,6 @@ func (e *End[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) 
 }
 
 // Generate sends finish to writer
-func (e *End[T, P]) Generate(w ebnf.Writer[T]) error {
+func (e *End[T, P]) Generate(_ *ebnf.GenContext, w ebnf.Writer[T]) error {
 	return w.Finish()
 }

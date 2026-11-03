@@ -56,7 +56,8 @@ func (e *SyntaxError[T, P]) Error() string {
 // when the match fails call Err to get an error with the position and what was expected there.
 //
 // Mismatches of composite patterns (concatenation, exception) are ignored: they are always caused by a leaf pattern that
-// failed deeper, and that one is logged itself. Mismatches are compared by their begin position, so a vector that
+// failed deeper, and that one is logged itself. The same goes for composites without an ID, like an unnamed
+// repetition or alternation. Composites with an ID are reported by name, so name only the rules you want to see in messages. Mismatches are compared by their begin position, so a vector that
 // fails halfway is reported at its start.
 //
 // To get useful messages give the leaf patterns of the grammar an ID or print output, they are used as the
@@ -83,6 +84,12 @@ func NewFarthestLog[T, P any](r Reader[T, P]) *FarthestLog[T, P] {
 // LogMismatch implements the Logger interface
 func (l *FarthestLog[T, P]) LogMismatch(m *Mismatch[T, P]) {
 	if m.Unmatched != nil {
+		return
+	}
+
+	// an unnamed composite (like digit+) would only print as a grammar fragment, and the leaf patterns it is
+	// built from fail at the same position or further, and are logged themselves
+	if _, composite := m.Pattern.(Parent[T, P]); composite && m.Pattern.ID() == NoID {
 		return
 	}
 

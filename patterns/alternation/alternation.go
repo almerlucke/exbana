@@ -3,6 +3,7 @@ package alternation
 import (
 	"io"
 	"math/rand"
+	"slices"
 
 	ebnf "github.com/almerlucke/exbana/v2"
 )
@@ -36,74 +37,106 @@ func (a *Alternation[T, P]) SetOrthogonal(ortho bool) *Alternation[T, P] {
 // the longest match returns, if two or more matches are the longest, the first of those is returned. So order of the sub
 // patterns matters when creating an Alternation pattern
 func (a *Alternation[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) {
-	var matches []*ebnf.Match[T, P]
+	return ebnf.FirstMatch(r, a.MatchCont)
+}
+
+// MatchCont offers the matches of the sub patterns to the continuation, longest first (ties in pattern order).
+// A sub pattern that matches in more than one way offers its other matches after its first one.
+// An orthogonal alternation only offers the first sub pattern that matches, and does not backtrack into it.
+func (a *Alternation[T, P]) MatchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.MatchMemo(ebnf.Pattern[T, P](a), r, k, a.matchCont)
+}
+
+func (a *Alternation[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	type candidate struct {
+		index  int
+		length int
+		match  *ebnf.Match[T, P]
+	}
+
+	var candidates []candidate
 
 	beginPos, err := r.Position()
 	if ebnf.IsStreamError(err) {
-		return false, nil, err
+		return false, err
 	}
 
-	for _, pm := range a.patterns {
+	wrap := func(m *ebnf.Match[T, P]) *ebnf.Match[T, P] {
+		return ebnf.NewMatch(a, beginPos, m.End, nil, []*ebnf.Match[T, P]{m})
+	}
+
+	// first match of every sub pattern, this decides the order in which we offer them
+	for i, pm := range a.patterns {
 		err = r.SetPosition(beginPos)
 		if ebnf.IsStreamError(err) {
-			return false, nil, err
+			return false, err
 		}
 
 		matched, result, err := pm.Match(r)
 		if err != nil {
-			return false, nil, err
+			return false, err
 		}
 
-		if matched {
-			endPos, err := r.Position()
-			if ebnf.IsStreamError(err) {
-				return false, nil, err
+		if !matched {
+			continue
+		}
+
+		// if set of alternations is orthogonal we know there is no relation between the entities in the set
+		// so we can stop at first match
+		if a.isOrthogonal {
+			return k(wrap(result))
+		}
+
+		candidates = append(candidates, candidate{index: i, length: r.Length(beginPos, result.End), match: result})
+	}
+
+	if len(candidates) == 0 {
+		endPos, err := r.Position()
+		if ebnf.IsStreamError(err) {
+			return false, err
+		}
+
+		a.Logger().LogMismatch(ebnf.NewMismatch[T, P](a, beginPos, endPos, nil, nil))
+
+		return false, nil
+	}
+
+	slices.SortStableFunc(candidates, func(x, y candidate) int { return y.length - x.length })
+
+	for _, c := range candidates {
+		err = r.SetPosition(c.match.End)
+		if ebnf.IsStreamError(err) {
+			return false, err
+		}
+
+		matched, err := k(wrap(c.match))
+		if err != nil || matched {
+			return matched, err
+		}
+
+		// the sub pattern may have more ways to match, offer those as well. Its first match is the one we
+		// just offered, so skip that.
+		err = r.SetPosition(beginPos)
+		if ebnf.IsStreamError(err) {
+			return false, err
+		}
+
+		skipped := false
+
+		matched, err = a.patterns[c.index].MatchCont(r, func(m *ebnf.Match[T, P]) (bool, error) {
+			if !skipped {
+				skipped = true
+				return false, nil
 			}
 
-			match := ebnf.NewMatch(a, beginPos, endPos, nil, []*ebnf.Match[T, P]{result})
-
-			// if set of alternations is orthogonal we know there is no relation between the entities in the set
-			// so we can stop at first match
-			if a.isOrthogonal {
-				return true, match, nil
-			}
-
-			matches = append(matches, match)
+			return k(wrap(m))
+		})
+		if err != nil || matched {
+			return matched, err
 		}
 	}
 
-	if len(matches) > 0 {
-		var (
-			longestMatch *ebnf.Match[T, P]
-			length       = -1
-		)
-
-		for _, match := range matches {
-			matchLength := r.Length(match.Begin, match.End)
-			if matchLength > length {
-				length = matchLength
-				longestMatch = match
-			}
-		}
-
-		if longestMatch != nil {
-			err = r.SetPosition(longestMatch.End)
-			if ebnf.IsStreamError(err) {
-				return false, nil, err
-			}
-		}
-
-		return true, longestMatch, nil
-	}
-
-	endPos, err := r.Position()
-	if ebnf.IsStreamError(err) {
-		return false, nil, err
-	}
-
-	a.Logger().LogMismatch(ebnf.NewMismatch[T, P](a, beginPos, endPos, nil, nil))
-
-	return false, nil, nil
+	return false, nil
 }
 
 func (a *Alternation[T, P]) CanUnpack() bool {

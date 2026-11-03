@@ -2,9 +2,9 @@ package concatenation
 
 import (
 	"io"
+	"slices"
 
 	ebnf "github.com/almerlucke/exbana/v2"
-	"github.com/almerlucke/exbana/v2/patterns/repetition"
 )
 
 // Concatenation matches a series of patterns AND style in order (concatenation)
@@ -25,70 +25,72 @@ func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Concatenation[T, P] {
 	return c
 }
 
-// Match matches AND against a stream, fails if any of the sub patterns mismatches
+// Match matches AND against a stream, fails if any of the sub patterns mismatches. It returns the first
+// combination of sub pattern matches that matches completely.
 func (c *Concatenation[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) {
-	var matches []*ebnf.Match[T, P]
+	return ebnf.FirstMatch(rd, c.MatchCont)
+}
 
+// MatchCont offers every way the sub patterns can match in sequence to the continuation. If a sub pattern
+// fails, the previous sub patterns are asked for their next alternative (backtracking).
+func (c *Concatenation[T, P]) MatchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.MatchMemo(ebnf.Pattern[T, P](c), rd, k, c.matchCont)
+}
+
+func (c *Concatenation[T, P]) matchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
 	beginPos, err := rd.Position()
 	if ebnf.IsStreamError(err) {
-		return false, nil, err
+		return false, err
 	}
 
-	for _, pm := range c.patterns {
-	subPatternMatch:
+	matches := make([]*ebnf.Match[T, P], 0, len(c.patterns))
+	failed := ebnf.NewFailSet(rd)
+
+	var step func(i int) (bool, error)
+
+	step = func(i int) (bool, error) {
 		subBeginPos, err := rd.Position()
 		if ebnf.IsStreamError(err) {
-			return false, nil, err
+			return false, err
 		}
 
-		matched, result, err := pm.Match(rd)
-		if err != nil {
-			return false, nil, err
+		// the rest of the concatenation (and the continuation) already failed from here
+		if failed.Has(i, subBeginPos) {
+			return false, nil
 		}
 
-		if matched {
-			matches = append(matches, result)
-		} else {
-			if len(matches) > 0 {
-				// check if we can backtrack if last match was a repetition. We try tp give back components as long
-				// as the repetition still matches, and we try to match the next pattern again
-				lastMatch := matches[len(matches)-1]
-				if rep, ok := lastMatch.Pattern.(*repetition.Repetition[T, P]); ok {
-					if !rep.Possessive() && len(lastMatch.Components) > 0 && rep.Min() < len(lastMatch.Components) {
-						lastMatch.Components = lastMatch.Components[:len(lastMatch.Components)-1]
-						if len(lastMatch.Components) == 0 {
-							lastMatch.End = lastMatch.Begin
-							err = rd.SetPosition(lastMatch.Begin)
-						} else {
-							lastComponent := lastMatch.Components[len(lastMatch.Components)-1]
-							lastMatch.End = lastComponent.End
-							err = rd.SetPosition(lastComponent.End)
-						}
-						if ebnf.IsStreamError(err) {
-							return false, nil, err
-						}
-						goto subPatternMatch
-					}
-				}
+		if i == len(c.patterns) {
+			matched, err := k(ebnf.NewMatch(c, beginPos, subBeginPos, nil, slices.Clone(matches)))
+			if err == nil && !matched {
+				failed.Add(i, subBeginPos)
 			}
 
-			subEndPos, err := rd.Position()
-			if ebnf.IsStreamError(err) {
-				return false, nil, err
-			}
-
-			c.Logger().LogMismatch(ebnf.NewMismatch(c, beginPos, subEndPos, ebnf.NewMatch(pm, subBeginPos, subEndPos, nil, nil), matches))
-
-			return false, nil, nil
+			return matched, err
 		}
+
+		pm := c.patterns[i]
+
+		matched, err := pm.MatchCont(rd, func(m *ebnf.Match[T, P]) (bool, error) {
+			matches = append(matches[:i], m)
+			return step(i + 1)
+		})
+		if err != nil || matched {
+			return matched, err
+		}
+
+		subEndPos, err := rd.Position()
+		if ebnf.IsStreamError(err) {
+			return false, err
+		}
+
+		c.Logger().LogMismatch(ebnf.NewMismatch(c, beginPos, subEndPos, ebnf.NewMatch(pm, subBeginPos, subEndPos, nil, nil), slices.Clone(matches[:i])))
+
+		failed.Add(i, subBeginPos)
+
+		return false, nil
 	}
 
-	endPos, err := rd.Position()
-	if ebnf.IsStreamError(err) {
-		return false, nil, err
-	}
-
-	return true, ebnf.NewMatch(c, beginPos, endPos, nil, matches), nil
+	return step(0)
 }
 
 // Generate writes a concatenation of patterns to a writer

@@ -6,7 +6,7 @@ Exbana is a versatile and generic EBNF-based pattern matching and generation lib
 
 - **Generic**: Works with any type of stream elements (`T`) and any position type (`P`).
 - **EBNF Constructs**: Supports concatenation, alternation, repetition (optional, any, one-or-more), and exceptions.
-- **Backtracking**: Built-in support for backtracking in patterns like alternation and repetition.
+- **Backtracking**: Full backtracking across concatenations, alternations and repetitions, with opt-outs (possessive, orthogonal) and optional failure memoization.
 - **Evaluation**: Easily attach evaluation functions to patterns to process match results.
 - **Generation**: Can generate output based on defined patterns.
 - **EBNF Printing**: Can print defined patterns back into EBNF format.
@@ -93,6 +93,35 @@ func main() {
 	}
 }
 ```
+
+## Backtracking and Memoization
+
+Patterns offer their matches to a continuation (`MatchCont`), so when something later in a concatenation fails, earlier
+patterns are asked for their next alternative. Matches are offered in order of preference:
+
+- `alternation`: longest first (ties in pattern order), and each branch's other matches after its first.
+- `repetition`: greedy, giving back one repetition at a time down to `min`.
+- `Match` is simply "the first candidate that fully matches".
+
+So `(a*), a` matches `aa`, and `(a | ab), "bc"` matches `abc`.
+
+Backtracking costs time and stack (a non-possessive repetition recurses once per repetition), so for the parts of a
+grammar that are unambiguous, opt out:
+
+- `repetition.SetPossessive(true)`: iterative, never gives matches back.
+- `alternation.SetOrthogonal(true)`: commits to the first branch that matches.
+
+For grammars that do backtrack a lot, wrap the reader to remember dead ends:
+
+```go
+rd, _ := runes.New(strings.NewReader(input))
+mrd := ebnf.WithMemo[rune, runes.Pos](rd, func(p runes.Pos) int { return p.Index })
+matched, result, err := pattern.Match(mrd)
+```
+
+This remembers failures only (a pattern with no match at a position; a concatenation or repetition whose remainder
+already failed from a position), so catastrophic cases like `(a*)*, c` stay polynomial. It does not cache successes.
+Use one wrapper per input; it assumes the input does not change. Mismatches already seen are not logged again.
 
 ## EBNF Printing
 

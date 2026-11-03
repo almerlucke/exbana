@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"slices"
 
 	ebnf "github.com/almerlucke/exbana/v2"
 )
@@ -66,32 +67,113 @@ func (rep *Repetition[T, P]) Max() int {
 
 // Match matches the repetition pattern aginst a stream
 func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) {
-	var matches []*ebnf.Match[T, P]
+	return ebnf.FirstMatch(r, rep.MatchCont)
+}
 
+// MatchCont offers the matches of the repetition to the continuation, most repetitions first (greedy). If the
+// continuation rejects a match the repetition gives back one repetition at a time until min is reached.
+// A possessive repetition does not backtrack, it only offers the greedy match and is faster as it does not recurse.
+func (rep *Repetition[T, P]) MatchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.MatchMemo(ebnf.Pattern[T, P](rep), r, k, rep.matchCont)
+}
+
+func (rep *Repetition[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
 	beginPos, err := r.Position()
 	if ebnf.IsStreamError(err) {
-		return false, nil, err
+		return false, err
 	}
 
-	for {
-		if r.Finished() {
-			break
+	if rep.possessive {
+		return rep.matchPossessive(r, beginPos, k)
+	}
+
+	var matches []*ebnf.Match[T, P]
+
+	failed := ebnf.NewFailSet(r)
+
+	var next func() (bool, error)
+
+	var nextFrom func(herePos P) (bool, error)
+
+	// next is called with the reader positioned after the repetitions matched so far
+	next = func() (bool, error) {
+		herePos, err := r.Position()
+		if ebnf.IsStreamError(err) {
+			return false, err
 		}
 
+		// once min is reached and there is no max, the outcome only depends on the position and not on the
+		// number of repetitions, so a dead end at this position stays a dead end
+		stateless := rep.max == 0 && len(matches) >= rep.min
+
+		if stateless && failed.Has(0, herePos) {
+			return false, nil
+		}
+
+		matched, err := nextFrom(herePos)
+		if err == nil && !matched && stateless {
+			failed.Add(0, herePos)
+		}
+
+		return matched, err
+	}
+
+	nextFrom = func(herePos P) (bool, error) {
+		n := len(matches)
+
+		if rep.max == 0 || n < rep.max {
+			matched, err := rep.pattern.MatchCont(r, func(m *ebnf.Match[T, P]) (bool, error) {
+				matches = append(matches[:n], m)
+
+				// a repetition that consumed nothing would repeat forever, so it ends the repetition and counts
+				// as all the repetitions that are still needed
+				if r.Length(herePos, m.End) <= 0 {
+					return k(ebnf.NewMatch(rep, beginPos, m.End, nil, slices.Clone(matches)))
+				}
+
+				return next()
+			})
+			if err != nil || matched {
+				return matched, err
+			}
+
+			matches = matches[:n]
+
+			err = r.SetPosition(herePos)
+			if ebnf.IsStreamError(err) {
+				return false, err
+			}
+		}
+
+		if n < rep.min {
+			rep.Logger().LogMismatch(ebnf.NewMismatch(rep, beginPos, herePos, nil, slices.Clone(matches)))
+			return false, nil
+		}
+
+		return k(ebnf.NewMatch(rep, beginPos, herePos, nil, slices.Clone(matches)))
+	}
+
+	return next()
+}
+
+func (rep *Repetition[T, P]) matchPossessive(r ebnf.Reader[T, P], beginPos P, k ebnf.Continuation[T, P]) (bool, error) {
+	var matches []*ebnf.Match[T, P]
+
+	for rep.max == 0 || len(matches) < rep.max {
 		resetPos, err := r.Position()
 		if ebnf.IsStreamError(err) {
-			return false, nil, err
+			return false, err
 		}
 
 		matched, result, err := rep.pattern.Match(r)
 		if err != nil {
-			return false, nil, err
+			return false, err
 		}
 
 		if !matched {
 			err = r.SetPosition(resetPos)
 			if ebnf.IsStreamError(err) {
-				return false, nil, err
+				return false, err
 			}
 
 			break
@@ -100,37 +182,22 @@ func (rep *Repetition[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P]
 		matches = append(matches, result)
 
 		// a match that consumed nothing would match forever, stop repeating
-		endPos, err := r.Position()
-		if ebnf.IsStreamError(err) {
-			return false, nil, err
-		}
-
-		if r.Length(resetPos, endPos) <= 0 {
+		if r.Length(resetPos, result.End) <= 0 {
 			break
 		}
-
-		if rep.max != 0 && len(matches) == rep.max {
-			break
-		}
-	}
-
-	if len(matches) < rep.min {
-		endPos, err := r.Position()
-		if ebnf.IsStreamError(err) {
-			return false, nil, err
-		}
-
-		rep.Logger().LogMismatch(ebnf.NewMismatch(rep, beginPos, endPos, nil, matches))
-
-		return false, nil, nil
 	}
 
 	endPos, err := r.Position()
 	if ebnf.IsStreamError(err) {
-		return false, nil, err
+		return false, err
 	}
 
-	return true, ebnf.NewMatch(rep, beginPos, endPos, nil, matches), nil
+	if len(matches) < rep.min {
+		rep.Logger().LogMismatch(ebnf.NewMismatch(rep, beginPos, endPos, nil, matches))
+		return false, nil
+	}
+
+	return k(ebnf.NewMatch(rep, beginPos, endPos, nil, matches))
 }
 
 // SetMaxGen sets the maximum generated entities on top of min

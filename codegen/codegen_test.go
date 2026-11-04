@@ -1637,3 +1637,475 @@ func TestExceptionHasNoView(t *testing.T) {
 }
 `})
 }
+
+func TestSkippingGarbageBetweenStatements(t *testing.T) {
+	program, stmt := statements(t)
+
+	space := entity.OneOf[rune, runes.Pos](' ', '\n', '\t')
+	ws := many(space).SetPossessive(true)
+
+	// block = "{" { stmt } "}" end
+	block := rule.New[rune, runes.Pos]("block", conc(text("{"), ws, many(stmt).SetPossessive(true), text("}"), ws, end.New[rune, runes.Pos]().Printed("end of input")))
+
+	skip := map[string]codegen.Skip[rune, runes.Pos]{"stmt": {}}
+
+	gen := func(root pat, name string, utf8 bool, c cfg) string {
+		c.Package, c.Name, c.UTF8 = "probe", name, utf8
+
+		src, err := codegen.Generate[rune, runes.Pos](root, c)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		return string(src)
+	}
+
+	resume := conc(text(";"), many(space).SetPossessive(true))
+
+	files := map[string]string{
+		"s.go":  gen(program, "S", false, cfg{Skip: skip}),
+		"su.go": gen(program, "SU", true, cfg{Skip: skip}),
+		"c.go": gen(program, "C", false, cfg{Skip: map[string]codegen.Skip[rune, runes.Pos]{"stmt": {Until: text("let")}}, Recover: map[string]codegen.Recovery[rune, runes.Pos]{
+			"stmt": {Until: resume, Consume: true}}}),
+		"t.go": gen(program, "T", false, cfg{Skip: map[string]codegen.Skip[rune, runes.Pos]{"stmt": {Until: text("let")}}}),
+		"b.go": gen(block, "B", false, cfg{Skip: map[string]codegen.Skip[rune, runes.Pos]{"stmt": {Stop: text("}")}}}),
+		"n.go": gen(block, "N", false, cfg{Skip: skip}),
+	}
+
+	// what the grammar says about the first thing that is wrong in a text
+	first := func(root pat, in string) string {
+		rd, _ := runes.New(strings.NewReader(in))
+		log := runes.NewFarthestLog(rd)
+
+		ok, _, err := ebnf.Parse[rune, runes.Pos](root, ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if ok || log.Err() == nil {
+			return ""
+		}
+
+		return log.Err().Error()
+	}
+
+	type tc struct {
+		in      string
+		errs    int
+		stmts   string // the statements, trimmed, with | between
+		garbage string // the error nodes
+	}
+
+	cases := []tc{
+		{"let a = 1;\n@@ junk\nlet b = 2;\n", 1, "let a = 1;|let b = 2;", "@@ junk"},
+		{"@@ let a = 1; let b = 2;", 1, "let a = 1;|let b = 2;", "@@"},
+		{"let a = 1; ## let b = 2; $$", 2, "let a = 1;|let b = 2;", "##|$$"},
+		{"xlet a = 1;", 1, "let a = 1;", "x"},
+		{"let a = 1; é€😀 let b = 2;", 1, "let a = 1;|let b = 2;", "é€😀"},
+		{"let a = 1;\n@@\n@@@\nlet b = 2;", 1, "let a = 1;|let b = 2;", "@@\n@@@"},
+		{"let a = 1; let b = 2;", 0, "let a = 1;|let b = 2;", ""},
+		{"", 0, "", ""},
+		{"@@", 1, "", "@@"},
+	}
+
+	var table strings.Builder
+	for _, c := range cases {
+		fmt.Fprintf(&table, "\t{%q, %d, %q, %q, %q},\n", c.in, c.errs, c.stmts, c.garbage, first(program, c.in))
+	}
+
+	files["skip_test.go"] = `package probe
+
+import (
+	"math/rand"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+var cases = []struct {
+	in      string
+	errs    int
+	stmts   string
+	garbage string
+	message string // the first error, as the grammar says it
+}{
+` + table.String() + `}
+
+// the texts of the nodes of a rule at the top, and of the errors below the program
+func texts(nodes func(yield func(int) bool), text func(int) string) string {
+	var out []string
+	for n := range nodes {
+		out = append(out, strings.TrimSpace(text(n)))
+	}
+
+	return strings.Join(out, "|")
+}
+
+func TestSkipsTheGarbage(t *testing.T) {
+	for _, c := range cases {
+		{
+			tree, errs := NewSParser().ParseAll([]rune(c.in))
+			if tree == nil || len(errs) != c.errs {
+				t.Errorf("%q: tree %v errors %v, want %d errors", c.in, tree != nil, errs, c.errs)
+				continue
+			}
+
+			if tree.End != len(c.in) && len([]rune(c.in)) != tree.End {
+				t.Errorf("%q: ends at %d", c.in, tree.End)
+			}
+
+			if c.errs > 0 && errs[0].Error() != c.message {
+				t.Errorf("%q:\n  error   %q\n  grammar %q", c.in, errs[0], c.message)
+			}
+
+			if got := texts(tree.FindStmt(0), tree.Text); got != c.stmts {
+				t.Errorf("%q: statements %q, want %q", c.in, got, c.stmts)
+			}
+
+			if got := texts(tree.Find(0, SRuleError), tree.Text); got != c.garbage {
+				t.Errorf("%q: garbage %q, want %q", c.in, got, c.garbage)
+			}
+		}
+
+		// the same in UTF-8: the same nodes, and the errors count characters
+		{
+			tree, errs := NewSUParser().ParseAll(c.in)
+			if tree == nil || len(errs) != c.errs {
+				t.Errorf("UTF-8 %q: tree %v errors %v", c.in, tree != nil, errs)
+				continue
+			}
+
+			if tree.End != len(c.in) {
+				t.Errorf("UTF-8 %q: ends at %d of %d", c.in, tree.End, len(c.in))
+			}
+
+			if c.errs > 0 && errs[0].Error() != c.message {
+				t.Errorf("UTF-8 %q:\n  error   %q\n  grammar %q", c.in, errs[0], c.message)
+			}
+
+			if got := texts(tree.FindStmt(0), tree.Text); got != c.stmts {
+				t.Errorf("UTF-8 %q: statements %q, want %q", c.in, got, c.stmts)
+			}
+
+			if got := texts(tree.Find(0, SURuleError), tree.Text); got != c.garbage {
+				t.Errorf("UTF-8 %q: garbage %q, want %q", c.in, got, c.garbage)
+			}
+		}
+
+		// Parse does not skip anything
+		if c.errs > 0 {
+			if _, err := NewSParser().ParseString(c.in); err == nil || err.Error() != c.message {
+				t.Errorf("Parse of %q: %v", c.in, err)
+			}
+		}
+	}
+}
+
+// model is what skipping garbage means, said without the parser: at a place where a statement matches it is taken, and where
+// none does the text up to the next place where one does (or the end) is garbage.
+func model(in string) (kinds, texts []string) {
+	stmt := regexp.MustCompile("^let[ \\n\\t]+[a-z]+[ \\n\\t]*=[ \\n\\t]*[0-9]+[ \\n\\t]*;[ \\n\\t]*")
+	lead := regexp.MustCompile("^[ \\n\\t]*")
+
+	pos := len(lead.FindString(in))
+
+	for pos < len(in) {
+		if m := stmt.FindString(in[pos:]); m != "" {
+			kinds, texts = append(kinds, "stmt"), append(texts, m)
+			pos += len(m)
+
+			continue
+		}
+
+		end := pos
+		for end < len(in) {
+			_, w := utf8.DecodeRuneInString(in[end:])
+			end += w
+
+			if end >= len(in) || stmt.MatchString(in[end:]) {
+				break
+			}
+		}
+
+		kinds, texts = append(kinds, "error"), append(texts, in[pos:end])
+		pos = end
+	}
+
+	return kinds, texts
+}
+
+func TestAgainstTheModel(t *testing.T) {
+	pieces := []string{"let a = 1;", "let b = 22; ", " ", "\n", "@@", "x", "é", "😀", "let", "let =", ";", "let c = ;", "=", "1", "let d = 3;\n"}
+	rng := rand.New(rand.NewSource(99))
+
+	for range 4000 {
+		var sb strings.Builder
+		for range rng.Intn(7) {
+			sb.WriteString(pieces[rng.Intn(len(pieces))])
+		}
+
+		in := sb.String()
+		kinds, texts := model(in)
+
+		tree, errs := NewSUParser().ParseAll(in)
+		if tree == nil || tree.End != len(in) {
+			t.Fatalf("%q: no tree, or it does not reach the end: %v", in, errs)
+		}
+
+		var gotKinds, gotTexts []string
+		for c := range tree.Children(0) {
+			gotKinds, gotTexts = append(gotKinds, tree.Rule(c).String()), append(gotTexts, tree.Text(c))
+		}
+
+		if !slices.Equal(gotKinds, kinds) || !slices.Equal(gotTexts, texts) {
+			t.Fatalf("%q:\n  parser %q %q\n  model  %q %q", in, gotKinds, gotTexts, kinds, texts)
+		}
+
+		if want := strings.Count(strings.Join(kinds, " "), "error"); len(errs) != want {
+			t.Fatalf("%q: %d errors, want %d: %v", in, len(errs), want, errs)
+		}
+
+		// the runes parser finds the same
+		rtree, rerrs := NewSParser().ParseAll([]rune(in))
+		if rtree == nil || len(rerrs) != len(errs) || rtree.Dump() == "" {
+			t.Fatalf("%q: runes: %v %v", in, rtree != nil, rerrs)
+		}
+
+		for i := range errs {
+			if errs[i].Error() != rerrs[i].Error() {
+				t.Fatalf("%q: error %d differs\n  %q\n  %q", in, i, errs[i], rerrs[i])
+			}
+		}
+	}
+}
+
+func TestSkippingAndRecoveringTogether(t *testing.T) {
+	// garbage between statements is skipped up to the next let, and a statement that goes wrong in the middle is recovered;
+	// with the default the broken statement would have been taken for garbage, because only one that matches ends the skipping
+	tree, errs := NewCParser().ParseAll([]rune("let a = 1; ?? let b = ; let c = 3;"))
+	if tree == nil || len(errs) != 2 {
+		t.Fatalf("tree %v errors %v", tree != nil, errs)
+	}
+
+	if got := texts(tree.FindStmt(0), tree.Text); got != "let a = 1;|let b = ;|let c = 3;" {
+		t.Errorf("statements %q", got)
+	}
+
+	if got := texts(tree.Find(0, CRuleError), tree.Text); got != "??" {
+		t.Errorf("garbage at the top %q", got)
+	}
+}
+
+func TestSkipUntilWhatTheGrammarSays(t *testing.T) {
+	const in = "@@ let = 1; let b = 2;"
+
+	// by default: skip until a statement matches, which skips the first let
+	tree, errs := NewSParser().ParseAll([]rune(in))
+	if tree == nil || len(errs) != 1 {
+		t.Fatalf("default: %v %v", tree != nil, errs)
+	}
+
+	// until "let": the first let is where the parse goes on, and a statement can not start with it
+	ttree, terrs := NewTParser().ParseAll([]rune(in))
+	if ttree == nil || len(terrs) != 2 {
+		t.Fatalf("until let: %v %v", ttree != nil, terrs)
+	}
+
+	if got := texts(ttree.Find(0, TRuleError), ttree.Text); got != "@@|let = 1;" {
+		t.Errorf("garbage %q", got)
+	}
+}
+
+func TestTheRepetitionEndsWhereStopSays(t *testing.T) {
+	tree, errs := NewBParser().ParseAll([]rune("{ let a = 1; ?? let b = 2; }"))
+	if tree == nil || len(errs) != 1 {
+		t.Fatalf("tree %v errors %v", tree != nil, errs)
+	}
+
+	if got := texts(tree.FindStmt(0), tree.Text); got != "let a = 1;|let b = 2;" {
+		t.Errorf("statements %q", got)
+	}
+
+	// and the end of the block is not garbage
+	if tree, errs := NewBParser().ParseAll([]rune("{ let a = 1; }")); tree == nil || len(errs) != 0 {
+		t.Errorf("a block without garbage: %v %v", tree != nil, errs)
+	}
+
+	// without Stop the "}" that closes the block is skipped like the rest, and the block never closes
+	ntree, nerrs := NewNParser().ParseAll([]rune("{ let a = 1; }"))
+	if ntree != nil || len(nerrs) != 2 {
+		t.Errorf("no Stop: tree %v errors %v", ntree != nil, nerrs)
+	}
+}
+`
+
+	gentest.Run(t, files)
+}
+
+func positionGrammar() pat {
+	num := rule.New[rune, runes.Pos]("num", some(between('0', '9')).SetPossessive(true))
+	word := rule.New[rune, runes.Pos]("word", some(between('a', 'z')).SetPossessive(true))
+	value := rule.New[rune, runes.Pos]("value", alt(num, word).SetOrthogonal(true))
+	pair := rule.New[rune, runes.Pos]("pair", conc(value, text(":"), value))
+	span := rule.New[rune, runes.Pos]("span", conc(num, maybe(conc(text(".."), num)).SetPossessive(true)))
+
+	return rule.New[rune, runes.Pos]("doc", conc(pair, text(" "), span))
+}
+
+func TestPositionsNameTheChildrenByWhereTheyAre(t *testing.T) {
+	src, err := codegen.Generate[rune, runes.Pos](positionGrammar(), cfg{Package: "probe", Name: "P", AST: true,
+		Positions: map[string]map[string][]string{
+			"pair": {"value": {"Key", "Val"}},
+			"span": {"num": {"From", "To"}},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gentest.Run(t, map[string]string{"p.go": string(src), "p_test.go": `package probe
+
+import (
+	"iter"
+	"testing"
+)
+
+var (
+	_ func() PValue            = PPair{}.Key // there are always two values in a pair
+	_ func() PValue            = PPair{}.Val
+	_ func() iter.Seq[PValue]  = PPair{}.Values // and the other way to get them is still there
+	_ func() PNum              = PSpan{}.From
+	_ func() (PNum, bool)      = PSpan{}.To // the second number may not be there
+	_ func() iter.Seq[PNum]    = PSpan{}.Nums
+)
+
+func TestNames(t *testing.T) {
+	tree, err := NewPParser().ParseString("ab:12 3..45")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc := tree.Top().Doc()
+	pair := doc.Pair()
+	if pair.Key().Text() != "ab" || pair.Val().Text() != "12" {
+		t.Errorf("pair = %q %q", pair.Key().Text(), pair.Val().Text())
+	}
+
+	span := doc.SpanRule() // Span is the span of the node
+	to, ok := span.To()
+	if span.From().Text() != "3" || !ok || to.Text() != "45" {
+		t.Errorf("span = %q %q %v", span.From().Text(), to.Text(), ok)
+	}
+
+	tree, err = NewPParser().ParseString("a:b 7")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := tree.Top().Doc().SpanRule().To(); ok {
+		t.Error("7 has no end")
+	}
+}
+`})
+}
+
+func TestPositionsAreCheckedWhenGenerating(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  cfg
+		want string
+	}{
+		"no AST":            {cfg{Positions: map[string]map[string][]string{"pair": {"value": {"A", "B"}}}}, "needs Config.AST"},
+		"unknown rule":      {cfg{AST: true, Positions: map[string]map[string][]string{"nope": {"value": {"A"}}}}, "does not have: nope"},
+		"unknown child":     {cfg{AST: true, Positions: map[string]map[string][]string{"pair": {"nope": {"A"}}}}, "does not have nope inside"},
+		"too many names":    {cfg{AST: true, Positions: map[string]map[string][]string{"pair": {"value": {"A", "B", "C"}}}}, "at most 2 times, and 3 names"},
+		"not exported":      {cfg{AST: true, Positions: map[string]map[string][]string{"pair": {"value": {"a", "B"}}}}, "not an exported identifier"},
+		"not an identifier": {cfg{AST: true, Positions: map[string]map[string][]string{"pair": {"value": {"A B"}}}}, "not an exported identifier"},
+		"every view has it": {cfg{AST: true, Positions: map[string]map[string][]string{"pair": {"value": {"Text"}}}}, "method every view has"},
+		"used twice":        {cfg{AST: true, Positions: map[string]map[string][]string{"pair": {"value": {"A", "A"}}}}, "used twice"},
+	} {
+		tc.cfg.Package = "probe"
+
+		_, err := codegen.Generate[rune, runes.Pos](positionGrammar(), tc.cfg)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+
+	// the same for what Skip is given
+	root := positionGrammar()
+
+	for name, tc := range map[string]struct {
+		skip map[string]codegen.Skip[rune, runes.Pos]
+		want string
+	}{
+		"unknown rule": {map[string]codegen.Skip[rune, runes.Pos]{"nope": {}}, "does not have: nope"},
+		"uses a rule":  {map[string]codegen.Skip[rune, runes.Pos]{"pair": {Stop: rule.New[rune, runes.Pos]("x", text("x"))}}, "uses rules"},
+	} {
+		_, err := codegen.Generate[rune, runes.Pos](root, cfg{Package: "probe", Skip: tc.skip})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("skip %s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestSkippingStopsWhereItShould(t *testing.T) {
+	_, stmt := statements(t)
+
+	space := entity.OneOf[rune, runes.Pos](' ', '\n', '\t')
+	ws := many(space).SetPossessive(true)
+	closing := end.New[rune, runes.Pos]().Printed("end of input")
+
+	stop := map[string]codegen.Skip[rune, runes.Pos]{"stmt": {Stop: text("}")}}
+
+	block := rule.New[rune, runes.Pos]("block", conc(text("{"), ws, many(stmt).SetPossessive(true), text("}"), ws, closing))
+	atomic := rule.New[rune, runes.Pos]("block", conc(text("{"), ws, many(stmt).SetPossessive(true), text("}"), ws, closing)).SetAtomic(true)
+	limited := rule.New[rune, runes.Pos]("block", conc(ws, repetition.New[rune, runes.Pos](stmt, 0, 2).SetPossessive(true), closing))
+
+	files := map[string]string{}
+
+	for name, root := range map[string]pat{"B": block, "A": atomic, "L": limited} {
+		src, err := codegen.Generate[rune, runes.Pos](root, cfg{Package: "probe", Name: name, Skip: stop})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		files[strings.ToLower(name)+".go"] = string(src)
+	}
+
+	files["stop_test.go"] = `package probe
+
+import "testing"
+
+func TestGarbageRightBeforeTheStop(t *testing.T) {
+	tree, errs := NewBParser().ParseAll([]rune("{ let a = 1; ?? }"))
+	if tree == nil || len(errs) != 1 {
+		t.Fatalf("tree %v errors %v", tree != nil, errs)
+	}
+
+	if got := tree.Text(len(tree.Nodes) - 1); got != "?? " {
+		t.Errorf("garbage %q", got)
+	}
+}
+
+func TestAnAtomicRuleDoesNotSkip(t *testing.T) {
+	// what is inside an atomic rule is not reported, and so there is nothing to recover from
+	if tree, errs := NewAParser().ParseAll([]rune("{ let a = 1; ?? let b = 2; }")); tree != nil || len(errs) != 1 {
+		t.Errorf("tree %v errors %v", tree != nil, errs)
+	}
+}
+
+func TestARepetitionWithALimitDoesNotSkip(t *testing.T) {
+	if tree, errs := NewLParser().ParseAll([]rune("let a = 1; ?? let b = 2;")); tree != nil || len(errs) != 1 {
+		t.Errorf("tree %v errors %v", tree != nil, errs)
+	}
+
+	// and without garbage it is the same repetition
+	if tree, errs := NewLParser().ParseAll([]rune("let a = 1; let b = 2;")); tree == nil || len(errs) != 0 {
+		t.Errorf("tree %v errors %v", tree != nil, errs)
+	}
+}
+`
+
+	gentest.Run(t, files)
+}

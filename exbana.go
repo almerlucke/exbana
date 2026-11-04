@@ -45,6 +45,13 @@
 // or [LogMismatch] (a composite, with details), and lookahead is matched through [Silent] so that it does not reach
 // the logger. Embed [Label] to be [Named] and to print leaves. [EnsureContext], [EndSet] and the rule frames are what
 // a rule uses to find left recursion.
+//
+// # Reading a grammar
+//
+// [Analyze] describes a pattern and everything it is built from as a [Grammar]: a tree of [Node] and a table of rules.
+// Each pattern describes itself with a [Shape] (see [Structured], which a pattern you write can implement too); one that
+// does not is [KindOpaque]. The declarative leaves of the entity and vector packages (Between, In, Equals, Text and the
+// like) say what they accept, where a leaf made from a function is only "one element".
 package exbana
 
 import (

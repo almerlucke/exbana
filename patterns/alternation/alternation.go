@@ -274,3 +274,8 @@ func (a *Alternation[T, P]) Printed(text string) *Alternation[T, P] {
 	a.SetText(text)
 	return a
 }
+
+// Shape implements ebnf.Structured.
+func (a *Alternation[T, P]) Shape() ebnf.Shape[T, P] {
+	return ebnf.Shape[T, P]{Kind: ebnf.KindAlt, ID: a.ID(), Text: a.Text(), Orthogonal: a.isOrthogonal, Parts: a.patterns}
+}

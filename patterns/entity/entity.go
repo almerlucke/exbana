@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 
@@ -12,6 +13,12 @@ type Entity[T, P any] struct {
 	ebnf.Label
 	matchFunc func(T) bool
 	genFunc   func(*ebnf.GenContext) T
+
+	// what a declarative entity (Between, In, Equals and the like) is made of, which is how it describes itself
+	ranges  [][2]T
+	negated bool
+	exact   bool
+	literal bool // a single value, compared with ==
 }
 
 // New creates a new entity pattern
@@ -123,4 +130,92 @@ func (e *Entity[T, P]) Named(id string) *Entity[T, P] {
 func (e *Entity[T, P]) Printed(text string) *Entity[T, P] {
 	e.SetText(text)
 	return e
+}
+
+// Range is an inclusive range of elements, from Lo to Hi.
+type Range[T cmp.Ordered] struct {
+	Lo, Hi T
+}
+
+func inRanges[T cmp.Ordered](ranges [][2]T, negated bool) func(T) bool {
+	return func(x T) bool {
+		for _, r := range ranges {
+			if x >= r[0] && x <= r[1] {
+				return !negated
+			}
+		}
+
+		return negated
+	}
+}
+
+func class[T cmp.Ordered, P any](negated bool, ranges []Range[T]) *Entity[T, P] {
+	rs := make([][2]T, len(ranges))
+	for i, r := range ranges {
+		rs[i] = [2]T{r.Lo, r.Hi}
+	}
+
+	e := New[T, P](inRanges(rs, negated))
+	e.ranges, e.negated, e.exact = rs, negated, true
+
+	return e
+}
+
+// Between matches one element from lo to hi, both included: entity.Between[rune, runes.Pos]('a', 'z').
+// Unlike an entity made with New, which is decided by a function nobody can look into, it describes itself, so tools
+// can analyse the grammar (see ebnf.Analyze).
+func Between[T cmp.Ordered, P any](lo, hi T) *Entity[T, P] {
+	return class[T, P](false, []Range[T]{{lo, hi}})
+}
+
+// In matches one element that is in one of the ranges, like the class [a-zA-Z_] of a regular expression.
+func In[T cmp.Ordered, P any](ranges ...Range[T]) *Entity[T, P] {
+	return class[T, P](false, ranges)
+}
+
+// NotIn matches one element that is in none of the ranges, like the class [^"\\].
+func NotIn[T cmp.Ordered, P any](ranges ...Range[T]) *Entity[T, P] {
+	return class[T, P](true, ranges)
+}
+
+// OneOf matches one element that is one of the values.
+func OneOf[T cmp.Ordered, P any](values ...T) *Entity[T, P] {
+	ranges := make([]Range[T], len(values))
+	for i, v := range values {
+		ranges[i] = Range[T]{v, v}
+	}
+
+	return class[T, P](false, ranges)
+}
+
+// Equals matches one element that is equal to the value. It can generate that value without a generate function.
+func Equals[T comparable, P any](value T) *Entity[T, P] {
+	e := New[T, P](func(x T) bool { return x == value })
+	e.ranges, e.exact, e.literal = [][2]T{{value, value}}, true, true
+	e.SetGenerateFunc(func() T { return value })
+
+	return e
+}
+
+// Any matches any one element.
+func Any[T, P any]() *Entity[T, P] {
+	e := New[T, P](func(T) bool { return true })
+	e.negated, e.exact = true, true
+
+	return e
+}
+
+// Shape implements ebnf.Structured. An entity made with New is a class of one element that only its function knows;
+// the declarative ones know their ranges.
+func (e *Entity[T, P]) Shape() ebnf.Shape[T, P] {
+	s := ebnf.Shape[T, P]{Kind: ebnf.KindClass, ID: e.ID(), Text: e.Text(), Exact: e.exact}
+
+	switch {
+	case e.literal:
+		s.Kind, s.Values = ebnf.KindLiteral, []T{e.ranges[0][0]}
+	case e.exact:
+		s.Ranges, s.Negated = e.ranges, e.negated
+	}
+
+	return s
 }

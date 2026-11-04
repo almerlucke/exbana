@@ -62,3 +62,8 @@ func (e *End[T, P]) Printed(text string) *End[T, P] {
 	e.SetText(text)
 	return e
 }
+
+// Shape implements ebnf.Structured.
+func (e *End[T, P]) Shape() ebnf.Shape[T, P] {
+	return ebnf.Shape[T, P]{Kind: ebnf.KindEnd, ID: e.ID(), Text: e.Text()}
+}

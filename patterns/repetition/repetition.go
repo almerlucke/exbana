@@ -555,3 +555,12 @@ func (rep *Repetition[T, P]) Printed(text string) *Repetition[T, P] {
 	rep.SetText(text)
 	return rep
 }
+
+// Shape implements ebnf.Structured.
+func (rep *Repetition[T, P]) Shape() ebnf.Shape[T, P] {
+	return ebnf.Shape[T, P]{
+		Kind: ebnf.KindRepeat, ID: rep.ID(), Text: rep.Text(),
+		Min: rep.min, Max: rep.max, Possessive: rep.possessive,
+		Parts: ebnf.Patterns[T, P]{rep.pattern},
+	}
+}

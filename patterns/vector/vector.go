@@ -2,6 +2,7 @@ package vector
 
 import (
 	"io"
+	"strconv"
 
 	ebnf "github.com/almerlucke/exbana/v3"
 )
@@ -11,6 +12,7 @@ type Vector[T, P any] struct {
 	ebnf.Label
 	eq     func(T, T) bool
 	vector []T
+	exact  bool // compared with ==
 }
 
 // New creates a new vector pattern
@@ -103,4 +105,24 @@ func (v *Vector[T, P]) Named(id string) *Vector[T, P] {
 func (v *Vector[T, P]) Printed(text string) *Vector[T, P] {
 	v.SetText(text)
 	return v
+}
+
+// Literal matches the elements, compared with ==. Unlike a vector made with New, whose equality is a function nobody
+// can look into, it describes itself, so tools can analyse the grammar (see ebnf.Analyze).
+func Literal[T comparable, P any](values ...T) *Vector[T, P] {
+	v := New[T, P](func(a, b T) bool { return a == b }, values...)
+	v.exact = true
+
+	return v
+}
+
+// Text matches the characters of the string: vector.Text[runes.Pos]("function"). It prints as the quoted string unless
+// it was given other print text.
+func Text[P any](s string) *Vector[rune, P] {
+	return Literal[rune, P]([]rune(s)...).Printed(strconv.Quote(s))
+}
+
+// Shape implements ebnf.Structured.
+func (v *Vector[T, P]) Shape() ebnf.Shape[T, P] {
+	return ebnf.Shape[T, P]{Kind: ebnf.KindLiteral, ID: v.ID(), Text: v.Text(), Values: v.vector, Exact: v.exact}
 }

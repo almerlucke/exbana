@@ -106,6 +106,7 @@ func describe[T, P any](p ebnf.Pattern[T, P]) string {
 	return "unnamed"
 }
 
+// Print prints the text of the entity, see Printed.
 func (e *Entity[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte(e.Text()))
 	return err

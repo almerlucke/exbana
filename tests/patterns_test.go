@@ -945,7 +945,7 @@ func TestParseContextLoggerIgnoresException(t *testing.T) {
 func TestRuleMatchEvalAndRecursion(t *testing.T) {
 	digit := ebnf.Name(entR(func(r rune) bool { return r >= '0' && r <= '9' }), "digit")
 	number := rule.New[rune, runes.Pos]("number", concR(digit, repetition.New[rune, runes.Pos](digit, 0, 0))).
-		WithEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
+		SetEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
 			rs, err := rd.Range(m.Begin, m.End)
 			return len(rs), err
 		})

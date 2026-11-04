@@ -77,8 +77,3 @@ func (s *EndSet[T, P]) Add(pos P) bool {
 
 	return true
 }
-
-// Len returns the number of positions in the set.
-func (s *EndSet[T, P]) Len() int {
-	return len(s.set)
-}

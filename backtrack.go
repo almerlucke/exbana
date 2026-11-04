@@ -23,22 +23,22 @@ func FirstMatch[T, P any](r Reader[T, P], f func(Reader[T, P], Continuation[T, P
 	return true, result, nil
 }
 
-// Memo remembers, for a pattern at a position, the distinct ways it can end. A reader that implements Memo (a
-// ParseContext with WithMemo) enables memoization for composite patterns.
-type Memo[T, P any] interface {
-	// Solutions returns the matches remembered for the pattern at the position, one per distinct end position in
+// memoizer is implemented by a ParseContext, and is enabled by WithMemo. It remembers, for a pattern at a position, the
+// distinct ways the pattern can end.
+type memoizer[T, P any] interface {
+	// solutions returns the matches remembered for the pattern at the position, one per distinct end position in
 	// order of preference. The second result is false if nothing is remembered yet. An empty list means the pattern
 	// is known to have no match there.
-	Solutions(Pattern[T, P], P) ([]*Match[T, P], bool)
+	solutions(Pattern[T, P], P) ([]*Match[T, P], bool)
 
-	// SetSolutions remembers the matches of the pattern at the position.
-	SetSolutions(Pattern[T, P], P, []*Match[T, P])
+	// setSolutions remembers the matches of the pattern at the position.
+	setSolutions(Pattern[T, P], P, []*Match[T, P])
 
-	// Index maps a position to a unique integer.
-	Index(P) int
+	// indexOf maps a position to a unique integer.
+	indexOf(P) int
 
-	// Enabled returns true if the reader actually memoizes.
-	Enabled() bool
+	// memoEnabled returns true if the reader actually memoizes.
+	memoEnabled() bool
 }
 
 // FailSet remembers the positions at which a search with one fixed continuation already failed, so the same dead
@@ -49,37 +49,26 @@ type FailSet[P any] struct {
 	set   map[[2]int]struct{}
 }
 
-// NewFailSet creates a FailSet if the reader supports memoization, otherwise it returns nil.
-func NewFailSet[T, P any](r Reader[T, P]) *FailSet[P] {
-	f := &FailSet[P]{}
-	if !InitFailSet(f, r) {
-		return nil
-	}
-
-	return f
-}
-
 // InitFailSet prepares a FailSet that is a field of a larger struct, which saves allocating it separately, and
 // returns false if the reader does not memoize. A FailSet that was not initialized remembers nothing, like a nil one.
 func InitFailSet[T, P any](f *FailSet[P], r Reader[T, P]) bool {
-	memo, ok := r.(Memo[T, P])
-	if !ok || !memo.Enabled() {
+	memo, ok := r.(memoizer[T, P])
+	if !ok || !memo.memoEnabled() {
 		return false
 	}
 
-	f.index = memo.Index
+	f.index = memo.indexOf
 
 	return true
 }
 
-// Enabled returns true if the set remembers anything, which is when its reader memoizes.
-func (f *FailSet[P]) Enabled() bool {
+func (f *FailSet[P]) enabled() bool {
 	return f != nil && f.index != nil
 }
 
 // Has returns true if the search was already found to fail for this state (a caller defined number) at the position.
 func (f *FailSet[P]) Has(state int, pos P) bool {
-	if !f.Enabled() {
+	if !f.enabled() {
 		return false
 	}
 
@@ -90,7 +79,7 @@ func (f *FailSet[P]) Has(state int, pos P) bool {
 
 // Add records that the search fails for this state at the position.
 func (f *FailSet[P]) Add(state int, pos P) {
-	if !f.Enabled() {
+	if !f.enabled() {
 		return
 	}
 
@@ -115,8 +104,8 @@ func (f *FailSet[P]) Add(state int, pos P) {
 // Remembering all ways means f runs to completion the first time instead of stopping at the first match that is
 // accepted; the cost is bounded by the number of positions, not by the number of derivations.
 func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], f func(Reader[T, P], Continuation[T, P]) (bool, error)) (bool, error) {
-	memo, ok := r.(Memo[T, P])
-	if !ok || !memo.Enabled() {
+	memo, ok := r.(memoizer[T, P])
+	if !ok || !memo.memoEnabled() {
 		return f(r, k)
 	}
 
@@ -126,18 +115,18 @@ func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], 
 	}
 
 	// while a left recursive rule grows its seed the matches of patterns at its position change with every round
-	if g, ok := r.(interface{ GrowingAt(P) bool }); ok && g.GrowingAt(pos) {
+	if g, ok := r.(interface{ growingAt(P) bool }); ok && g.growingAt(pos) {
 		return f(r, k)
 	}
 
-	solutions, known := memo.Solutions(p, pos)
+	solutions, known := memo.solutions(p, pos)
 	if !known {
 		solutions, err = collectDistinct(r, memo, f)
 		if err != nil {
 			return false, err
 		}
 
-		memo.SetSolutions(p, pos, solutions)
+		memo.setSolutions(p, pos, solutions)
 	}
 
 	for _, m := range solutions {
@@ -156,7 +145,7 @@ func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], 
 
 // distinctCollector collects the matches offered to it, one for each end position.
 type distinctCollector[T, P any] struct {
-	memo      Memo[T, P]
+	memo      memoizer[T, P]
 	solutions []*Match[T, P]
 
 	// most patterns end in one or two ways, so duplicates are looked for by scanning, and a set is only made when there
@@ -165,11 +154,11 @@ type distinctCollector[T, P any] struct {
 }
 
 func (d *distinctCollector[T, P]) offer(m *Match[T, P]) (bool, error) {
-	end := d.memo.Index(m.End)
+	end := d.memo.indexOf(m.End)
 
 	if d.seen == nil {
 		for _, s := range d.solutions {
-			if d.memo.Index(s.End) == end {
+			if d.memo.indexOf(s.End) == end {
 				return false, nil
 			}
 		}
@@ -179,7 +168,7 @@ func (d *distinctCollector[T, P]) offer(m *Match[T, P]) (bool, error) {
 		if len(d.solutions) > 8 {
 			d.seen = make(map[int]struct{}, 2*len(d.solutions))
 			for _, s := range d.solutions {
-				d.seen[d.memo.Index(s.End)] = struct{}{}
+				d.seen[d.memo.indexOf(s.End)] = struct{}{}
 			}
 		}
 
@@ -195,7 +184,7 @@ func (d *distinctCollector[T, P]) offer(m *Match[T, P]) (bool, error) {
 }
 
 // collectDistinct runs f and returns the matches it offers, one for each end position, in the order they were offered.
-func collectDistinct[T, P any](r Reader[T, P], memo Memo[T, P], f func(Reader[T, P], Continuation[T, P]) (bool, error)) ([]*Match[T, P], error) {
+func collectDistinct[T, P any](r Reader[T, P], memo memoizer[T, P], f func(Reader[T, P], Continuation[T, P]) (bool, error)) ([]*Match[T, P], error) {
 	d := &distinctCollector[T, P]{memo: memo}
 
 	_, err := f(r, d.offer)
@@ -208,9 +197,9 @@ func collectDistinct[T, P any](r Reader[T, P], memo Memo[T, P], f func(Reader[T,
 // cheap, and it is how a pattern that repeats another one can walk through the matches without recursing.
 // The position of the reader is undefined afterwards.
 func DistinctMatches[T, P any](p Pattern[T, P], r Reader[T, P]) ([]*Match[T, P], error) {
-	memo, ok := r.(Memo[T, P])
-	if !ok || !memo.Enabled() {
-		return nil, ErrNoMemo
+	memo, ok := r.(memoizer[T, P])
+	if !ok || !memo.memoEnabled() {
+		return nil, errNoMemo
 	}
 
 	pos, err := r.Position()
@@ -219,12 +208,12 @@ func DistinctMatches[T, P any](p Pattern[T, P], r Reader[T, P]) ([]*Match[T, P],
 	}
 
 	growing := false
-	if g, ok := r.(interface{ GrowingAt(P) bool }); ok {
-		growing = g.GrowingAt(pos)
+	if g, ok := r.(interface{ growingAt(P) bool }); ok {
+		growing = g.growingAt(pos)
 	}
 
 	if !growing {
-		if solutions, known := memo.Solutions(p, pos); known {
+		if solutions, known := memo.solutions(p, pos); known {
 			return solutions, nil
 		}
 	}
@@ -232,5 +221,5 @@ func DistinctMatches[T, P any](p Pattern[T, P], r Reader[T, P]) ([]*Match[T, P],
 	return collectDistinct(r, memo, p.MatchCont)
 }
 
-// ErrNoMemo is returned by DistinctMatches for a reader that does not memoize.
-var ErrNoMemo = errors.New("exbana: the reader does not memoize")
+// errNoMemo is returned by DistinctMatches for a reader that does not memoize.
+var errNoMemo = errors.New("exbana: the reader does not memoize")

@@ -12,7 +12,7 @@ import (
 
 // Rule gives a pattern a name and an evaluation function. It is the unit a grammar is made of:
 //
-//	number := rule.New("number", digits).WithEval(evalNumber)
+//	number := rule.New("number", digits).SetEval(evalNumber)
 //
 // The match of a rule has the rule as its Pattern (so ID and Eval are the rule's) and the Value and Components
 // of the pattern it wraps, so an eval function sees the same shape the wrapped pattern produced.
@@ -55,8 +55,8 @@ func (r *Rule[T, P]) Defined() bool {
 	return r.inner != nil
 }
 
-// WithEval sets the function that evaluates a match of this rule.
-func (r *Rule[T, P]) WithEval(f func(*ebnf.Match[T, P], ebnf.Reader[T, P]) (any, error)) *Rule[T, P] {
+// SetEval sets the function that evaluates a match of this rule.
+func (r *Rule[T, P]) SetEval(f func(*ebnf.Match[T, P], ebnf.Reader[T, P]) (any, error)) *Rule[T, P] {
 	r.evalFunc = f
 	return r
 }

@@ -181,7 +181,7 @@ func TestGenericReaderRuleEval(t *testing.T) {
 	// sum = (odd | even)+, evaluated by adding the elements
 	elem := alternation.New[int, int](oddP(), evenP())
 	sum := rule.New[int, int]("sum", repetition.OneOrMore[int, int](elem)).
-		WithEval(func(m *ebnf.Match[int, int], rd ebnf.Reader[int, int]) (any, error) {
+		SetEval(func(m *ebnf.Match[int, int], rd ebnf.Reader[int, int]) (any, error) {
 			vals, err := rd.Range(m.Begin, m.End)
 			total := 0
 			for _, v := range vals {

@@ -174,6 +174,7 @@ func (c *Concatenation[T, P]) Print(w io.Writer) error {
 	return err
 }
 
+// SetPatterns replaces the patterns the concatenation is made of.
 func (c *Concatenation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Concatenation[T, P] {
 	c.patterns = patterns
 	return c

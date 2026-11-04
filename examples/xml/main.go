@@ -51,17 +51,17 @@ func evalRunes(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (
 }
 
 func ra() rl {
-	return anon(ent.New[rune, runes.Pos](func(obj rune) bool { return true })).WithEval(evalRunes)
+	return anon(ent.New[rune, runes.Pos](func(obj rune) bool { return true })).SetEval(evalRunes)
 }
 
 func rm(r rune) rl {
 	e := ent.New[rune, runes.Pos](func(obj rune) bool { return obj == r })
 	e.SetGenerateFunc(func() rune { return r })
-	return anon(e).WithEval(evalRunes)
+	return anon(e).SetEval(evalRunes)
 }
 
 func rb(r1 rune, r2 rune) rl {
-	return anon(rbOriginal(r1, r2)).WithEval(evalRunes)
+	return anon(rbOriginal(r1, r2)).SetEval(evalRunes)
 }
 
 func rbOriginal(r1 rune, r2 rune) *ent.Entity[rune, runes.Pos] {
@@ -70,7 +70,7 @@ func rbOriginal(r1 rune, r2 rune) *ent.Entity[rune, runes.Pos] {
 
 func rv(s string) rl {
 	v := vec.New[rune, runes.Pos](req, []rune(s)...)
-	return anon(v).WithEval(func(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (any, error) {
+	return anon(v).SetEval(func(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (any, error) {
 		return s, nil
 	})
 }
@@ -81,7 +81,7 @@ func conc(objs ...any) *concatenation.Concatenation[rune, runes.Pos] {
 
 func rep(obj any) rl {
 	r := repetition.New[rune, runes.Pos](objToPattern(obj), 0, 0).SetPossessive(true)
-	return anon(r).WithEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
+	return anon(r).SetEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
 		var sb strings.Builder
 		for _, c := range m.Components {
 			val, err := c.Eval(reader)
@@ -98,7 +98,7 @@ func rep(obj any) rl {
 
 func atLeast1(obj any) rl {
 	r := repetition.New[rune, runes.Pos](objToPattern(obj), 1, 0).SetPossessive(true)
-	return anon(r).WithEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
+	return anon(r).SetEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
 		var sb strings.Builder
 		for _, c := range m.Components {
 			val, err := c.Eval(reader)
@@ -248,28 +248,28 @@ func Parse(input string) (*Node, error) {
 	// Define Grammar
 	ws := rep(ent.New[rune, runes.Pos](unicode.IsSpace))
 	nameChar := alt(rb('a', 'z'), rb('A', 'Z'), rb('0', '9'), '_', '-')
-	name := atLeast1(nameChar).WithEval(evalName)
+	name := atLeast1(nameChar).SetEval(evalName)
 
-	attrValue := rule.New("attrValue", ex(ra(), '"')).WithEval(evalAttrValue)
+	attrValue := rule.New("attrValue", ex(ra(), '"')).SetEval(evalAttrValue)
 	// attr: conc(name, '=', '"', rep(attrValue), '"')
 	// index: 0: name, 1: '=', 2: '"', 3: rep, 4: '"'
-	attr := rule.New("attr", conc(name, '=', '"', rep(attrValue), '"')).WithEval(evalAttr)
+	attr := rule.New("attr", conc(name, '=', '"', rep(attrValue), '"')).SetEval(evalAttr)
 
 	attrs := rep(conc(ws, attr))
 
 	// forward tag declaration
-	tag := rule.Declare[rune, runes.Pos]("tag").WithEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
+	tag := rule.Declare[rune, runes.Pos]("tag").SetEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
 		if len(m.Components) > 0 {
 			return m.Components[0].Eval(reader)
 		}
 		return nil, nil
 	})
 
-	text := atLeast1(ex(ra(), '<')).WithEval(evalText)
+	text := atLeast1(ex(ra(), '<')).SetEval(evalText)
 
 	// content: rep(alt(tag, text))
 	content := rep(alt(tag, text))
-	content.WithEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
+	content.SetEval(func(m *ebnf.Match[rune, runes.Pos], reader ebnf.Reader[rune, runes.Pos]) (any, error) {
 		return m.Components, nil
 	})
 
@@ -281,7 +281,7 @@ func Parse(input string) (*Node, error) {
 	tag.Define(conc(rule.New("", alt(
 		conc('<', name, attrs, ws, rv("/>")),
 		conc('<', name, attrs, ws, '>', content, rv("</"), name, ws, '>'),
-	)).WithEval(evalTag)))
+	)).SetEval(evalTag)))
 
 	xmlGrammar := conc(ws, tag, ws)
 

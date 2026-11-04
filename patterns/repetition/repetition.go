@@ -34,31 +34,38 @@ func New[T, P any](pattern ebnf.Pattern[T, P], min int, max int) *Repetition[T, 
 	return rep
 }
 
+// Optional is zero or one repetitions of the pattern, printed as x?.
 func Optional[T, P any](pattern ebnf.Pattern[T, P]) *Repetition[T, P] {
 	return New[T, P](pattern, 0, 1)
 }
 
+// Any is zero or more repetitions of the pattern, printed as x*.
 func Any[T, P any](pattern ebnf.Pattern[T, P]) *Repetition[T, P] {
 	return New[T, P](pattern, 0, 0)
 }
 
+// OneOrMore is one or more repetitions of the pattern, printed as x+.
 func OneOrMore[T, P any](pattern ebnf.Pattern[T, P]) *Repetition[T, P] {
 	return New[T, P](pattern, 1, 0)
 }
 
+// Possessive returns true if the repetition never gives back what it matched, see SetPossessive.
 func (rep *Repetition[T, P]) Possessive() bool {
 	return rep.possessive
 }
 
+// SetPossessive makes the repetition possessive: it matches as many repetitions as it can in a loop and offers only that match, without backtracking into it. That is faster and uses no stack per repetition, so it is the right choice where the repeated pattern can not overlap with what follows.
 func (rep *Repetition[T, P]) SetPossessive(possessive bool) *Repetition[T, P] {
 	rep.possessive = possessive
 	return rep
 }
 
+// Min returns the least number of repetitions.
 func (rep *Repetition[T, P]) Min() int {
 	return rep.min
 }
 
+// Max returns the greatest number of repetitions, zero means no limit.
 func (rep *Repetition[T, P]) Max() int {
 	return rep.max
 }

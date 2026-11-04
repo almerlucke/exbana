@@ -169,37 +169,37 @@ func (c *Calculator) grammar() pattern {
 		more1(digit()),
 		opt(conc(char('.'), more1(digit()))),
 		opt(conc(oneOf("eE", "exponent"), opt(oneOf("+-", "sign")), more1(digit()))),
-	)).WithEval(evalNumber)
+	)).SetEval(evalNumber)
 
 	identifier := func() pattern {
 		return conc(letter(), any0(alt(letter(), digit()))).Named("identifier")
 	}
 
-	variable := rule.New("variable", identifier()).WithEval(c.evalVariable)
+	variable := rule.New("variable", identifier()).SetEval(c.evalVariable)
 
 	// forward declarations for the recursive rules
-	expr := rule.Declare[rune, runes.Pos]("expression").WithEval(evalBinary)
-	unary := rule.Declare[rune, runes.Pos]("unary").WithEval(delegate)
+	expr := rule.Declare[rune, runes.Pos]("expression").SetEval(evalBinary)
+	unary := rule.Declare[rune, runes.Pos]("unary").SetEval(delegate)
 
 	args := opt(conc(expr, any0(conc(ws, char(','), ws, expr))))
-	call := rule.New("call", conc(identifier(), ws, char('('), ws, args, ws, char(')'))).WithEval(evalCall)
+	call := rule.New("call", conc(identifier(), ws, char('('), ws, args, ws, char(')'))).SetEval(evalCall)
 
-	paren := rule.New("parenthesis", conc(char('('), ws, expr, ws, char(')'))).WithEval(func(m *match, r reader) (any, error) {
+	paren := rule.New("parenthesis", conc(char('('), ws, expr, ws, char(')'))).SetEval(func(m *match, r reader) (any, error) {
 		return num(m.Components[2], r)
 	})
 
-	primary := rule.New("primary", alt(number, call, variable, paren)).WithEval(delegate)
+	primary := rule.New("primary", alt(number, call, variable, paren)).SetEval(delegate)
 
-	power := rule.New("power", conc(primary, opt(conc(ws, char('^'), ws, unary)))).WithEval(evalPower)
+	power := rule.New("power", conc(primary, opt(conc(ws, char('^'), ws, unary)))).SetEval(evalPower)
 
-	negation := rule.New("negation", conc(oneOf("+-", "sign"), ws, unary)).WithEval(evalNegation)
+	negation := rule.New("negation", conc(oneOf("+-", "sign"), ws, unary)).SetEval(evalNegation)
 
-	term := rule.New("term", conc(unary, any0(conc(ws, oneOf("*/%", "multiplication operator"), ws, unary)))).WithEval(evalBinary)
+	term := rule.New("term", conc(unary, any0(conc(ws, oneOf("*/%", "multiplication operator"), ws, unary)))).SetEval(evalBinary)
 
 	expr.Define(conc(term, any0(conc(ws, oneOf("+-", "addition operator"), ws, term))))
 	unary.Define(alt(negation, power))
 
-	return rule.New("input", conc(ws, expr, ws, end.New[rune, runes.Pos]().Printed("end of input"))).WithEval(func(m *match, r reader) (any, error) {
+	return rule.New("input", conc(ws, expr, ws, end.New[rune, runes.Pos]().Printed("end of input"))).SetEval(func(m *match, r reader) (any, error) {
 		return num(m.Components[1], r)
 	})
 }

@@ -214,7 +214,7 @@ position, the expected list and the unexpected element for your own formatting. 
 declared before it is defined, which is how recursion is written, so no placeholder patterns are needed:
 
 ```go
-expr := rule.Declare[rune, runes.Pos]("expression").WithEval(evalBinary)
+expr := rule.Declare[rune, runes.Pos]("expression").SetEval(evalBinary)
 paren := rule.New("parenthesis", conc(char('('), expr, char(')')))
 expr.Define(alt(number, paren))
 ```
@@ -266,11 +266,13 @@ fmt.Print(rules)
 | `p.Match(rd)` on a `Pattern` | `ebnf.Parse(p, rd)` (concrete types still have `Match`) |
 | `p.SetID("x")` | `p.Named("x")` on the concrete pattern, or `ebnf.Name(p, "x")` |
 | `p.SetPrintOutput("x")` | `p.Printed("x")`, or `ebnf.Text(p, "x")` |
-| `p.SetEvalFunc(f)` | `rule.New("x", p).WithEval(f)` |
+| `p.SetEvalFunc(f)` | `rule.New("x", p).SetEval(f)` |
 | `p.SetLogger(l)`, `ebnf.SetLogger` | `ebnf.NewParseContext(rd).WithLogger(l)` |
 | `ebnf.WithMemo(rd, idx)` returning a `MemoReader` | same call, it returns a `*ParseContext`; or `NewParseContext(rd).WithMemo(idx)` |
 | placeholder `conc()` + `SetPatterns` for recursion | `rule.Declare(name)` and `.Define(p)` |
 | `BasePattern`, `Self`, `SetSelf` | gone: embed `ebnf.Label` for a name and print text, implement the three methods |
 | `p.ID()`, `p.Eval(m, rd)` on a `Pattern` | `ebnf.IDOf(p)`, `m.ID()`, `m.Eval(rd)` |
+
+Removed from the public API in v3: `StackLog` and `VoidLog` (write a `Logger`, it is one method), `NewFailSet` (use `InitFailSet`), and the memo plumbing (`Memo` and the `Solutions`, `SetSolutions`, `Index`, `Enabled`, `GrowingAt` methods of `ParseContext`), which is internal to the root package. `Rule.WithEval` is `Rule.SetEval`, like every other setter on a pattern.
 
 Fluent configuration that returns the concrete type (`SetPossessive`, `SetOrthogonal`, `SetWeights`, `SetMaxGen`, ...) is unchanged. A `Rule`'s `Print` prints only the definition; `ebnf.PrintRules` adds the `name =`.

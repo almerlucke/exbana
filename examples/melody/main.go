@@ -16,11 +16,11 @@ import (
 	"fmt"
 	"strings"
 
-	ebnf "github.com/almerlucke/exbana/v2"
-	"github.com/almerlucke/exbana/v2/patterns/alternation"
-	"github.com/almerlucke/exbana/v2/patterns/concatenation"
-	ent "github.com/almerlucke/exbana/v2/patterns/entity"
-	"github.com/almerlucke/exbana/v2/patterns/repetition"
+	ebnf "github.com/almerlucke/exbana/v3"
+	"github.com/almerlucke/exbana/v3/patterns/alternation"
+	"github.com/almerlucke/exbana/v3/patterns/concatenation"
+	ent "github.com/almerlucke/exbana/v3/patterns/entity"
+	"github.com/almerlucke/exbana/v3/patterns/repetition"
 )
 
 // Note is a scale degree (0 is the tonic C4, 7 is C5) with a duration in beats

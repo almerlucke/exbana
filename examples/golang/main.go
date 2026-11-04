@@ -6,13 +6,13 @@ import (
 	"strings"
 	"unicode"
 
-	ebnf "github.com/almerlucke/exbana/v2"
-	"github.com/almerlucke/exbana/v2/patterns/alternation"
-	"github.com/almerlucke/exbana/v2/patterns/concatenation"
-	ent "github.com/almerlucke/exbana/v2/patterns/entity"
-	"github.com/almerlucke/exbana/v2/patterns/repetition"
-	vec "github.com/almerlucke/exbana/v2/patterns/vector"
-	"github.com/almerlucke/exbana/v2/readers/runes"
+	ebnf "github.com/almerlucke/exbana/v3"
+	"github.com/almerlucke/exbana/v3/patterns/alternation"
+	"github.com/almerlucke/exbana/v3/patterns/concatenation"
+	ent "github.com/almerlucke/exbana/v3/patterns/entity"
+	"github.com/almerlucke/exbana/v3/patterns/repetition"
+	vec "github.com/almerlucke/exbana/v3/patterns/vector"
+	"github.com/almerlucke/exbana/v3/readers/runes"
 )
 
 type Writer struct {

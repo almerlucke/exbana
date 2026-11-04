@@ -3,7 +3,7 @@ package vector
 import (
 	"io"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // Vector represents a series of entities to match

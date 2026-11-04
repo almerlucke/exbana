@@ -6,7 +6,7 @@ import (
 	"io"
 	"slices"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // Alternation matches a series of patterns OR style in order (alternation)

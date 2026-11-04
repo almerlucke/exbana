@@ -4,7 +4,7 @@ import (
 	"io"
 	"slices"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // Concatenation matches a series of patterns AND style in order (concatenation)

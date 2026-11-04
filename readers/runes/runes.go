@@ -6,7 +6,7 @@ import (
 	"io"
 	"strconv"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 type Pos struct {

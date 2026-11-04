@@ -3,7 +3,7 @@ package end
 import (
 	"io"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // End matches the end of stream

@@ -220,10 +220,49 @@ func arithmetic(leftRecursive bool) ebnf.Pattern[rune, runes.Pos] {
 	return expr
 }
 
+// checkLeftRecursionAgainstLoop parses the input with the left recursive grammar and with the loop grammar, plain and
+// memoized, and requires the same answer. It reports whether they matched.
+func checkLeftRecursionAgainstLoop(t testing.TB, left, loop ebnf.Pattern[rune, runes.Pos], in string) bool {
+	t.Helper()
+
+	idx := func(p runes.Pos) int { return p.Index }
+	matched := false
+
+	for _, memo := range []bool{false, true} {
+		parse := func(p ebnf.Pattern[rune, runes.Pos], full bool) (bool, int) {
+			if full {
+				p = concR(p, endR())
+			}
+			var rd ebnf.Reader[rune, runes.Pos] = newRunes(in)
+			if memo {
+				rd = ebnf.WithMemo[rune, runes.Pos](rd, idx)
+			}
+			ok, m, err := ebnf.Parse(p, rd)
+			if err != nil {
+				t.Fatalf("%q: %v", in, err)
+			}
+			if !ok {
+				return false, -1
+			}
+			return true, m.End.Index
+		}
+
+		for _, full := range []bool{false, true} {
+			okL, endL := parse(left, full)
+			okI, endI := parse(loop, full)
+			if okL != okI || endL != endI {
+				t.Fatalf("%q memo=%v full=%v: left recursive (%v, %d), loop (%v, %d)", in, memo, full, okL, endL, okI, endI)
+			}
+			matched = matched || okL
+		}
+	}
+
+	return matched
+}
+
 func TestLeftRecursiveGrammarMatchesTheLoopGrammar(t *testing.T) {
 	left, loop := arithmetic(true), arithmetic(false)
 	rng := rand.New(rand.NewSource(7))
-	idx := func(p runes.Pos) int { return p.Index }
 
 	matched := 0
 
@@ -233,41 +272,33 @@ func TestLeftRecursiveGrammarMatchesTheLoopGrammar(t *testing.T) {
 			in[i] = "11+-()"[rng.Intn(6)]
 		}
 
-		for _, memo := range []bool{false, true} {
-			parse := func(p ebnf.Pattern[rune, runes.Pos], full bool) (bool, int) {
-				if full {
-					p = concR(p, endR())
-				}
-				var rd ebnf.Reader[rune, runes.Pos] = newRunes(string(in))
-				if memo {
-					rd = ebnf.WithMemo[rune, runes.Pos](rd, idx)
-				}
-				ok, m, err := ebnf.Parse(p, rd)
-				if err != nil {
-					t.Fatalf("%q: %v", in, err)
-				}
-				if !ok {
-					return false, -1
-				}
-				return true, m.End.Index
-			}
-
-			for _, full := range []bool{false, true} {
-				okL, endL := parse(left, full)
-				okI, endI := parse(loop, full)
-				if okL != okI || endL != endI {
-					t.Fatalf("%q memo=%v full=%v: left recursive (%v, %d), loop (%v, %d)", in, memo, full, okL, endL, okI, endI)
-				}
-				if okL {
-					matched++
-				}
-			}
+		if checkLeftRecursionAgainstLoop(t, left, loop, string(in)) {
+			matched++
 		}
 	}
 
 	if matched < 500 {
 		t.Errorf("only %d matches, the inputs are too random to test anything", matched)
 	}
+}
+
+// FuzzLeftRecursionAgainstLoop: a left recursive grammar and the same language written with a loop must agree on every
+// input.
+func FuzzLeftRecursionAgainstLoop(f *testing.F) {
+	for _, seed := range []string{"1", "1+1", "(1+1)-1", "1+", "((1)", "1-(1+(1-1))", ""} {
+		f.Add(seed)
+	}
+
+	left, loop := arithmetic(true), arithmetic(false)
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		in := make([]byte, 0, 12)
+		for i := 0; i < len(raw) && i < 12; i++ {
+			in = append(in, "11+-()"[raw[i]%6])
+		}
+
+		checkLeftRecursionAgainstLoop(t, left, loop, string(in))
+	})
 }
 
 func TestLeftRecursionSharedBetweenGoroutines(t *testing.T) {

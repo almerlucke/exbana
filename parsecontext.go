@@ -93,6 +93,11 @@ func (c *ParseContext[T, P]) PushFrame(p Pattern[T, P], pos P, grows bool) *Rule
 	return f
 }
 
+// FrameDepth returns the number of rules that are being matched, which is how deeply rules are nested at this point.
+func (c *ParseContext[T, P]) FrameDepth() int {
+	return len(c.frames.frames)
+}
+
 // PopFrame removes the frame, and any frames pushed after it. The frame must not be used after it was popped.
 func (c *ParseContext[T, P]) PopFrame(f *RuleFrame[T, P]) {
 	s := c.frames.frames

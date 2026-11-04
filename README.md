@@ -20,7 +20,7 @@ Exbana is a versatile and generic EBNF-based pattern matching and generation lib
 go get github.com/almerlucke/exbana/v3
 ```
 
-Requires Go 1.27 or newer.
+Requires Go 1.24 or newer. The library is licensed under the MIT license.
 
 ## Core Concepts
 
@@ -131,6 +131,11 @@ grammar that are unambiguous, opt out:
 
 - `repetition.SetPossessive(true)`: iterative, never gives matches back.
 - `alternation.SetOrthogonal(true)`: commits to the first branch that matches.
+
+Running out of stack is a fatal error in Go that can not be recovered from, so a match that nests so deeply that it comes close
+(a million items in a non-possessive repetition, or the same number of nested parentheses in a recursive rule) returns
+`ebnf.ErrTooDeep` instead. A possessive repetition does not recurse, and neither does a repetition matched through the
+memoizing reader below.
 
 For grammars that do backtrack a lot, ask the parse context to remember dead ends:
 

@@ -269,6 +269,11 @@ func (c *repeatCall[T, P]) nextFrom(herePos P) (bool, error) {
 	rep, r := c.rep, c.r
 	n := len(c.matches)
 
+	// every repetition is another level on the stack
+	if err := ebnf.CheckStack(n); err != nil {
+		return false, err
+	}
+
 	if rep.max == 0 || n < rep.max {
 		matched, err := rep.pattern.MatchCont(r, func(m *ebnf.Match[T, P]) (bool, error) {
 			c.add(n, m)

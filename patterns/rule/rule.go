@@ -144,6 +144,11 @@ func (r *Rule[T, P]) MatchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) 
 		return r.matchGrowingCached(ctx, begin, k)
 	}
 
+	// rules nested ten thousands of levels deep, like the parentheses in ((((...)))), use up the stack
+	if err := ebnf.CheckStack(ctx.FrameDepth()); err != nil {
+		return false, err
+	}
+
 	frame := ctx.PushFrame(r, begin, false)
 	defer ctx.PopFrame(frame)
 

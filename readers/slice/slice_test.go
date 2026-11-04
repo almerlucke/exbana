@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	ebnf "github.com/almerlucke/exbana/v3"
 	"github.com/almerlucke/exbana/v3/readers/runes"
@@ -143,4 +144,101 @@ func TestIndexIsTheIdentity(t *testing.T) {
 	if err != nil || !ok {
 		t.Errorf("ok=%v err=%v", ok, err)
 	}
+}
+
+// FuzzReaderOperations drives both readers with the operations the fuzzer encodes in bytes (one byte for the operation,
+// the next for its argument), and requires the same results from both.
+func FuzzReaderOperations(f *testing.F) {
+	f.Add("abcab", []byte{0, 0, 1, 0, 2, 3, 4, 2, 5, 1, 6, 2})
+	f.Add("", []byte{0, 0, 1, 0, 4, 1})
+	f.Add("zzzzzzzzzz", []byte{3, 5, 3, 9, 5, 0, 6, 7, 8, 1})
+
+	f.Fuzz(func(t *testing.T, raw string, ops []byte) {
+		// the runes reader turns a carriage return into a line feed; the slice reader keeps what it is given
+		data := []rune(strings.Map(func(r rune) rune {
+			if r == '\r' || r == utf8.RuneError {
+				return 'x'
+			}
+			return r
+		}, raw))
+
+		ref, err := runes.New(strings.NewReader(string(data)))
+		if err != nil {
+			t.Skip()
+		}
+
+		got := slice.New(data)
+		n := len(data)
+
+		for i := 0; i+1 < len(ops); i += 2 {
+			op, arg := ops[i]%9, int(ops[i+1])
+
+			switch op {
+			case 0:
+				a, ea := ref.Peek1()
+				b, eb := got.Peek1()
+				if a != b || ea != eb {
+					t.Fatalf("Peek1: (%q, %v) vs (%q, %v)", a, ea, b, eb)
+				}
+			case 1:
+				a, ea := ref.Read1()
+				b, eb := got.Read1()
+				if a != b || ea != eb {
+					t.Fatalf("Read1: (%q, %v) vs (%q, %v)", a, ea, b, eb)
+				}
+			case 2, 3:
+				k := arg % 8
+				ba, bb := make([]rune, k), make([]rune, k)
+				var na, nb int
+				var ea, eb error
+				if op == 2 {
+					na, ea = ref.Peek(k, ba)
+					nb, eb = got.Peek(k, bb)
+				} else {
+					na, ea = ref.Read(k, ba)
+					nb, eb = got.Read(k, bb)
+				}
+				if na != nb || ea != eb || !slices.Equal(ba[:na], bb[:nb]) {
+					t.Fatalf("Peek/Read %d: (%d, %v) vs (%d, %v)", k, na, ea, nb, eb)
+				}
+			case 4:
+				k := arg % 8
+				na, ea := ref.Skip(k)
+				nb, eb := got.Skip(k)
+				if na != nb || ea != eb {
+					t.Fatalf("Skip %d: (%d, %v) vs (%d, %v)", k, na, ea, nb, eb)
+				}
+			case 5:
+				p := arg%(n+3) - 1
+				ea := ref.SetPosition(runes.Pos{Index: p})
+				eb := got.SetPosition(p)
+				if (ea == nil) != (eb == nil) {
+					t.Fatalf("SetPosition %d: %v vs %v", p, ea, eb)
+				}
+			case 6, 7:
+				a, b := arg%(n+1), (arg/7)%(n+1)
+				if a > b {
+					a, b = b, a
+				}
+				ra, ea := ref.Range(runes.Pos{Index: a}, runes.Pos{Index: b})
+				rb, eb := got.Range(a, b)
+				if (ea == nil) != (eb == nil) || !slices.Equal(ra, rb) {
+					t.Fatalf("Range %d..%d: (%q, %v) vs (%q, %v)", a, b, string(ra), ea, string(rb), eb)
+				}
+				if x, y := ref.Length(runes.Pos{Index: a}, runes.Pos{Index: b}), got.Length(a, b); x != y {
+					t.Fatalf("Length %d..%d: %d vs %d", a, b, x, y)
+				}
+			case 8:
+				if ref.Finished() != got.Finished() {
+					t.Fatalf("Finished: %v vs %v", ref.Finished(), got.Finished())
+				}
+			}
+
+			pa, _ := ref.Position()
+			pb, _ := got.Position()
+			if pa.Index != pb {
+				t.Fatalf("position %d vs %d after op %d", pa.Index, pb, op)
+			}
+		}
+	})
 }

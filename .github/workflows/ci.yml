@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # the oldest Go go.mod allows, and the newest
+        go: ['1.24', 'stable']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Format
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "run gofmt"; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      # benchmarks are code too: make sure they still run
+      - name: Benchmarks compile and run once
+        run: go test -run '^$' -bench . -benchtime 1x ./...
+
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      # a short run on every push; the seed corpus already runs in the test job
+      - name: Grammars against the oracle
+        run: go test ./tests -run '^$' -fuzz '^FuzzGrammarsAgainstOracle$' -fuzztime 30s
+
+      - name: Slice reader against the runes reader
+        run: go test ./readers/slice -run '^$' -fuzz '^FuzzReaderOperations$' -fuzztime 20s

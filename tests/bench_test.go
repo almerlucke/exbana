@@ -39,7 +39,8 @@ func chainGrammar(levels int) ebnf.Pattern[rune, runes.Pos] {
 }
 
 func BenchmarkAltChainFail(b *testing.B) {
-	for _, levels := range []int{4, 8, 16, 32} {
+	// without the memo this grammar takes time exponential in the number of levels, so the plain runs stay small
+	for _, levels := range []int{4, 8} {
 		input := strings.Repeat("a", levels+1)
 		b.Run(fmt.Sprint(levels), func(b *testing.B) {
 			g := chainGrammar(levels)
@@ -47,6 +48,10 @@ func BenchmarkAltChainFail(b *testing.B) {
 				ebnf.Parse(g, newRunes(input))
 			}
 		})
+	}
+
+	for _, levels := range []int{4, 8, 16, 32} {
+		input := strings.Repeat("a", levels+1)
 		b.Run(fmt.Sprint(levels, "-memo"), func(b *testing.B) {
 			g := chainGrammar(levels)
 			for b.Loop() {

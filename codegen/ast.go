@@ -16,10 +16,15 @@ import (
 //
 // The views do not copy anything. They are as cheap as the node numbers they hold, and they only read the tree when asked.
 
-// card says how many times something matches: at least min, and at most max, where 2 stands for any number above one.
+// manyTimes stands for any number of times, and caps the counts.
+const manyTimes = 1 << 12
+
+// card says how many times something matches: at least min, and at most max.
 type card struct{ min, max int }
 
-func (a card) plus(b card) card { return card{a.min + b.min, min(a.max+b.max, 2)} }
+func (a card) plus(b card) card {
+	return card{min(a.min+b.min, manyTimes), min(a.max+b.max, manyTimes)}
+}
 
 // childSet is the rules that can match directly inside a pattern, in the order the pattern first mentions them, with how
 // many times each of them matches. total is how many rules match inside, of any kind.
@@ -96,14 +101,14 @@ func altSets(parts ...childSet) childSet {
 // repeatSet is the children of a pattern that matches between lo and hi times, where a hi of 0 means as often as it can.
 func repeatSet(s childSet, lo, hi int) childSet {
 	scale := func(c card) card {
-		out := card{min: min(c.min*lo, 2)}
+		out := card{min: min(c.min*lo, manyTimes)}
 
 		switch {
 		case c.max == 0:
 		case hi == 0:
-			out.max = 2
+			out.max = manyTimes
 		default:
-			out.max = min(c.max*hi, 2)
+			out.max = min(c.max*hi, manyTimes)
 		}
 
 		return out
@@ -196,10 +201,17 @@ func (c *compiler[T, P]) emitViews() string {
 	tree := c.cfg.Name + "Tree"
 	rule := c.cfg.Name + "Rule"
 
-	view := func(typ, doc string, constName string, set childSet, rules bool, recovers bool) {
+	view := func(typ, doc string, constName string, set childSet, rules bool, recovers bool, positions map[string][]string) {
 		taken := map[string]bool{"Tree": true, "Node": true, "Kind": true}
 		if rules {
 			for _, n := range []string{"Span", "Slice", "Text", "Recovered"} {
+				taken[n] = true
+			}
+		}
+
+		// the names the configuration gave come first: the methods that follow from the grammar make way for them
+		for _, names := range positions {
+			for _, n := range names {
 				taken[n] = true
 			}
 		}
@@ -240,6 +252,14 @@ func (c *compiler[T, P]) emitViews() string {
 				cd.min = 0
 			}
 
+			for i, pname := range positions[name] {
+				if cd.min > i {
+					fmt.Fprintf(&b, "// %s is the %s inside that comes number %d.\nfunc (v %s) %s() %s {\n\tnode, _ := v.Tree.Nth(v.Node, %s, %d)\n\n\treturn %s{v.Tree, node}\n}\n\n", pname, name, i+1, typ, pname, child, cc, i, child)
+				} else {
+					fmt.Fprintf(&b, "// %s is the %s inside that comes number %d, if there is one.\nfunc (v %s) %s() (%s, bool) {\n\tnode, ok := v.Tree.Nth(v.Node, %s, %d)\n\n\treturn %s{v.Tree, node}, ok\n}\n\n", pname, name, i+1, typ, pname, child, cc, i, child)
+				}
+			}
+
 			switch {
 			case cd.max == 1 && cd.min == 1:
 				m := free(ident)
@@ -271,11 +291,11 @@ func (c *compiler[T, P]) emitViews() string {
 		_, recovers := c.cfg.Recover[name]
 
 		view(c.viewType[name], fmt.Sprintf("%s is a node of the rule %q, seen through the grammar: the rules that match inside it are its methods.", c.viewType[name], name),
-			c.ruleConst[name], c.childrenOfRule(name), true, recovers)
+			c.ruleConst[name], c.childrenOfRule(name), true, recovers, c.cfg.Positions[name])
 	}
 
 	view(c.topType, fmt.Sprintf("%s is the top level of a %s: what the grammar matched, seen through the grammar.", c.topType, tree),
-		"", c.childrenOf(c.g.Root), false, false)
+		"", c.childrenOf(c.g.Root), false, false, nil)
 
 	fmt.Fprintf(&b, "// Top is the top level of the tree.\nfunc (t *%s) Top() %s {\n\treturn %s{t, -1}\n}\n", tree, c.topType, c.topType)
 

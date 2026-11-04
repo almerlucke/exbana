@@ -115,6 +115,19 @@ func (t *JSONTree) First(parent int, rule JSONRule) (node int, ok bool) {
 	return -1, false
 }
 
+// Nth is the n-th node (counting from 0) directly below a node, or at the top level if parent is -1, that is of the rule.
+func (t *JSONTree) Nth(parent int, rule JSONRule, n int) (node int, ok bool) {
+	for c := range t.Find(parent, rule) {
+		if n == 0 {
+			return c, true
+		}
+
+		n--
+	}
+
+	return -1, false
+}
+
 // FindValue are the nodes of rule "value" directly below a node, or at the top level if parent is -1.
 func (t *JSONTree) FindValue(parent int) iter.Seq[int] {
 	return t.Find(parent, JSONRuleValue)

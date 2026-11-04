@@ -125,6 +125,19 @@ func (t *{{.Tree}}) First(parent int, rule {{.Rule}}) (node int, ok bool) {
 
 	return -1, false
 }
+
+// Nth is the n-th node (counting from 0) directly below a node, or at the top level if parent is -1, that is of the rule.
+func (t *{{.Tree}}) Nth(parent int, rule {{.Rule}}, n int) (node int, ok bool) {
+	for c := range t.Find(parent, rule) {
+		if n == 0 {
+			return c, true
+		}
+
+		n--
+	}
+
+	return -1, false
+}
 {{range .Rules}}
 // Find{{.Ident}} are the nodes of rule {{printf "%q" .Name}} directly below a node, or at the top level if parent is -1.
 func (t *{{$.Tree}}) Find{{.Ident}}(parent int) iter.Seq[int] {
@@ -336,8 +349,9 @@ func (p *{{.Parser}}) Parse(input {{.In}}) (*{{.Tree}}, error) {
 	return p.parse(input)
 }
 {{if .Recover}}
-// ParseAll parses like Parse, but a syntax error in a rule that has a recovery does not stop the parse: the error is
-// noted, the parser skips to where the recovery says to go on, and carries on with the rest of the input. It returns the
+// ParseAll parses like Parse, but a syntax error in a rule that has a recovery, or garbage where a repetition of a rule with a skip
+// can not go on, does not stop the parse: the error is noted, the parser skips to where the configuration says to go on, and carries
+// on with the rest of the input. It returns the
 // tree and every error, in the order they were found. The tree is nil if the parse failed beyond recovery, and the last
 // error is then the one that stopped it. The nodes that were skipped are of the rule {{.ErrorRule}}.
 func (p *{{.Parser}}) ParseAll(input {{.In}}) (*{{.Tree}}, []error) {

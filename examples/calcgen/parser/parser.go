@@ -117,6 +117,19 @@ func (t *CalcTree) First(parent int, rule CalcRule) (node int, ok bool) {
 	return -1, false
 }
 
+// Nth is the n-th node (counting from 0) directly below a node, or at the top level if parent is -1, that is of the rule.
+func (t *CalcTree) Nth(parent int, rule CalcRule, n int) (node int, ok bool) {
+	for c := range t.Find(parent, rule) {
+		if n == 0 {
+			return c, true
+		}
+
+		n--
+	}
+
+	return -1, false
+}
+
 // FindInput are the nodes of rule "input" directly below a node, or at the top level if parent is -1.
 func (t *CalcTree) FindInput(parent int) iter.Seq[int] {
 	return t.Find(parent, CalcRuleInput)

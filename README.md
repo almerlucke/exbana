@@ -354,6 +354,7 @@ list, as it is with `FarthestLog`: give it one with `.Printed`). Evaluation is y
 **A typed AST.** With `Config.AST` the parser also has a type for every rule, with a method for each rule that can match inside it, made from how
 often the grammar lets it: a rule that matches exactly once is `member.Value()`, one that may be missing is `value.Number()` (returning `ok`), any other
 number is `object.Members()`, an `iter.Seq`. A rule that is a choice has `Kind()`. Nothing is copied; a view is a tree and a node number.
+When a rule matches more than once inside another (`pair = value ":" value`) `Config.Positions` names them by where they are: `pair.Key()` and `pair.Val()`.
 
 ```go
 tree, _ := parser.NewJSONParser().Parse(input)
@@ -382,6 +383,14 @@ what follows the rule. Anything else, left recursion through other rules include
 **Error recovery.** `Config.Recover` makes a rule survive a syntax error: `ParseAll` notes the error, skips to where the grammar says to go on
 (a `;`, a `}`), and carries on, returning the tree and every error in the document. A rule recovers when it fails after it has matched
 something; failing at the first element is how a repetition of it ends, not an error in it. `Parse` is unchanged and stops at the first error.
+Garbage *between* statements is `Config.Skip`: for a rule that is the item of a repetition (`{ statement }`), `ParseAll` notes the error when the
+rule cannot start where the repetition does not end, skips to the next place the rule matches, and goes on. `Stop` says where else the
+repetition ends (the `}` of a block; the end of the input always ends it) and `Until` where to resume if not "where the rule matches".
+
+```go
+Skip: map[string]codegen.Skip[rune, runes.Pos]{"statement": {Stop: text("}")}},
+Recover: map[string]codegen.Recovery[rune, runes.Pos]{"statement": {Until: text(";"), Consume: true}},
+```
 
 **What it needs from the grammar.** The generated parser never backtracks, so every repetition has to be possessive and every alternation
 orthogonal, because you said so or because `optimize` proved it. A grammar that still backtracks is refused, and the error lists the

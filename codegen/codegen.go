@@ -51,19 +51,24 @@
 // (for text) Text. A rule with a recovery promises nothing: it can be cut short, so its methods give a child or none, and
 // Recovered says whether it was. The views hold a tree and a node number and copy nothing, so reading a document through them costs
 // no more than walking the tree. The order of children of different rules is not in the methods (members of one rule are in order);
-// Tree.Children has all of them in order.
+// Tree.Children has all of them in order. A rule that matches more than once inside another (pair = value ":" value) is a method that
+// gives all of them; Config.Positions names them by where they are: pair.Key() and pair.Val().
 //
 // # Error recovery
 //
 // Config.Recover makes a rule survive a syntax error: ParseAll notes the error, skips to a place the grammar names, and goes on,
-// so that all the errors of a document are found in one run.
+// so that all the errors of a document are found in one run. That is for an error inside a rule. Config.Skip is for input that
+// does not start a rule where one is repeated, the garbage between two statements: ParseAll notes the error, skips to the next
+// place the rule matches, and carries on with the repetition. Both leave the skipped text in the tree as nodes of the rule Error.
 package codegen
 
 import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"go/token"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -96,6 +101,15 @@ type Config[T, P any] struct {
 	// another one (once, once or not at all, any number of times), so a parse can be read without knowing the layout of the
 	// tree. Tree.Top is the view of the top level. See the package documentation.
 	AST bool
+
+	// Positions names the children of a rule that matches more than once inside another one (pair = value "," value), by where
+	// they are: {"pair": {"value": {"Key", "Val"}}} gives pair.Key() and pair.Val(), the first and second value inside a pair.
+	// The names have to be exported identifiers and are only used with AST. A name is a method that gives the child if the
+	// grammar always has it there, and a child and ok if it may not.
+	Positions map[string]map[string][]string
+
+	// Skip says, for rules that are repeated, what to do with input that is not one of them: see Skip. The keys are rule names.
+	Skip map[string]Skip[T, P]
 
 	// Recover says, for rules, how to go on after a syntax error in them: see Recovery. The keys are rule names.
 	Recover map[string]Recovery[T, P]
@@ -133,6 +147,25 @@ type Recovery[T, P any] struct {
 	// Consume makes the match of Until part of the recovered rule (the ";" that ends a statement). Otherwise the parse goes on
 	// at the match, which is then for the rest of the grammar to take (a "}" that closes a block).
 	Consume bool
+}
+
+// Skip makes a repetition of a rule survive input that does not start the rule, the garbage between two statements. It works in
+// ParseAll, for a rule that is the item of a repetition that has no upper limit (a rule is repeated as { statement }).
+// When the rule fails at a place where the repetition does not end, the parser notes the syntax error, skips elements until
+// the rule matches again (or the repetition ends, or the input does), puts the skipped text in a node of the rule Error in the
+// tree, and goes on with the repetition. That is also what happens when the rule fails further on and has no Recover of its own.
+//
+// Where a repetition ends is a matter of what follows it, which the generator does not work out: the end of the input always
+// ends it, and Stop says where else (the "}" of a block). If Stop is missing for a repetition that ends before something other
+// than the end of the input, that something is taken for garbage and skipped.
+type Skip[T, P any] struct {
+	// Stop is where the repetition ends, other than the end of the input. It is only looked at, not consumed. It must be a
+	// pattern of the kind the generator accepts, without rules, and can be nil.
+	Stop ebnf.Pattern[T, P]
+
+	// Until is where to go on: elements are skipped until it matches there, and the repetition continues at the match. The
+	// default is nil, which is where the rule itself matches. If given it must be a pattern without rules.
+	Until ebnf.Pattern[T, P]
 }
 
 // Error is returned by Generate when the grammar can not be generated, with everything that is in the way.
@@ -179,6 +212,8 @@ type compiler[T, P any] struct {
 
 	problems []string
 	untils   map[string]*ebnf.Node[T, P] // the Until pattern of every rule that has a recovery
+	skipStop map[string]*ebnf.Node[T, P] // the Stop and Until patterns of the rules that have a Skip, if they have one
+	skipTo   map[string]*ebnf.Node[T, P]
 
 	// left recursive rules that are generated as a loop, and what the optimizer found about each of them
 	lr    map[string]lrSplit[T, P]
@@ -190,6 +225,7 @@ type compiler[T, P any] struct {
 	ruleConst   map[string]string
 	ruleIdent   map[string]string
 	ruleRecover map[string]string
+	ruleSkip    map[string]string
 	viewType    map[string]string // the view type of every rule, with Config.AST
 	topType     string
 	counter     int
@@ -206,7 +242,7 @@ func newCompiler[T, P any](g *ebnf.Grammar[T, P], cfg Config[T, P]) *compiler[T,
 	c := &compiler[T, P]{
 		g: g, cfg: cfg, lr: map[string]lrSplit[T, P]{}, loops: map[string]optimize.Decision[T, P]{},
 		used:   map[string]bool{},
-		ruleFn: map[string]string{}, ruleConst: map[string]string{}, ruleIdent: map[string]string{}, ruleRecover: map[string]string{}, viewType: map[string]string{},
+		ruleFn: map[string]string{}, ruleConst: map[string]string{}, ruleIdent: map[string]string{}, ruleRecover: map[string]string{}, ruleSkip: map[string]string{}, viewType: map[string]string{},
 	}
 
 	c.elem = cfg.ElemType
@@ -297,19 +333,102 @@ func (c *compiler[T, P]) validate() {
 			continue
 		}
 
-		ug, err := ebnf.Analyze(rec.Until)
-		if err != nil {
-			c.problem("the recovery of %s: %v", name, err)
+		if root := c.sidePattern(rec.Until, "the recovery of "+name); root != nil {
+			c.untils[name] = root
+		}
+	}
+
+	c.validateSkip()
+	c.validatePositions()
+}
+
+// sidePattern analyzes a pattern of the configuration, which has to stand on its own, and returns nil if it is not usable.
+func (c *compiler[T, P]) sidePattern(p ebnf.Pattern[T, P], what string) *ebnf.Node[T, P] {
+	ug, err := ebnf.Analyze(p)
+	if err != nil {
+		c.problem("%s: %v", what, err)
+		return nil
+	}
+
+	if len(ug.Rules) > 0 {
+		c.problem("%s uses rules: it has to be a pattern without them", what)
+		return nil
+	}
+
+	c.validateNode(ug.Root, " in "+what)
+
+	return ug.Root
+}
+
+func (c *compiler[T, P]) validateSkip() {
+	c.skipStop, c.skipTo = map[string]*ebnf.Node[T, P]{}, map[string]*ebnf.Node[T, P]{}
+
+	for name, s := range c.cfg.Skip {
+		if _, ok := c.g.Rules[name]; !ok {
+			c.problem("Config.Skip names a rule that the grammar does not have: %s", name)
 			continue
 		}
 
-		if len(ug.Rules) > 0 {
-			c.problem("the recovery of %s uses rules: Until has to be a pattern without them", name)
+		if s.Stop != nil {
+			if root := c.sidePattern(s.Stop, "the Stop of the skip of "+name); root != nil {
+				c.skipStop[name] = root
+			}
+		}
+
+		if s.Until != nil {
+			if root := c.sidePattern(s.Until, "the Until of the skip of "+name); root != nil {
+				c.skipTo[name] = root
+			}
+		}
+	}
+}
+
+// reservedMethods are the methods every view has.
+var reservedMethods = []string{"Tree", "Node", "Kind", "Span", "Slice", "Text", "Recovered"}
+
+func (c *compiler[T, P]) validatePositions() {
+	if len(c.cfg.Positions) == 0 {
+		return
+	}
+
+	if !c.cfg.AST {
+		c.problem("Config.Positions names methods of the views, it needs Config.AST")
+		return
+	}
+
+	for name, byRule := range c.cfg.Positions {
+		if _, ok := c.g.Rules[name]; !ok {
+			c.problem("Config.Positions names a rule that the grammar does not have: %s", name)
 			continue
 		}
 
-		c.validateNode(ug.Root, " in the recovery of "+name)
-		c.untils[name] = ug.Root
+		set := c.childrenOfRule(name)
+		used := map[string]string{}
+
+		for child, names := range byRule {
+			cd, ok := set.cards[child]
+			if !ok {
+				c.problem("Config.Positions: %s does not have %s inside", name, child)
+				continue
+			}
+
+			if len(names) > cd.max {
+				c.problem("Config.Positions: %s has %s inside at most %d times, and %d names are given", name, child, cd.max, len(names))
+			}
+
+			for _, n := range names {
+				switch {
+				case !token.IsIdentifier(n) || !token.IsExported(n):
+					c.problem("Config.Positions: %q (in %s) is not an exported identifier", n, name)
+				case slices.Contains(reservedMethods, n):
+					c.problem("Config.Positions: %s (in %s) is a method every view has", n, name)
+				case used[n] != "":
+					c.problem("Config.Positions: %s is used twice in %s (for %s and %s)", n, name, used[n], child)
+				default:
+					used[n] = child
+				}
+			}
+		}
 	}
 }
 
@@ -624,7 +743,16 @@ func (c *compiler[T, P]) emit(n *ebnf.Node[T, P]) string {
 			fmt.Fprintf(f, "\tfor {\n")
 		}
 
-		fmt.Fprintf(f, "\t\tmark := len(p.nodes)\n\t\tr := p.%s(q)\n\t\tif r < 0 {\n\t\t\tp.nodes = p.nodes[:mark]\n\t\t\tbreak\n\t\t}\n", item)
+		// garbage between the items is skipped, in a repetition of a rule that says so
+		skip := ""
+
+		if ch := n.Children[0]; n.Max == 0 && ch.Kind == ebnf.KindRef {
+			if _, ok := c.cfg.Skip[ch.ID]; ok {
+				skip = fmt.Sprintf("\t\t\tif s := p.%s(q); s > q {\n\t\t\t\tq = s\n\t\t\t\tcontinue\n\t\t\t}\n", c.ruleSkip[ch.ID])
+			}
+		}
+
+		fmt.Fprintf(f, "\t\tmark := len(p.nodes)\n\t\tr := p.%s(q)\n\t\tif r < 0 {\n\t\t\tp.nodes = p.nodes[:mark]\n%s\t\t\tbreak\n\t\t}\n", item, skip)
 		fmt.Fprintf(f, "\t\tn++\n\t\tif r == q {\n\t\t\tbreak\n\t\t}\n\t\tq = r\n\t}\n")
 
 		if n.Min > 0 {
@@ -789,6 +917,10 @@ func (c *compiler[T, P]) emitRule(name string, def *ebnf.Node[T, P]) {
 		c.emitRecovery(name, rec)
 	}
 
+	if _, skips := c.cfg.Skip[name]; skips {
+		c.emitSkip(name)
+	}
+
 	f := &c.funcs
 
 	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos int) int {\n", c.ruleFn[name])
@@ -850,6 +982,50 @@ func (c *compiler[T, P]) emitRecovery(name string, rec Recovery[T, P]) {
 	fmt.Fprintf(f, "\tp.nodes = append(p.nodes, \x00N\x00{Rule: %s, Begin: int32(pos), End: int32(s), Size: 1})\n\treturn s\n}\n\n", c.errorConst())
 }
 
+// emitSkip writes the method that skips garbage where a repetition of the rule can not go on.
+func (c *compiler[T, P]) emitSkip(name string) {
+	// the methods of the patterns are written before this one, they must not end up in the middle of it
+	stopFn, toFn := "", c.ruleFn[name]
+	if stop, ok := c.skipStop[name]; ok {
+		stopFn = c.emit(stop)
+	}
+
+	if to, ok := c.skipTo[name]; ok {
+		toFn = c.emit(to)
+	}
+
+	f := &c.funcs
+	fn := c.ruleSkip[name]
+
+	step := "s++"
+	if c.utf8 {
+		step = "_, w := p.rune(s)\n\t\ts += w"
+	}
+
+	fmt.Fprintf(f, "// %s is for a repetition of %s that can not go on at pos. Unless that is where the repetition ends, and when the parse\n// is recovering, it notes the syntax error and skips to where the repetition can go on. It returns where that is, or pos.\n", fn, name)
+	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos int) int {\n\tif !p.recovering || p.silent > 0 || pos >= len(p.in) {\n\t\treturn pos\n\t}\n\n", fn)
+
+	// the end of the input is a place to stop; whatever else Stop accepts as well. Looking for it, not silently, is also how
+	// the error comes to say what was expected
+	mark := "\tmark := len(p.nodes)\n"
+	if stopFn != "" {
+		fmt.Fprintf(f, "%s\tif p.%s(pos) >= 0 {\n\t\tp.nodes = p.nodes[:mark]\n\t\treturn pos\n\t}\n\tp.nodes = p.nodes[:mark]\n", mark, stopFn)
+	}
+
+	fmt.Fprintf(f, "\tp.fail(pos, \"end of input\")\n\tp.errors = append(p.errors, p.syntaxError())\n\tp.errPos, p.expected = -1, p.expected[:0]\n\n")
+	fmt.Fprintf(f, "\ts := pos\n\tfor {\n\t\t%s\n\t\tif s >= len(p.in) {\n\t\t\ts = len(p.in)\n\t\t\tbreak\n\t\t}\n\n", step)
+	fmt.Fprintf(f, "\t\tmark := len(p.nodes)\n\t\tp.silent++\n\t\thit := false\n")
+
+	if stopFn != "" {
+		fmt.Fprintf(f, "\t\thit = p.%s(s) >= 0\n", stopFn)
+	}
+
+	fmt.Fprintf(f, "\t\thit = hit || p.%s(s) >= 0\n", toFn)
+
+	fmt.Fprintf(f, "\t\tp.silent--\n\t\tp.nodes = p.nodes[:mark]\n\t\tif hit {\n\t\t\tbreak\n\t\t}\n\t}\n\n")
+	fmt.Fprintf(f, "\tp.nodes = append(p.nodes, \x00N\x00{Rule: %s, Begin: int32(pos), End: int32(s), Size: 1})\n\treturn s\n}\n\n", c.errorConst())
+}
+
 func (c *compiler[T, P]) errorConst() string {
 	return c.cfg.Name + "RuleError"
 }
@@ -908,6 +1084,7 @@ func (c *compiler[T, P]) generate() ([]byte, error) {
 		c.ruleConst[name] = c.unique(c.cfg.Name + "Rule" + ident)
 		c.ruleFn[name] = c.unique("rule" + ident)
 		c.ruleRecover[name] = c.unique("recover" + ident)
+		c.ruleSkip[name] = c.unique("skip" + ident)
 
 		if c.cfg.AST {
 			c.viewType[name] = c.unique(c.cfg.Name + ident)
@@ -931,7 +1108,7 @@ func (c *compiler[T, P]) generate() ([]byte, error) {
 		NewFn: "New" + c.cfg.Name + "Parser", ParseFn: c.cfg.Name + "Parse",
 		Elem: c.elem, IsText: c.isText, IsRune: c.elem == "rune" && !c.utf8, UTF8: c.utf8, MaxDepth: c.cfg.MaxDepth, Root: root,
 		In: "[]" + c.elem, SliceType: "[]" + c.elem,
-		Recover: len(c.cfg.Recover) > 0, ErrorRule: c.errorConst(),
+		Recover: len(c.cfg.Recover)+len(c.cfg.Skip) > 0, ErrorRule: c.errorConst(),
 	}
 
 	if c.utf8 {

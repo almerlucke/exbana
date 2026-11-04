@@ -3,6 +3,7 @@
 package rule
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -27,6 +28,7 @@ type Rule[T, P any] struct {
 	ebnf.Label
 	inner    ebnf.Pattern[T, P]
 	atomic   bool
+	leftRec  bool
 	evalFunc func(*ebnf.Match[T, P], ebnf.Reader[T, P]) (any, error)
 }
 
@@ -66,6 +68,28 @@ func (r *Rule[T, P]) SetAtomic(atomic bool) *Rule[T, P] {
 	return r
 }
 
+// SetLeftRecursive allows the rule to be left recursive, that is to start with a call to itself at the same position:
+//
+//	expr = expr "-" number | number
+//
+// Such a rule can't be matched by trying its definition and recursing, it would never end. Instead the rule works out
+// its matches by growing a seed: first without the recursive alternatives, then again with the matches found so far
+// handed to the recursive calls, until no new match appears. The result is left associative, "1-2-3" matches as
+// "(1-2)-3". Indirect left recursion (a = b "x", b = a "y") works if one rule in the cycle is marked.
+//
+// A marked rule works out all its matches before it offers the first, which costs time for every round. Growing a
+// chain of n terms takes about n rounds, so quadratic time in n. Mark only the rules that need it.
+//
+// A rule that is not marked and is entered again at the same position returns ErrLeftRecursion instead of
+// recursing without end.
+func (r *Rule[T, P]) SetLeftRecursive(leftRecursive bool) *Rule[T, P] {
+	r.leftRec = leftRecursive
+	return r
+}
+
+// ErrLeftRecursion is returned when a rule is entered again at the same position and is not marked with SetLeftRecursive.
+var ErrLeftRecursion = errors.New("exbana: left recursion")
+
 // Eval evaluates a match of this rule: with the eval function if there is one, otherwise with the wrapped pattern
 // if that can evaluate, otherwise it returns the matched value.
 func (r *Rule[T, P]) Eval(m *ebnf.Match[T, P], rd ebnf.Reader[T, P]) (any, error) {
@@ -95,30 +119,158 @@ func (r *Rule[T, P]) MatchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) 
 		return false, r.undefined()
 	}
 
-	inner := rd
-	if r.atomic {
-		inner = ebnf.Silent(rd)
-	}
+	ctx := ebnf.EnsureContext(rd)
 
-	begin, err := rd.Position()
+	begin, err := ctx.Position()
 	if ebnf.IsStreamError(err) {
 		return false, err
 	}
 
+	// entered again at the position where it was entered, without consuming anything: left recursion
+	if open := ctx.FindOpenFrame(ebnf.Pattern[T, P](r), begin); open != nil {
+		if !open.Grows {
+			return false, fmt.Errorf("%w: rule %q calls itself at the same position, mark it with SetLeftRecursive", ErrLeftRecursion, r.ID())
+		}
+
+		open.Used = true
+
+		return offer(ctx, open.Seed, k)
+	}
+
+	if r.leftRec {
+		return r.matchGrowing(ctx, begin, k)
+	}
+
+	frame := ctx.PushFrame(r, begin, false)
+	defer ctx.PopFrame(frame)
+
+	inner := ebnf.Reader[T, P](ctx)
+	if r.atomic {
+		inner = ebnf.Silent(inner)
+	}
+
 	matched, err := r.inner.MatchCont(inner, func(m *ebnf.Match[T, P]) (bool, error) {
-		return k(&ebnf.Match[T, P]{Pattern: r, Begin: m.Begin, End: m.End, Value: m.Value, Components: m.Components})
+		// the rule has matched, the continuation is not part of working out the match
+		frame.Open = false
+		matched, err := k(r.wrap(m))
+		frame.Open = true
+
+		return matched, err
 	})
 	if err != nil || matched {
 		return matched, err
 	}
 
+	r.logFailure(ctx, begin)
+
+	return false, nil
+}
+
+func (r *Rule[T, P]) wrap(m *ebnf.Match[T, P]) *ebnf.Match[T, P] {
+	return &ebnf.Match[T, P]{Pattern: r, Begin: m.Begin, End: m.End, Value: m.Value, Components: m.Components}
+}
+
+func (r *Rule[T, P]) logFailure(rd ebnf.Reader[T, P], begin P) {
 	if r.atomic {
 		ebnf.LogMismatch(rd, ebnf.Pattern[T, P](r), func() *ebnf.Mismatch[T, P] {
 			return ebnf.NewMismatch(r, begin, begin, nil, nil)
 		})
 	}
+}
+
+// offer offers the matches to the continuation in order, until one is accepted.
+func offer[T, P any](rd ebnf.Reader[T, P], matches []*ebnf.Match[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	for _, m := range matches {
+		if err := rd.SetPosition(m.End); ebnf.IsStreamError(err) {
+			return false, err
+		}
+
+		if matched, err := k(m); err != nil || matched {
+			return matched, err
+		}
+	}
 
 	return false, nil
+}
+
+// matchGrowing matches a left recursive rule by growing a seed until it is stable.
+func (r *Rule[T, P]) matchGrowing(ctx *ebnf.ParseContext[T, P], begin P, k ebnf.Continuation[T, P]) (bool, error) {
+	frame := ctx.PushFrame(r, begin, true)
+
+	inner := ebnf.Reader[T, P](ctx)
+	if r.atomic {
+		inner = ebnf.Silent(inner)
+	}
+
+	var results []*ebnf.Match[T, P]
+
+	for {
+		frame.Used = false
+
+		// every round starts at the beginning, the previous one left the reader wherever it stopped
+		if err := ctx.SetPosition(begin); ebnf.IsStreamError(err) {
+			ctx.PopFrame(frame)
+			return false, err
+		}
+
+		found, ends := []*ebnf.Match[T, P]{}, ebnf.NewEndSet[T, P](ctx)
+
+		// every way the definition matches, one for each end, with the current seed standing in for the recursive calls
+		_, err := r.inner.MatchCont(inner, func(m *ebnf.Match[T, P]) (bool, error) {
+			if ends.Add(m.End) {
+				found = append(found, r.wrap(m))
+			}
+
+			return false, nil
+		})
+		if err != nil {
+			ctx.PopFrame(frame)
+			return false, err
+		}
+
+		if !frame.Used {
+			results = found
+			break
+		}
+
+		// the seed only grows, which is what makes sure the rounds end: there are only so many positions
+		grown := false
+
+		for _, m := range frame.Seed {
+			if ends.Add(m.End) {
+				found = append(found, m)
+			}
+		}
+
+		seen := ebnf.NewEndSet[T, P](ctx)
+		for _, m := range frame.Seed {
+			seen.Add(m.End)
+		}
+
+		for _, m := range found {
+			if !seen.Has(m.End) {
+				grown = true
+				break
+			}
+		}
+
+		frame.Seed = found
+
+		if !grown {
+			results = found
+			break
+		}
+	}
+
+	// the rule is done, what follows is not part of working out its matches
+	ctx.PopFrame(frame)
+
+	if len(results) == 0 {
+		r.logFailure(ctx, begin)
+		return false, nil
+	}
+
+	return offer(ctx, results, k)
 }
 
 // Generate generates what the wrapped pattern generates.

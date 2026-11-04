@@ -98,6 +98,11 @@ func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], 
 		return false, err
 	}
 
+	// while a left recursive rule grows its seed the matches of patterns at its position change with every round
+	if g, ok := r.(interface{ GrowingAt(P) bool }); ok && g.GrowingAt(pos) {
+		return f(r, k)
+	}
+
 	solutions, known := memo.Solutions(p, pos)
 	if !known {
 		seen := make(map[int]struct{})

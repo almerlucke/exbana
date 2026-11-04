@@ -7,7 +7,8 @@ Exbana is a versatile and generic EBNF-based pattern matching and generation lib
 - **Generic**: Works with any type of stream elements (`T`) and any position type (`P`).
 - **EBNF Constructs**: Supports concatenation, alternation, repetition (optional, any, one-or-more), and exceptions.
 - **Backtracking**: Full backtracking across concatenations, alternations and repetitions, with opt-outs (possessive, orthogonal) and optional failure memoization.
-- **Rules**: Named patterns with evaluation functions and forward declarations for recursive grammars.
+- **Rules**: Named patterns with evaluation functions and forward declarations for recursive grammars, including left recursion.
+- **All parses**: Iterate over every way a pattern can match, to backtrack by hand or to find ambiguity.
 - **Syntax errors**: Reports the farthest failure and what was expected there.
 - **Safe to share**: Everything specific to one parse lives in a `ParseContext`, so one grammar can serve many goroutines at once.
 - **Generation**: Seeded, weighted generation from the same patterns.
@@ -26,7 +27,7 @@ Requires Go 1.27 or newer.
 ### `Pattern[T, P]`
 The fundamental interface representing an EBNF pattern. It has three methods: `MatchCont` (match against a `Reader`, offering every candidate to a continuation so patterns can backtrack), `Generate` (write to a `Writer`) and `Print` (EBNF format). Use `ebnf.Parse(pattern, reader)` to get the first match.
 
-Everything else is optional and found by asking the pattern: `Named` (an `ID`, which `Match.Unpack`, syntax errors and printing use), `Evaluator` (turns a match into a value, which `Match.Eval` calls) and `Unpackable`. To write your own pattern, implement the three methods; `ebnf.Single` helps with patterns that have one candidate. Names go on patterns with `ebnf.Name(pattern, "digit")`, print text with `ebnf.Text(pattern, "\"+\"")`, and evaluation functions on a `rule.Rule`.
+Everything else is optional and found by asking the pattern: `Named` (an `ID`, which `Match.Unpack`, syntax errors and printing use), `Evaluator` (turns a match into a value, which `Match.Eval` calls) and `Unpackable`. To write your own pattern, implement the three methods; `ebnf.Single` helps with patterns that have one candidate. Names go on patterns with `.Named("digit")`, print text with `.Printed("\"+\"")`, and evaluation functions on a `rule.Rule`. `Named` and `Printed` return the pattern, so they chain with the other setters (`repetition.Any(p).Named("ws").SetPossessive(true)`). The generic helpers `ebnf.Name(p, "digit")` and `ebnf.Text(p, ...)` do the same for any type that embeds `ebnf.Label`, such as your own patterns.
 
 ### `Reader[T, P]`
 An interface for a stream that serves objects of type `T` at positions of type `P`. The library provides a `runes` reader for matching against strings or rune slices.
@@ -84,16 +85,16 @@ func main() {
 	opt := repetition.Optional[rune, runes.Pos]
 
 	char := func(c rune) *ent.Entity[rune, runes.Pos] {
-		return ebnf.Text(ent.New[rune, runes.Pos](func(r rune) bool { return r == c }), `"`+string(c)+`"`)
+		return ent.New[rune, runes.Pos](func(r rune) bool { return r == c }).Printed(`"` + string(c) + `"`)
 	}
-	digit := ebnf.Name(ent.New[rune, runes.Pos](unicode.IsDigit), "digit")
-	digit1to9 := ebnf.Name(ent.New[rune, runes.Pos](func(r rune) bool { return r >= '1' && r <= '9' }), "digit1to9")
+	digit := ent.New[rune, runes.Pos](unicode.IsDigit).Named("digit")
+	digit1to9 := ent.New[rune, runes.Pos](func(r rune) bool { return r >= '1' && r <= '9' }).Named("digit1to9")
 
 	// integer = [ "-" ] ( "0" | digit1to9 { digit } )
-	integer := ebnf.Name(conc(
+	integer := conc(
 		opt(char('-')),
 		alt(char('0'), conc(digit1to9, rep(digit))),
-	), "integer")
+	).Named("integer")
 
 	// Create a reader for a string
 	rd, err := runes.New(strings.NewReader("-123"))
@@ -147,6 +148,22 @@ are exponential without it. The price is a map entry per pattern and position, a
 position all its ways to match are computed, not just the first. Use one context per input; it assumes the input does not
 change. Mismatches already seen are not logged again.
 
+### Iterating over all matches
+
+`ebnf.Matches(pattern, reader)` is an iterator (`iter.Seq2`) over every way the pattern matches at the current position, in order of
+preference. `Parse` is the first of them. Breaking out of the loop stops the matcher, no work is done for the matches you don't ask for:
+
+```go
+for m, err := range ebnf.Matches(expr, rd) {
+	if err != nil { return err }
+	fmt.Println("can end at", m.End)
+}
+```
+
+While the loop body runs the reader stands at the end of the match. To find out if a grammar is ambiguous for an input, count the
+matches of the grammar followed by `end`: more than one means more than one parse. With a memoizing context there is one match per
+end position.
+
 ## Generation
 
 Every pattern can also generate output. All randomness comes from a `GenContext`, so output is reproducible per seed:
@@ -187,7 +204,7 @@ if matched, _, _ := ebnf.Parse(grammar, ctx); !matched {
 }
 ```
 
-Give the leaf patterns of your grammar an ID (`ebnf.Name(p, "digit")`) or print text (`ebnf.Text(p, "\")\"")`), they are used
+Give the leaf patterns of your grammar an ID (`.Named("digit")`) or print text (`.Printed("\")\"")`), they are used
 as the "expected" descriptions; leaves without either are left out. `Last()` returns the `*SyntaxError` with the
 position, the expected list and the unexpected element for your own formatting. The exception of an `except` is lookahead: it is supposed to fail on every successful match, so it is matched silently and never reaches the logger.
 
@@ -206,9 +223,26 @@ A match of a rule has the rule as its pattern (`m.ID()` is the name, `m.Eval` ru
 pattern it wraps. Matching a rule that was declared but never defined returns an error. `SetAtomic(true)` makes syntax errors say
 `expected number` instead of listing the leaves inside it, which suits token-like rules.
 
+### Left recursion
+
+A rule that starts with a call to itself (`expr = expr "-" number | number`) would recurse forever if it was matched by trying its
+definition. Mark it, and it works out its matches by growing a seed instead: first without the recursive alternatives, then again
+with what it found handed to the recursive calls, until nothing new appears.
+
+```go
+expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
+sub := rule.New("sub", conc(expr, char('-'), number))
+expr.Define(alt(sub, number))
+// "1-2-3" matches as ((1-2)-3), the tree is left associative
+```
+
+Indirect recursion (`a = b "x"`, `b = a "y"`) works if one rule in the cycle is marked. The price: a marked rule works out *all* its
+matches before it offers the first, and a chain of n terms takes n rounds, so mark only the rules that need it. A rule that is not
+marked and is entered again at the same position returns `rule.ErrLeftRecursion` (naming the rule) and does not overflow the stack.
+
 ## EBNF Printing
 
-Exbana can output your defined patterns as EBNF strings. Named patterns print as their name inside other patterns, and leaves print as their `ebnf.Text`:
+Exbana can output your defined patterns as EBNF strings. Named patterns print as their name inside other patterns, and leaves print as the text you gave them with `.Printed`:
 
 ```go
 rules, _ := ebnf.PrintRules([]ebnf.Pattern[rune, runes.Pos]{integer})
@@ -230,8 +264,8 @@ fmt.Print(rules)
 | v2 | v3 |
 |---|---|
 | `p.Match(rd)` on a `Pattern` | `ebnf.Parse(p, rd)` (concrete types still have `Match`) |
-| `p.SetID("x")` | `ebnf.Name(p, "x")` |
-| `p.SetPrintOutput("x")` | `ebnf.Text(p, "x")` |
+| `p.SetID("x")` | `p.Named("x")` on the concrete pattern, or `ebnf.Name(p, "x")` |
+| `p.SetPrintOutput("x")` | `p.Printed("x")`, or `ebnf.Text(p, "x")` |
 | `p.SetEvalFunc(f)` | `rule.New("x", p).WithEval(f)` |
 | `p.SetLogger(l)`, `ebnf.SetLogger` | `ebnf.NewParseContext(rd).WithLogger(l)` |
 | `ebnf.WithMemo(rd, idx)` returning a `MemoReader` | same call, it returns a `*ParseContext`; or `NewParseContext(rd).WithMemo(idx)` |

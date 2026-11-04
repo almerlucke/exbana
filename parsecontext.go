@@ -14,6 +14,34 @@ type ParseContext[T, P any] struct {
 	logger Logger[T, P]
 	index  func(P) int
 	solved map[solutionKey[T, P]][]*Match[T, P]
+	frames *frameStack[T, P]
+}
+
+// frameStack holds the rules that are being matched, it is shared by a context and its Silent copies.
+type frameStack[T, P any] struct {
+	frames []*RuleFrame[T, P]
+}
+
+// RuleFrame is a rule that is being matched at a position. A rule uses it to notice that it is being entered again
+// at the same position without having consumed anything, which is left recursion. Only rules need to know about
+// this, see rule.Rule.
+type RuleFrame[T, P any] struct {
+	pattern Pattern[T, P]
+	pos     P
+
+	// Open is true while the rule is working out its matches. It is false while a continuation runs that was handed a
+	// match of the rule: the rule is then matched, and may legitimately be entered again at the same position (when
+	// it matched the empty input).
+	Open bool
+
+	// Grows is true for a rule that handles left recursion by growing a seed.
+	Grows bool
+
+	// Seed is what a growing rule hands out to its own left recursive calls.
+	Seed []*Match[T, P]
+
+	// Used is set when a left recursive call read the seed.
+	Used bool
 }
 
 type solutionKey[T, P any] struct {
@@ -23,7 +51,74 @@ type solutionKey[T, P any] struct {
 
 // NewParseContext wraps a reader in a parse context. Without further setup it does nothing but forward to the reader.
 func NewParseContext[T, P any](r Reader[T, P]) *ParseContext[T, P] {
-	return &ParseContext[T, P]{Reader: r}
+	return &ParseContext[T, P]{Reader: r, frames: &frameStack[T, P]{}}
+}
+
+// EnsureContext returns the reader as a ParseContext, wrapping it in a new one if it is a plain reader.
+func EnsureContext[T, P any](r Reader[T, P]) *ParseContext[T, P] {
+	if c, ok := r.(*ParseContext[T, P]); ok {
+		return c
+	}
+
+	return NewParseContext(r)
+}
+
+// PushFrame records that a rule starts matching at a position. The frame must be popped when the rule is done.
+func (c *ParseContext[T, P]) PushFrame(p Pattern[T, P], pos P, grows bool) *RuleFrame[T, P] {
+	f := &RuleFrame[T, P]{pattern: p, pos: pos, Open: true, Grows: grows}
+	c.frames.frames = append(c.frames.frames, f)
+
+	return f
+}
+
+// PopFrame removes the frame, and any frames pushed after it.
+func (c *ParseContext[T, P]) PopFrame(f *RuleFrame[T, P]) {
+	s := c.frames.frames
+
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == f {
+			clear(s[i:])
+			c.frames.frames = s[:i]
+
+			return
+		}
+	}
+}
+
+// FindOpenFrame returns the open frame of the pattern at the position, or nil. Frames are in stream order from the
+// bottom of the stack to the top, so the search stops at the first frame that is before the position.
+func (c *ParseContext[T, P]) FindOpenFrame(p Pattern[T, P], pos P) *RuleFrame[T, P] {
+	s := c.frames.frames
+
+	for i := len(s) - 1; i >= 0; i-- {
+		if c.Length(s[i].pos, pos) > 0 {
+			return nil
+		}
+
+		if s[i].Open && s[i].pattern == p {
+			return s[i]
+		}
+	}
+
+	return nil
+}
+
+// GrowingAt returns true if a rule is growing a seed at the position. Results of patterns at that position depend on
+// the seed, which changes while it grows, so they must not be memoized.
+func (c *ParseContext[T, P]) GrowingAt(pos P) bool {
+	s := c.frames.frames
+
+	for i := len(s) - 1; i >= 0; i-- {
+		if c.Length(s[i].pos, pos) > 0 {
+			return false
+		}
+
+		if s[i].Grows {
+			return true
+		}
+	}
+
+	return false
 }
 
 // WithLogger sets the logger that receives the mismatches of this parse.

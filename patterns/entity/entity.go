@@ -110,3 +110,16 @@ func (e *Entity[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte(e.Text()))
 	return err
 }
+
+// Named sets the identifier of the pattern and returns the pattern, so it can be chained: names are what syntax
+// errors and printed grammars call the pattern.
+func (e *Entity[T, P]) Named(id string) *Entity[T, P] {
+	e.SetID(id)
+	return e
+}
+
+// Printed sets the text the pattern prints as and returns the pattern.
+func (e *Entity[T, P]) Printed(text string) *Entity[T, P] {
+	e.SetText(text)
+	return e
+}

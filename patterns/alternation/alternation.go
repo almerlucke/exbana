@@ -259,3 +259,16 @@ func (a *Alternation[T, P]) Recognize(values []T) (bool, bool) {
 
 	return false, known
 }
+
+// Named sets the identifier of the pattern and returns the pattern, so it can be chained: names are what syntax
+// errors and printed grammars call the pattern.
+func (a *Alternation[T, P]) Named(id string) *Alternation[T, P] {
+	a.SetID(id)
+	return a
+}
+
+// Printed sets the text the pattern prints as and returns the pattern.
+func (a *Alternation[T, P]) Printed(text string) *Alternation[T, P] {
+	a.SetText(text)
+	return a
+}

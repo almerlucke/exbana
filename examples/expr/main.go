@@ -152,16 +152,16 @@ func (c *Calculator) grammar() pattern {
 		return alternation.New(ps...).SetOrthogonal(fast)
 	}
 	char := func(r rune) pattern {
-		return ebnf.Text(ent.New[rune, runes.Pos](func(x rune) bool { return x == r }), strconv.Quote(string(r)))
+		return ent.New[rune, runes.Pos](func(x rune) bool { return x == r }).Printed(strconv.Quote(string(r)))
 	}
 	oneOf := func(chars string, name string) pattern {
-		return ebnf.Name(ent.New[rune, runes.Pos](func(x rune) bool { return strings.ContainsRune(chars, x) }), name)
+		return ent.New[rune, runes.Pos](func(x rune) bool { return strings.ContainsRune(chars, x) }).Named(name)
 	}
 	class := func(f func(rune) bool, name string) pattern {
-		return ebnf.Name(ent.New[rune, runes.Pos](f), name)
+		return ent.New[rune, runes.Pos](f).Named(name)
 	}
 
-	ws := ebnf.Name(any0(ent.New[rune, runes.Pos](unicode.IsSpace)), "ws")
+	ws := any0(ent.New[rune, runes.Pos](unicode.IsSpace)).Named("ws")
 	digit := func() pattern { return class(func(r rune) bool { return r >= '0' && r <= '9' }, "digit") }
 	letter := func() pattern { return class(func(r rune) bool { return unicode.IsLetter(r) || r == '_' }, "letter") }
 
@@ -172,7 +172,7 @@ func (c *Calculator) grammar() pattern {
 	)).WithEval(evalNumber)
 
 	identifier := func() pattern {
-		return ebnf.Name(conc(letter(), any0(alt(letter(), digit()))), "identifier")
+		return conc(letter(), any0(alt(letter(), digit()))).Named("identifier")
 	}
 
 	variable := rule.New("variable", identifier()).WithEval(c.evalVariable)
@@ -199,7 +199,7 @@ func (c *Calculator) grammar() pattern {
 	expr.Define(conc(term, any0(conc(ws, oneOf("+-", "addition operator"), ws, term))))
 	unary.Define(alt(negation, power))
 
-	return rule.New("input", conc(ws, expr, ws, ebnf.Text(end.New[rune, runes.Pos](), "end of input"))).WithEval(func(m *match, r reader) (any, error) {
+	return rule.New("input", conc(ws, expr, ws, end.New[rune, runes.Pos]().Printed("end of input"))).WithEval(func(m *match, r reader) (any, error) {
 		return num(m.Components[1], r)
 	})
 }

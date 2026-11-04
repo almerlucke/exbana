@@ -1280,3 +1280,360 @@ func TestSum(t *testing.T) {
 		t.Errorf("Commit: %v", err)
 	}
 }
+
+// typedGrammar is a small language that has every kind of child: one, one or none, many, and a choice.
+//
+//	doc   = pair { ";" pair }
+//	pair  = name ":" value [ "!" flag ]
+//	value = number | text | list
+//	list  = "[" [ value { "," value } ] "]"
+//
+// The rule text is there for its name: Text is a method every view has.
+func typedGrammar() pat {
+	number := rule.New[rune, runes.Pos]("number", some(between('0', '9')).SetPossessive(true))
+	name := rule.New[rune, runes.Pos]("name", some(between('a', 'z')).SetPossessive(true))
+	txt := rule.New[rune, runes.Pos]("text", some(between('A', 'Z')).SetPossessive(true))
+	flag := rule.New[rune, runes.Pos]("flag", text("yes"))
+	value := rule.Declare[rune, runes.Pos]("value")
+	list := rule.New[rune, runes.Pos]("list", conc(text("["), maybe(conc(value, many(conc(text(","), value)).SetPossessive(true))).SetPossessive(true), text("]")))
+	value.Define(alt(number, txt, list).SetOrthogonal(true))
+	pair := rule.New[rune, runes.Pos]("pair", conc(name, text(":"), value, maybe(conc(text("!"), flag)).SetPossessive(true)))
+
+	return rule.New[rune, runes.Pos]("doc", conc(pair, many(conc(text(";"), pair)).SetPossessive(true)))
+}
+
+func TestTypedASTViewsFollowTheGrammar(t *testing.T) {
+	src, err := codegen.Generate[rune, runes.Pos](typedGrammar(), cfg{Package: "probe", Name: "V", AST: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gentest.Run(t, map[string]string{"v.go": string(src), "v_test.go": `package probe
+
+import (
+	"iter"
+	"slices"
+	"testing"
+)
+
+// the types of the methods are what the grammar promises
+var (
+	_ func() iter.Seq[VPair]  = VDoc{}.Pairs
+	_ func() VName            = VPair{}.Name
+	_ func() VValue           = VPair{}.Value
+	_ func() (VFlag, bool)    = VPair{}.Flag
+	_ func() iter.Seq[VValue] = VList{}.Values
+	_ func() (VNumber, bool)  = VValue{}.Number
+	_ func() (VText, bool)    = VValue{}.TextRule // Text is taken by the text of the node
+	_ func() (VList, bool)    = VValue{}.List
+	_ func() (VRule, bool)    = VValue{}.Kind
+	_ func() VDoc             = VTop{}.Doc
+)
+
+func TestViews(t *testing.T) {
+	const in = "a:12;bc:[X,[],7]!yes;d:Y"
+
+	tree, err := NewVParser().ParseString(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc := tree.Top().Doc()
+	if got := doc.Text(); got != in {
+		t.Fatalf("doc = %q", got)
+	}
+
+	pairs := slices.Collect(doc.Pairs())
+	if len(pairs) != 3 {
+		t.Fatalf("%d pairs", len(pairs))
+	}
+
+	var names []string
+	for _, p := range pairs {
+		names = append(names, p.Name().Text())
+	}
+	if !slices.Equal(names, []string{"a", "bc", "d"}) {
+		t.Errorf("names = %v", names)
+	}
+
+	// a choice: which one it is, and the view of it
+	first := pairs[0].Value()
+	if k, ok := first.Kind(); !ok || k != VRuleNumber {
+		t.Errorf("kind = %v %v", k, ok)
+	}
+	if n, ok := first.Number(); !ok || n.Text() != "12" {
+		t.Errorf("number = %v %v", n, ok)
+	}
+	if _, ok := first.List(); ok {
+		t.Error("12 is not a list")
+	}
+
+	// one or none
+	if _, ok := pairs[0].Flag(); ok {
+		t.Error("the first pair has no flag")
+	}
+	if f, ok := pairs[1].Flag(); !ok || f.Text() != "yes" {
+		t.Errorf("flag = %v %v", f, ok)
+	}
+
+	// many, nested
+	list, ok := pairs[1].Value().List()
+	if !ok {
+		t.Fatal("not a list")
+	}
+	var kinds []VRule
+	for v := range list.Values() {
+		k, _ := v.Kind()
+		kinds = append(kinds, k)
+	}
+	if !slices.Equal(kinds, []VRule{VRuleText, VRuleList, VRuleNumber}) {
+		t.Errorf("kinds = %v", kinds)
+	}
+
+	// stopping early
+	n := 0
+	for range list.Values() {
+		n++
+		break
+	}
+	if n != 1 {
+		t.Errorf("break: %d", n)
+	}
+
+	// the span, and the way back to the tree
+	if b, e := pairs[2].Span(); b != 21 || e != 24 {
+		t.Errorf("span = %d-%d", b, e)
+	}
+	if v, ok := tree.AsValue(pairs[2].Value().Node); !ok || v.Text() != "Y" {
+		t.Errorf("AsValue = %v %v", v, ok)
+	}
+	if _, ok := tree.AsPair(pairs[2].Value().Node); ok {
+		t.Error("a value is not a pair")
+	}
+	if _, ok := tree.AsPair(-1); ok {
+		t.Error("-1 is not a node")
+	}
+	if _, ok := tree.AsPair(len(tree.Nodes)); ok {
+		t.Error("past the nodes is not a node")
+	}
+
+	// an empty list has no values
+	empty, _ := slices.Collect(list.Values())[1].List()
+	if len(slices.Collect(empty.Values())) != 0 {
+		t.Error("[] has values")
+	}
+}
+`})
+}
+
+func TestTypedASTWithRecovery(t *testing.T) {
+	program, _ := statements(t)
+
+	resume := conc(text(";"), many(entity.OneOf[rune, runes.Pos](' ', '\n', '\t')).SetPossessive(true))
+
+	files := map[string]string{}
+
+	for _, utf8 := range []bool{false, true} {
+		name := map[bool]string{false: "R", true: "U"}[utf8]
+
+		src, err := codegen.Generate[rune, runes.Pos](program, cfg{
+			Package: "probe", Name: name, UTF8: utf8, AST: true,
+			Recover: map[string]codegen.Recovery[rune, runes.Pos]{"stmt": {Until: resume, Consume: true}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		files[strings.ToLower(name)+".go"] = string(src)
+	}
+
+	files["v_test.go"] = `package probe
+
+import (
+	"iter"
+	"slices"
+	"testing"
+)
+
+// a statement that can be cut short does not promise its ident and number
+var (
+	_ func() (RIdent, bool)  = RStmt{}.Ident
+	_ func() (RNumber, bool) = RStmt{}.Number
+	_ func() bool            = RStmt{}.Recovered
+	_ func() iter.Seq[RStmt] = RProgram{}.Stmts
+	_ func() (UIdent, bool)  = UStmt{}.Ident
+)
+
+func TestRecoveredStatementsAreViewedAsCutShort(t *testing.T) {
+	tree, errs := NewRParser().ParseAll([]rune("let a = 1;\nlet b = ;\nlet c = 3;\n"))
+	if len(errs) != 1 {
+		t.Fatalf("errors: %v", errs)
+	}
+
+	var idents []string
+	var recovered []bool
+	var numbers []bool
+
+	for s := range tree.Top().Program().Stmts() {
+		recovered = append(recovered, s.Recovered())
+
+		_, hasNumber := s.Number()
+		numbers = append(numbers, hasNumber)
+
+		if id, ok := s.Ident(); ok {
+			idents = append(idents, id.Text())
+		}
+	}
+
+	// the middle statement was cut short and has nothing but the error: not even the ident that was read before it
+	if !slices.Equal(idents, []string{"a", "c"}) || !slices.Equal(recovered, []bool{false, true, false}) || !slices.Equal(numbers, []bool{true, false, true}) {
+		t.Errorf("idents %v recovered %v numbers %v", idents, recovered, numbers)
+	}
+}
+
+func TestUTF8Views(t *testing.T) {
+	tree, err := NewUParser().Parse("let é = 1;")
+	if err == nil {
+		t.Fatalf("é is not a letter, but parsed: %s", tree.Dump())
+	}
+
+	tree, err = NewUParser().Parse("let a = 12; ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := slices.Collect(tree.Top().Program().Stmts())[0]
+
+	// the slice of the input is a string
+	var in string = s.Slice()
+	if in != "let a = 12; " {
+		t.Errorf("slice = %q", in)
+	}
+}
+`
+
+	gentest.Run(t, files)
+}
+
+func TestTypedASTOfLoopsAndNamesThatClash(t *testing.T) {
+	number := rule.New[rune, runes.Pos]("number", some(between('0', '9')).SetPossessive(true))
+	addop := rule.New[rune, runes.Pos]("addop", alt(text("+"), text("-")).SetOrthogonal(true))
+	expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
+	expr.Define(alt(conc(expr, addop, number), number).SetOrthogonal(true))
+
+	// rules that are called like the types of the generated file
+	parser := rule.New[rune, runes.Pos]("parser", conc(text("("), expr, text(")")))
+	tree := rule.New[rune, runes.Pos]("tree", alt(parser, number).SetOrthogonal(true))
+	parse := rule.New[rune, runes.Pos]("parse", conc(tree, many(conc(text(","), tree)).SetPossessive(true)))
+	top := rule.New[rune, runes.Pos]("top", parse)
+	node := rule.New[rune, runes.Pos]("node", conc(text("<"), top, text(">")))
+
+	res, err := optimize.Analyze[rune, runes.Pos](node, optimize.Options{Closed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res.Force()
+
+	// the rules are named like the types, and Name is empty
+	src, err := codegen.Generate[rune, runes.Pos](node, cfg{Package: "probe", AST: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gentest.Run(t, map[string]string{"p.go": string(src), "p_test.go": `package probe
+
+import (
+	"iter"
+	"slices"
+	"testing"
+)
+
+var (
+	// the loop has all its terms and operators, in the order of their kind
+	_ func() iter.Seq[Number] = Expr{}.Numbers
+	_ func() iter.Seq[Addop]  = Expr{}.Addops
+	// the rules took other names than the types of the file
+	_ Parser2 = Parser2{}
+	_ Tree2   = Tree2{}
+	_ Parse2  = Parse2{}
+	_ Node2   = Node2{}
+	_ Top2    = Top2{}
+	_ *Parser = NewParser()
+)
+
+func TestLoopView(t *testing.T) {
+	tree, err := NewParser().ParseString("<(1+22-3),4>")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n, _ := tree.AsNode2(0)
+	p := n.Top().Parse().Trees()
+	trees := slices.Collect(p)
+	if len(trees) != 2 {
+		t.Fatalf("%d trees", len(trees))
+	}
+
+	pr, ok := trees[0].Parser()
+	if !ok {
+		t.Fatal("the first tree is a parser")
+	}
+	e := pr.Expr()
+	var nums, ops []string
+	for x := range e.Numbers() {
+		nums = append(nums, x.Text())
+	}
+	for x := range e.Addops() {
+		ops = append(ops, x.Text())
+	}
+	if !slices.Equal(nums, []string{"1", "22", "3"}) || !slices.Equal(ops, []string{"+", "-"}) {
+		t.Errorf("numbers %v operators %v", nums, ops)
+	}
+
+	if k, ok := trees[1].Kind(); !ok || k != RuleNumber {
+		t.Errorf("kind = %v %v", k, ok)
+	}
+}
+`})
+}
+
+func TestTypedASTIgnoresWhatAnExceptionOnlyLooksAt(t *testing.T) {
+	word := rule.New[rune, runes.Pos]("word", some(between('a', 'z')).SetPossessive(true))
+	keyword := rule.New[rune, runes.Pos]("keyword", text("let"))
+	ident := rule.New[rune, runes.Pos]("ident", except.New[rune, runes.Pos](word, keyword))
+
+	src, err := codegen.Generate[rune, runes.Pos](ident, cfg{Package: "probe", Name: "E", AST: true, Commit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gentest.Run(t, map[string]string{"e.go": string(src), "e_test.go": `package probe
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestExceptionHasNoView(t *testing.T) {
+	tree, err := NewEParser().ParseString("lex")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id := tree.Top().Ident()
+	if id.Word().Text() != "lex" {
+		t.Errorf("word = %q", id.Word().Text())
+	}
+
+	// the keyword is only looked at to be refused, it is never in the tree
+	if _, has := reflect.TypeOf(id).MethodByName("Keyword"); has {
+		t.Error("an ident has no keyword inside")
+	}
+
+	if _, err := NewEParser().ParseString("let"); err == nil {
+		t.Error("let is a keyword")
+	}
+}
+`})
+}

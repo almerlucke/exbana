@@ -47,7 +47,8 @@ func JSON() pattern {
 	exponent := conc(oneOf('e', 'E'), maybe(oneOf('+', '-')), some(digit))
 	number := rule.New[rune, runes.Pos]("number", conc(maybe(text("-")), integer, maybe(fraction), maybe(exponent), ws))
 
-	escape := conc(text(`\`), alt(oneOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't'), conc(text("u"), digit, digit, digit, digit)))
+	hex := entity.In[rune, runes.Pos](entity.Range[rune]{Lo: '0', Hi: '9'}, entity.Range[rune]{Lo: 'a', Hi: 'f'}, entity.Range[rune]{Lo: 'A', Hi: 'F'})
+	escape := conc(text(`\`), alt(oneOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't'), conc(text("u"), hex, hex, hex, hex)))
 	str := rule.New[rune, runes.Pos]("string", conc(text(`"`),
 		many(alt(entity.NotIn[rune, runes.Pos](entity.Range[rune]{Lo: '"', Hi: '"'}, entity.Range[rune]{Lo: '\\', Hi: '\\'}), escape)),
 		text(`"`), ws))
@@ -82,5 +83,5 @@ func Source() ([]byte, error) {
 		return nil, fmt.Errorf("the grammar backtracks in %d places:\n%v", len(blocked), res)
 	}
 
-	return codegen.Generate[rune, runes.Pos](g, codegen.Config[rune, runes.Pos]{Package: "parser", Name: "JSON", UTF8: true})
+	return codegen.Generate[rune, runes.Pos](g, codegen.Config[rune, runes.Pos]{Package: "parser", Name: "JSON", UTF8: true, AST: true})
 }

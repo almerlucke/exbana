@@ -439,6 +439,7 @@ func (p *{{.Parser}}) syntaxError() *{{.SynErr}} {
 	return e
 }
 
+{{.Views}}
 {{.Lits}}
 {{.Funcs}}
 `))

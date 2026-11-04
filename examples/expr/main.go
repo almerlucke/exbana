@@ -29,6 +29,7 @@ import (
 	"github.com/almerlucke/exbana/v2/patterns/end"
 	ent "github.com/almerlucke/exbana/v2/patterns/entity"
 	"github.com/almerlucke/exbana/v2/patterns/repetition"
+	"github.com/almerlucke/exbana/v2/patterns/rule"
 	"github.com/almerlucke/exbana/v2/readers/runes"
 )
 
@@ -177,8 +178,8 @@ func (c *Calculator) grammar() pattern {
 	variable := identifier().SetID("variable").SetEvalFunc(c.evalVariable)
 
 	// forward declarations for the recursive rules
-	expr := conc().SetID("expression").SetEvalFunc(evalBinary)
-	unary := alt().SetEvalFunc(delegate)
+	expr := rule.Declare[rune, runes.Pos]("expression").WithEval(evalBinary)
+	unary := rule.Declare[rune, runes.Pos]("unary").WithEval(delegate)
 
 	args := opt(conc(expr, any0(conc(ws, char(','), ws, expr))))
 	call := conc(identifier(), ws, char('('), ws, args, ws, char(')')).SetID("call").SetEvalFunc(evalCall)
@@ -195,10 +196,8 @@ func (c *Calculator) grammar() pattern {
 
 	term := conc(unary, any0(conc(ws, oneOf("*/%", "multiplication operator"), ws, unary))).SetID("term").SetEvalFunc(evalBinary)
 
-	expr.(*concatenation.Concatenation[rune, runes.Pos]).SetPatterns(ebnf.Patterns[rune, runes.Pos]{
-		term, any0(conc(ws, oneOf("+-", "addition operator"), ws, term)),
-	})
-	unary.(*alternation.Alternation[rune, runes.Pos]).SetPatterns(ebnf.Patterns[rune, runes.Pos]{negation, power})
+	expr.Define(conc(term, any0(conc(ws, oneOf("+-", "addition operator"), ws, term))))
+	unary.Define(alt(negation, power))
 
 	return conc(ws, expr, ws, end.New[rune, runes.Pos]().SetPrintOutput("end of input")).SetID("input").SetEvalFunc(func(m *match, r reader) (any, error) {
 		return num(m.Components[1], r)

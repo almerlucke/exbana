@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -159,5 +161,54 @@ func FuzzGeneratedParserAgainstGrammar(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, input string) {
 		agree(t, p, input)
+	})
+}
+
+// decode parses and decodes, and compares with encoding/json for the documents it accepts
+func decodeAgrees(t testing.TB, input string) {
+	t.Helper()
+
+	// the grammar lets control characters and bytes that are not text in strings; encoding/json is stricter about
+	// the first and repairs the second
+	if !utf8.ValidString(input) || !json.Valid([]byte(input)) {
+		return
+	}
+
+	var want any
+	if err := json.Unmarshal([]byte(input), &want); err != nil {
+		return // a number out of range
+	}
+
+	tree, err := parser.NewJSONParser().Parse(input)
+	if err != nil {
+		t.Fatalf("%.60q is JSON and the parser says %v", input, err)
+	}
+
+	got, err := Decode(tree)
+	if err != nil {
+		t.Fatalf("%.60q: %v", input, err)
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%.60q:\n  decoded %#v\n  json    %#v", input, got, want)
+	}
+}
+
+func TestDecodeAgreesWithEncodingJSON(t *testing.T) {
+	for _, doc := range []string{
+		`null`, ` true `, `false`, `0`, `-12.5e3`, `""`, `"abc"`, `"a\nb\t\"q\"\\ \/ \b\f\r"`, `"\u00e9\u20AC"`, `"\ud83d\ude00"`, `"\ud83d"`, `"\ude00x"`, `"\ud83d\u0041"`,
+		`[]`, `[ ]`, `[1, [2, [3]], {"a": []}]`, `{}`, `{"a": 1, "a": 2}`, `{"é€": ["λ", "🙂"], "k": {"x": null}}`, "\n\t{ \"a\" :\r\n [ 1 , 2 ] }\n",
+	} {
+		decodeAgrees(t, doc)
+	}
+}
+
+func FuzzDecodeAgainstEncodingJSON(f *testing.F) {
+	for _, seed := range []string{`{"a": [1, 2.5e3, null, true, "x"]}`, `"\ud83d\ude00"`, `"\ud83d\u"`, `[1,]`, `{"é": "λ🙂", "k": [1, "\u00e9"]}`, `"\\u0041"`, `-0`} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, input string) {
+		decodeAgrees(t, input)
 	})
 }

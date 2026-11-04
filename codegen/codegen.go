@@ -37,6 +37,22 @@
 // what was expected there, formatted like ebnf.FarthestLog. Evaluating the tree is up to you. A left recursive rule is one node
 // that has its base and its tails as children, in order.
 //
+// # The typed AST
+//
+// Config.AST adds a type for every rule: a view of the nodes of that rule, with a method for each rule that can match inside it.
+// How the method looks follows from how often the grammar lets that rule match inside the other:
+//
+//	exactly once        func (v Member) Value() Value
+//	once or not at all  func (v Value) Number() (Number, bool)
+//	any other number    func (v Object) Members() iter.Seq[Member]
+//
+// A rule that is one of several (value = string | number | array) also has Kind, the rule of what is inside. Tree.Top is the
+// view of the top level, Tree.AsMember the view of a node that is known to be of a rule, and every view has Span, Slice and
+// (for text) Text. A rule with a recovery promises nothing: it can be cut short, so its methods give a child or none, and
+// Recovered says whether it was. The views hold a tree and a node number and copy nothing, so reading a document through them costs
+// no more than walking the tree. The order of children of different rules is not in the methods (members of one rule are in order);
+// Tree.Children has all of them in order.
+//
 // # Error recovery
 //
 // Config.Recover makes a rule survive a syntax error: ParseAll notes the error, skips to a place the grammar names, and goes on,
@@ -74,6 +90,12 @@ type Config[T, P any] struct {
 	// slice of runes. Positions are byte offsets; columns in errors still count characters. That is a quarter of the memory
 	// and no conversion pass, and Tree.Text is a slice of the input without a copy. The elements have to be runes.
 	UTF8 bool
+
+	// AST also writes a type for every rule, a view of the nodes of that rule with a method for each rule that can match
+	// inside it: Member.Value(), Object.Members(). The methods follow from how often the grammar lets a rule match inside
+	// another one (once, once or not at all, any number of times), so a parse can be read without knowing the layout of the
+	// tree. Tree.Top is the view of the top level. See the package documentation.
+	AST bool
 
 	// Recover says, for rules, how to go on after a syntax error in them: see Recovery. The keys are rule names.
 	Recover map[string]Recovery[T, P]
@@ -168,6 +190,8 @@ type compiler[T, P any] struct {
 	ruleConst   map[string]string
 	ruleIdent   map[string]string
 	ruleRecover map[string]string
+	viewType    map[string]string // the view type of every rule, with Config.AST
+	topType     string
 	counter     int
 
 	funcs strings.Builder
@@ -182,7 +206,7 @@ func newCompiler[T, P any](g *ebnf.Grammar[T, P], cfg Config[T, P]) *compiler[T,
 	c := &compiler[T, P]{
 		g: g, cfg: cfg, lr: map[string]lrSplit[T, P]{}, loops: map[string]optimize.Decision[T, P]{},
 		used:   map[string]bool{},
-		ruleFn: map[string]string{}, ruleConst: map[string]string{}, ruleIdent: map[string]string{}, ruleRecover: map[string]string{},
+		ruleFn: map[string]string{}, ruleConst: map[string]string{}, ruleIdent: map[string]string{}, ruleRecover: map[string]string{}, viewType: map[string]string{},
 	}
 
 	c.elem = cfg.ElemType
@@ -525,6 +549,15 @@ func (c *compiler[T, P]) classCond(n *ebnf.Node[T, P]) string {
 	return cond
 }
 
+// sliceType is the Go type of a part of the input.
+func (c *compiler[T, P]) sliceType() string {
+	if c.utf8 {
+		return "string"
+	}
+
+	return "[]" + c.elem
+}
+
 func ternary[V any](cond bool, yes, no V) V {
 	if cond {
 		return yes
@@ -845,12 +878,22 @@ type tmplData struct {
 	Root      string
 	Rules     []ruleData
 	Funcs     string
+	Views     string
 	Lits      string
 }
 
 type ruleData struct{ Const, Name, Ident string }
 
 func (c *compiler[T, P]) generate() ([]byte, error) {
+	if c.cfg.AST {
+		// the views are named after the rules, which must not take the names of the other types
+		for _, n := range []string{"Parser", "Tree", "Node", "Rule", "SyntaxError", "ErrTooDeep", "Parse"} {
+			c.used[c.cfg.Name+n] = true
+		}
+
+		c.used["New"+c.cfg.Name+"Parser"] = true
+	}
+
 	// the rules are named before any code is written, they use each other
 	idents := map[string]bool{}
 
@@ -865,6 +908,14 @@ func (c *compiler[T, P]) generate() ([]byte, error) {
 		c.ruleConst[name] = c.unique(c.cfg.Name + "Rule" + ident)
 		c.ruleFn[name] = c.unique("rule" + ident)
 		c.ruleRecover[name] = c.unique("recover" + ident)
+
+		if c.cfg.AST {
+			c.viewType[name] = c.unique(c.cfg.Name + ident)
+		}
+	}
+
+	if c.cfg.AST {
+		c.topType = c.unique(c.cfg.Name + "Top")
 	}
 
 	for _, name := range c.g.Order {
@@ -894,6 +945,10 @@ func (c *compiler[T, P]) generate() ([]byte, error) {
 	// the methods and the literals refer to the names of the types
 	names := strings.NewReplacer("\x00P\x00", d.Parser, "\x00N\x00", d.Node, "\x00X\x00", d.Prefix)
 	d.Funcs, d.Lits = names.Replace(c.funcs.String()), names.Replace(c.lits.String())
+
+	if c.cfg.AST {
+		d.Views = names.Replace(c.emitViews())
+	}
 
 	var out bytes.Buffer
 	if err := fileTemplate.Execute(&out, d); err != nil {

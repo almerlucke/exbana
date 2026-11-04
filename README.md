@@ -351,6 +351,21 @@ walking it needs no pointers. The tree has `Walk`, `Children`, `Find` and `First
 `FarthestLog`: `syntax error at 1:4: unexpected '2', expected "," or "]"` (a leaf without a name or print text is left out of the expected
 list, as it is with `FarthestLog`: give it one with `.Printed`). Evaluation is yours: walk the tree and build what you need.
 
+**A typed AST.** With `Config.AST` the parser also has a type for every rule, with a method for each rule that can match inside it, made from how
+often the grammar lets it: a rule that matches exactly once is `member.Value()`, one that may be missing is `value.Number()` (returning `ok`), any other
+number is `object.Members()`, an `iter.Seq`. A rule that is a choice has `Kind()`. Nothing is copied; a view is a tree and a node number.
+
+```go
+tree, _ := parser.NewJSONParser().Parse(input)
+if object, ok := tree.Top().Value().Object(); ok {          // Value() is the one value of the document
+	for member := range object.Members() {
+		fmt.Println(member.String().Text(), member.Value().Text())
+	}
+}
+```
+
+`examples/jsongen/decode.go` turns a document into Go values this way, in a page of code, and the tests compare it with `encoding/json`.
+
 **Fast.** On a 200 KB JSON document the generated parser takes about 2 ms (95 MB/s, two allocations); the grammar as written takes 208 ms and
 the optimized grammar 122 ms. For scale, the standard library needs 4.5 ms to unmarshal the same document.
 

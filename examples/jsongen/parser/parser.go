@@ -423,6 +423,330 @@ func (p *JSONParser) syntaxError() *JSONSyntaxError {
 	return e
 }
 
+// JSONValue is a node of the rule "value", seen through the grammar: the rules that match inside it are its methods.
+type JSONValue struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsValue is the node seen as a JSONValue. ok is false if the node is not of that rule.
+func (t *JSONTree) AsValue(node int) (JSONValue, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleValue {
+		return JSONValue{}, false
+	}
+
+	return JSONValue{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONValue) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONValue) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// String is the string inside, if there is one.
+func (v JSONValue) String() (JSONString, bool) {
+	node, ok := v.Tree.First(v.Node, JSONRuleString)
+
+	return JSONString{v.Tree, node}, ok
+}
+
+// Number is the number inside, if there is one.
+func (v JSONValue) Number() (JSONNumber, bool) {
+	node, ok := v.Tree.First(v.Node, JSONRuleNumber)
+
+	return JSONNumber{v.Tree, node}, ok
+}
+
+// Array is the array inside, if there is one.
+func (v JSONValue) Array() (JSONArray, bool) {
+	node, ok := v.Tree.First(v.Node, JSONRuleArray)
+
+	return JSONArray{v.Tree, node}, ok
+}
+
+// Object is the object inside, if there is one.
+func (v JSONValue) Object() (JSONObject, bool) {
+	node, ok := v.Tree.First(v.Node, JSONRuleObject)
+
+	return JSONObject{v.Tree, node}, ok
+}
+
+// Literal is the literal inside, if there is one.
+func (v JSONValue) Literal() (JSONLiteral, bool) {
+	node, ok := v.Tree.First(v.Node, JSONRuleLiteral)
+
+	return JSONLiteral{v.Tree, node}, ok
+}
+
+// Kind is the rule of what is inside: this rule is one of several.
+func (v JSONValue) Kind() (JSONRule, bool) {
+	for node := range v.Tree.Children(v.Node) {
+		return v.Tree.Nodes[node].Rule, true
+	}
+
+	return 0, false
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONValue) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONString is a node of the rule "string", seen through the grammar: the rules that match inside it are its methods.
+type JSONString struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsString is the node seen as a JSONString. ok is false if the node is not of that rule.
+func (t *JSONTree) AsString(node int) (JSONString, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleString {
+		return JSONString{}, false
+	}
+
+	return JSONString{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONString) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONString) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONString) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONNumber is a node of the rule "number", seen through the grammar: the rules that match inside it are its methods.
+type JSONNumber struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsNumber is the node seen as a JSONNumber. ok is false if the node is not of that rule.
+func (t *JSONTree) AsNumber(node int) (JSONNumber, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleNumber {
+		return JSONNumber{}, false
+	}
+
+	return JSONNumber{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONNumber) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONNumber) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONNumber) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONArray is a node of the rule "array", seen through the grammar: the rules that match inside it are its methods.
+type JSONArray struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsArray is the node seen as a JSONArray. ok is false if the node is not of that rule.
+func (t *JSONTree) AsArray(node int) (JSONArray, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleArray {
+		return JSONArray{}, false
+	}
+
+	return JSONArray{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONArray) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONArray) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// Values are the value nodes inside, in order.
+func (v JSONArray) Values() iter.Seq[JSONValue] {
+	return func(yield func(JSONValue) bool) {
+		for node := range v.Tree.Find(v.Node, JSONRuleValue) {
+			if !yield(JSONValue{v.Tree, node}) {
+				return
+			}
+		}
+	}
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONArray) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONObject is a node of the rule "object", seen through the grammar: the rules that match inside it are its methods.
+type JSONObject struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsObject is the node seen as a JSONObject. ok is false if the node is not of that rule.
+func (t *JSONTree) AsObject(node int) (JSONObject, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleObject {
+		return JSONObject{}, false
+	}
+
+	return JSONObject{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONObject) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONObject) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// Members are the member nodes inside, in order.
+func (v JSONObject) Members() iter.Seq[JSONMember] {
+	return func(yield func(JSONMember) bool) {
+		for node := range v.Tree.Find(v.Node, JSONRuleMember) {
+			if !yield(JSONMember{v.Tree, node}) {
+				return
+			}
+		}
+	}
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONObject) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONMember is a node of the rule "member", seen through the grammar: the rules that match inside it are its methods.
+type JSONMember struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsMember is the node seen as a JSONMember. ok is false if the node is not of that rule.
+func (t *JSONTree) AsMember(node int) (JSONMember, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleMember {
+		return JSONMember{}, false
+	}
+
+	return JSONMember{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONMember) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONMember) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// String is the string inside.
+func (v JSONMember) String() JSONString {
+	node, _ := v.Tree.First(v.Node, JSONRuleString)
+
+	return JSONString{v.Tree, node}
+}
+
+// Value is the value inside.
+func (v JSONMember) Value() JSONValue {
+	node, _ := v.Tree.First(v.Node, JSONRuleValue)
+
+	return JSONValue{v.Tree, node}
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONMember) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONLiteral is a node of the rule "literal", seen through the grammar: the rules that match inside it are its methods.
+type JSONLiteral struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsLiteral is the node seen as a JSONLiteral. ok is false if the node is not of that rule.
+func (t *JSONTree) AsLiteral(node int) (JSONLiteral, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != JSONRuleLiteral {
+		return JSONLiteral{}, false
+	}
+
+	return JSONLiteral{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v JSONLiteral) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v JSONLiteral) Slice() string {
+	return v.Tree.Slice(v.Node)
+}
+
+// Text is the part of the input the node matched, as a string.
+func (v JSONLiteral) Text() string {
+	return v.Tree.Text(v.Node)
+}
+
+// JSONTop is the top level of a JSONTree: what the grammar matched, seen through the grammar.
+type JSONTop struct {
+	Tree *JSONTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// Value is the value inside.
+func (v JSONTop) Value() JSONValue {
+	node, _ := v.Tree.First(v.Node, JSONRuleValue)
+
+	return JSONValue{v.Tree, node}
+}
+
+// Top is the top level of the tree.
+func (t *JSONTree) Top() JSONTop {
+	return JSONTop{t, -1}
+}
+
 func (p *JSONParser) m1(pos int) int {
 	mark := len(p.nodes)
 	if q := p.ruleString(pos); q >= 0 {
@@ -516,7 +840,7 @@ func (p *JSONParser) m7(pos int) int {
 func (p *JSONParser) m8(pos int) int {
 	if pos < len(p.in) {
 		x, w := p.rune(pos)
-		if x >= '0' && x <= '9' {
+		if x >= '0' && x <= '9' || x >= 'a' && x <= 'f' || x >= 'A' && x <= 'F' {
 			return pos + w
 		}
 	}
@@ -527,7 +851,7 @@ func (p *JSONParser) m8(pos int) int {
 func (p *JSONParser) m9(pos int) int {
 	if pos < len(p.in) {
 		x, w := p.rune(pos)
-		if x >= '0' && x <= '9' {
+		if x >= '0' && x <= '9' || x >= 'a' && x <= 'f' || x >= 'A' && x <= 'F' {
 			return pos + w
 		}
 	}
@@ -538,7 +862,7 @@ func (p *JSONParser) m9(pos int) int {
 func (p *JSONParser) m10(pos int) int {
 	if pos < len(p.in) {
 		x, w := p.rune(pos)
-		if x >= '0' && x <= '9' {
+		if x >= '0' && x <= '9' || x >= 'a' && x <= 'f' || x >= 'A' && x <= 'F' {
 			return pos + w
 		}
 	}
@@ -549,7 +873,7 @@ func (p *JSONParser) m10(pos int) int {
 func (p *JSONParser) m11(pos int) int {
 	if pos < len(p.in) {
 		x, w := p.rune(pos)
-		if x >= '0' && x <= '9' {
+		if x >= '0' && x <= '9' || x >= 'a' && x <= 'f' || x >= 'A' && x <= 'F' {
 			return pos + w
 		}
 	}

@@ -81,20 +81,34 @@ func NewFarthestLog[T, P any](r Reader[T, P]) *FarthestLog[T, P] {
 	return &FarthestLog[T, P]{reader: r}
 }
 
+// WantsMismatch implements MismatchFilter: an unnamed composite (like digit+) would only print as a grammar fragment,
+// and the leaf patterns it is built from fail at the same position or further, and are logged themselves.
+func (l *FarthestLog[T, P]) WantsMismatch(p Pattern[T, P]) bool {
+	_, composite := p.(Parent[T, P])
+
+	return !composite || IDOf(p) != NoID
+}
+
 // LogMismatch implements the Logger interface
 func (l *FarthestLog[T, P]) LogMismatch(m *Mismatch[T, P]) {
-	if m.Unmatched != nil {
+	if m.Unmatched != nil || !l.WantsMismatch(m.Pattern) {
 		return
 	}
 
-	// an unnamed composite (like digit+) would only print as a grammar fragment, and the leaf patterns it is
-	// built from fail at the same position or further, and are logged themselves
-	if _, composite := m.Pattern.(Parent[T, P]); composite && IDOf(m.Pattern) == NoID {
-		return
-	}
+	l.record(m.Pattern, m.Begin)
+}
 
+// LogFailure implements FailureLogger
+func (l *FarthestLog[T, P]) LogFailure(p Pattern[T, P], begin P) {
+	if l.WantsMismatch(p) {
+		l.record(p, begin)
+	}
+}
+
+// record keeps the failure if it is as far into the stream as the farthest so far
+func (l *FarthestLog[T, P]) record(p Pattern[T, P], begin P) {
 	if l.has {
-		diff := l.reader.Length(l.pos, m.Begin)
+		diff := l.reader.Length(l.pos, begin)
 		if diff < 0 {
 			return
 		}
@@ -106,14 +120,19 @@ func (l *FarthestLog[T, P]) LogMismatch(m *Mismatch[T, P]) {
 
 	if !l.has {
 		l.has = true
-		l.pos = m.Begin
+		l.pos = begin
 		l.expected = l.expected[:0]
-		l.seen = make(map[Pattern[T, P]]struct{})
+
+		if l.seen == nil {
+			l.seen = make(map[Pattern[T, P]]struct{})
+		} else {
+			clear(l.seen)
+		}
 	}
 
-	if _, ok := l.seen[m.Pattern]; !ok {
-		l.seen[m.Pattern] = struct{}{}
-		l.expected = append(l.expected, m.Pattern)
+	if _, ok := l.seen[p]; !ok {
+		l.seen[p] = struct{}{}
+		l.expected = append(l.expected, p)
 	}
 }
 

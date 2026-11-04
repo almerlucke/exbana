@@ -56,7 +56,7 @@ func (e *Entity[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 
 	// at end of stream there is no object to test, never call matchFunc with a zero value
 	if err == io.EOF {
-		ebnf.LogMismatch(rd, ebnf.Pattern[T, P](e), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch[T, P](e, pos, pos, nil, nil) })
+		ebnf.LogFailure(rd, ebnf.Pattern[T, P](e), pos, pos)
 		return false, nil, nil
 	}
 
@@ -78,7 +78,7 @@ func (e *Entity[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 			return false, nil, err
 		}
 
-		ebnf.LogMismatch(rd, ebnf.Pattern[T, P](e), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch[T, P](e, pos, endPos, nil, nil) })
+		ebnf.LogFailure(rd, ebnf.Pattern[T, P](e), pos, endPos)
 	}
 
 	return false, nil, nil

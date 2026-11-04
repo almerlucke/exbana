@@ -20,6 +20,9 @@ type ParseContext[T, P any] struct {
 // frameStack holds the rules that are being matched, it is shared by a context and its Silent copies.
 type frameStack[T, P any] struct {
 	frames []*RuleFrame[T, P]
+
+	// frames that are done, kept to be used again: a rule call would otherwise allocate a frame every time
+	free []*RuleFrame[T, P]
 }
 
 // RuleFrame is a rule that is being matched at a position. A rule uses it to notice that it is being entered again
@@ -65,13 +68,22 @@ func EnsureContext[T, P any](r Reader[T, P]) *ParseContext[T, P] {
 
 // PushFrame records that a rule starts matching at a position. The frame must be popped when the rule is done.
 func (c *ParseContext[T, P]) PushFrame(p Pattern[T, P], pos P, grows bool) *RuleFrame[T, P] {
-	f := &RuleFrame[T, P]{pattern: p, pos: pos, Open: true, Grows: grows}
+	var f *RuleFrame[T, P]
+
+	if n := len(c.frames.free); n > 0 {
+		f = c.frames.free[n-1]
+		c.frames.free = c.frames.free[:n-1]
+	} else {
+		f = &RuleFrame[T, P]{}
+	}
+
+	*f = RuleFrame[T, P]{pattern: p, pos: pos, Open: true, Grows: grows}
 	c.frames.frames = append(c.frames.frames, f)
 
 	return f
 }
 
-// PopFrame removes the frame, and any frames pushed after it.
+// PopFrame removes the frame, and any frames pushed after it. The frame must not be used after it was popped.
 func (c *ParseContext[T, P]) PopFrame(f *RuleFrame[T, P]) {
 	s := c.frames.frames
 
@@ -79,6 +91,11 @@ func (c *ParseContext[T, P]) PopFrame(f *RuleFrame[T, P]) {
 		if s[i] == f {
 			clear(s[i:])
 			c.frames.frames = s[:i]
+
+			// only the frame itself is reused; frames above it were not popped by their own rule, so something may
+			// still refer to them
+			*f = RuleFrame[T, P]{}
+			c.frames.free = append(c.frames.free, f)
 
 			return
 		}
@@ -167,25 +184,55 @@ func (c *ParseContext[T, P]) SetSolutions(p Pattern[T, P], pos P, matches []*Mat
 	c.solved[solutionKey[T, P]{p, c.index(pos)}] = matches
 }
 
-// LogMismatch reports a mismatch of pattern p to the logger of the reader, if it is a ParseContext with a logger. The
-// mismatch is only built if somebody is listening, which saves an allocation for every failed alternative when
-// nothing is logged.
-func LogMismatch[T, P any](r Reader[T, P], p Pattern[T, P], build func() *Mismatch[T, P]) {
+// listener returns the logger of the reader if one is listening for the pattern: the reader is a ParseContext with a
+// logger, which is not void and does not filter the pattern out.
+func listener[T, P any](r Reader[T, P], p Pattern[T, P]) Logger[T, P] {
 	c, ok := r.(interface{ Logger() Logger[T, P] })
 	if !ok {
-		return
+		return nil
 	}
 
 	logger := c.Logger()
 	if logger == nil {
-		return
+		return nil
 	}
 
 	if _, void := logger.(*VoidLog[T, P]); void {
+		return nil
+	}
+
+	// a logger that is not interested in this pattern saves the work of describing the mismatch
+	if f, ok := logger.(MismatchFilter[T, P]); ok && !f.WantsMismatch(p) {
+		return nil
+	}
+
+	return logger
+}
+
+// LogMismatch reports a mismatch of pattern p to the logger of the reader, if it is a ParseContext with a logger. The
+// mismatch is only built if somebody is listening, which saves an allocation for every failed alternative when
+// nothing is logged.
+func LogMismatch[T, P any](r Reader[T, P], p Pattern[T, P], build func() *Mismatch[T, P]) {
+	if logger := listener(r, p); logger != nil {
+		logger.LogMismatch(build())
+	}
+}
+
+// LogFailure reports that pattern p failed to match without saying anything more about it, the way leaf patterns fail.
+// A logger that implements FailureLogger is told without a Mismatch being built, which spares an allocation for every
+// failed leaf of a parse; any other logger gets the Mismatch from begin to end.
+func LogFailure[T, P any](r Reader[T, P], p Pattern[T, P], begin, end P) {
+	logger := listener(r, p)
+	if logger == nil {
 		return
 	}
 
-	logger.LogMismatch(build())
+	if f, ok := logger.(FailureLogger[T, P]); ok {
+		f.LogFailure(p, begin)
+		return
+	}
+
+	logger.LogMismatch(NewMismatch(p, begin, end, nil, nil))
 }
 
 // Silent returns a reader to use for lookahead, such as the exception of an Except: it reads from the same position as

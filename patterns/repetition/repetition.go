@@ -85,75 +85,215 @@ func (rep *Repetition[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[
 		return rep.matchPossessive(r, beginPos, k)
 	}
 
-	var matches []*ebnf.Match[T, P]
+	call := &repeatCall[T, P]{rep: rep, r: r, k: k, beginPos: beginPos}
 
-	failed := ebnf.NewFailSet(r)
-
-	var next func() (bool, error)
-
-	var nextFrom func(herePos P) (bool, error)
-
-	// next is called with the reader positioned after the repetitions matched so far
-	next = func() (bool, error) {
-		herePos, err := r.Position()
-		if ebnf.IsStreamError(err) {
-			return false, err
-		}
-
-		// once min is reached and there is no max, the outcome only depends on the position and not on the
-		// number of repetitions, so a dead end at this position stays a dead end
-		stateless := rep.max == 0 && len(matches) >= rep.min
-
-		if stateless && failed.Has(0, herePos) {
-			return false, nil
-		}
-
-		matched, err := nextFrom(herePos)
-		if err == nil && !matched && stateless {
-			failed.Add(0, herePos)
-		}
-
-		return matched, err
+	// a memoizing reader remembers the ways the repeated pattern can match, which lets the search go through them
+	// with a stack of its own instead of one nested call per repetition
+	if ebnf.InitFailSet(&call.failed, r) {
+		return call.iterate()
 	}
 
-	nextFrom = func(herePos P) (bool, error) {
-		n := len(matches)
+	return call.next()
+}
 
-		if rep.max == 0 || n < rep.max {
-			matched, err := rep.pattern.MatchCont(r, func(m *ebnf.Match[T, P]) (bool, error) {
-				matches = append(matches[:n], m)
+// repeatCall is the state of one MatchCont call of a non possessive repetition.
+type repeatCall[T, P any] struct {
+	rep      *Repetition[T, P]
+	r        ebnf.Reader[T, P]
+	k        ebnf.Continuation[T, P]
+	beginPos P
 
-				// a repetition that consumed nothing would repeat forever, so it ends the repetition and counts
-				// as all the repetitions that are still needed
-				if r.Length(herePos, m.End) <= 0 {
-					return k(ebnf.NewMatch(rep, beginPos, m.End, nil, slices.Clone(matches)))
-				}
+	// matches holds the match of every repetition so far. When the repetition is complete the slice itself is handed
+	// to the continuation, which saves a copy on the way that succeeds. It is then shared, and has to be copied before
+	// backtracking changes it.
+	matches []*ebnf.Match[T, P]
+	shared  bool
 
-				return next()
-			})
-			if err != nil || matched {
-				return matched, err
+	failed ebnf.FailSet[P]
+}
+
+// add records the match of repetition n, forgetting the ones after it
+func (c *repeatCall[T, P]) add(n int, m *ebnf.Match[T, P]) {
+	if c.shared {
+		c.matches = slices.Clone(c.matches[:n:n])
+		c.shared = false
+	}
+
+	c.matches = append(c.matches[:n], m)
+}
+
+// complete offers the repetitions matched so far to the continuation
+func (c *repeatCall[T, P]) complete(n int, end P) (bool, error) {
+	c.shared = true
+
+	return c.k(ebnf.NewMatch(c.rep, c.beginPos, end, nil, c.matches[:n:n]))
+}
+
+// next is called with the reader positioned after the repetitions matched so far
+func (c *repeatCall[T, P]) next() (bool, error) {
+	herePos, err := c.r.Position()
+	if ebnf.IsStreamError(err) {
+		return false, err
+	}
+
+	// once min is reached and there is no max, the outcome only depends on the position and not on the
+	// number of repetitions, so a dead end at this position stays a dead end
+	stateless := c.rep.max == 0 && len(c.matches) >= c.rep.min
+
+	if stateless && c.failed.Has(0, herePos) {
+		return false, nil
+	}
+
+	matched, err := c.nextFrom(herePos)
+	if err == nil && !matched && stateless {
+		c.failed.Add(0, herePos)
+	}
+
+	return matched, err
+}
+
+// iterate does what next does, in the same order and with the same dead end checks, but without a nested call for
+// every repetition: a list of candidates per level takes the place of the call stack. That keeps the stack flat for
+// long repetitions (a list of a hundred thousand items), and the garbage collector does not have to walk a deep stack.
+// It needs the matches of the repeated pattern as a list, which only a memoizing reader has.
+func (c *repeatCall[T, P]) iterate() (bool, error) {
+	rep, r := c.rep, c.r
+
+	// level n is the position after n repetitions, with the matches of the next repetition still to try
+	type level struct {
+		pos   P
+		cands []*ebnf.Match[T, P]
+		next  int
+	}
+
+	var levels []level
+
+	push := func(pos P) error {
+		var cands []*ebnf.Match[T, P]
+
+		if n := len(levels); rep.max == 0 || n < rep.max {
+			if err := r.SetPosition(pos); ebnf.IsStreamError(err) {
+				return err
 			}
 
-			matches = matches[:n]
+			var err error
 
-			err = r.SetPosition(herePos)
-			if ebnf.IsStreamError(err) {
-				return false, err
+			if cands, err = ebnf.DistinctMatches(rep.pattern, r); err != nil {
+				return err
 			}
 		}
+
+		levels = append(levels, level{pos: pos, cands: cands})
+
+		return nil
+	}
+
+	if err := push(c.beginPos); err != nil {
+		return false, err
+	}
+
+	for len(levels) > 0 {
+		n := len(levels) - 1
+		lv := &levels[n]
+
+		if lv.next < len(lv.cands) {
+			m := lv.cands[lv.next]
+			lv.next++
+
+			c.add(n, m)
+
+			// a repetition that consumed nothing would repeat forever, so it ends the repetition and counts
+			// as all the repetitions that are still needed
+			if r.Length(lv.pos, m.End) <= 0 {
+				if matched, err := c.completeAt(n+1, m.End); err != nil || matched {
+					return matched, err
+				}
+
+				continue
+			}
+
+			// once min is reached and there is no max, a dead end at this position stays a dead end
+			if rep.max == 0 && n+1 >= rep.min && c.failed.Has(0, m.End) {
+				continue
+			}
+
+			if err := push(m.End); err != nil {
+				return false, err
+			}
+
+			continue
+		}
+
+		// no more repetitions to try from here: give back, offering the repetitions so far
+		pos := lv.pos
+		levels = levels[:n]
+		c.matches = c.matches[:n]
 
 		if n < rep.min {
 			ebnf.LogMismatch(r, ebnf.Pattern[T, P](rep), func() *ebnf.Mismatch[T, P] {
-				return ebnf.NewMismatch(rep, beginPos, herePos, nil, slices.Clone(matches))
+				return ebnf.NewMismatch(rep, c.beginPos, pos, nil, slices.Clone(c.matches[:n]))
 			})
-			return false, nil
+
+			continue
 		}
 
-		return k(ebnf.NewMatch(rep, beginPos, herePos, nil, slices.Clone(matches)))
+		if matched, err := c.completeAt(n, pos); err != nil || matched {
+			return matched, err
+		}
+
+		if rep.max == 0 {
+			c.failed.Add(0, pos)
+		}
 	}
 
-	return next()
+	return false, nil
+}
+
+// completeAt is complete for a search that does not leave the reader where the repetitions end
+func (c *repeatCall[T, P]) completeAt(n int, end P) (bool, error) {
+	if err := c.r.SetPosition(end); ebnf.IsStreamError(err) {
+		return false, err
+	}
+
+	return c.complete(n, end)
+}
+
+func (c *repeatCall[T, P]) nextFrom(herePos P) (bool, error) {
+	rep, r := c.rep, c.r
+	n := len(c.matches)
+
+	if rep.max == 0 || n < rep.max {
+		matched, err := rep.pattern.MatchCont(r, func(m *ebnf.Match[T, P]) (bool, error) {
+			c.add(n, m)
+
+			// a repetition that consumed nothing would repeat forever, so it ends the repetition and counts
+			// as all the repetitions that are still needed
+			if r.Length(herePos, m.End) <= 0 {
+				return c.complete(n+1, m.End)
+			}
+
+			return c.next()
+		})
+		if err != nil || matched {
+			return matched, err
+		}
+
+		c.matches = c.matches[:n]
+
+		err = r.SetPosition(herePos)
+		if ebnf.IsStreamError(err) {
+			return false, err
+		}
+	}
+
+	if n < rep.min {
+		ebnf.LogMismatch(r, ebnf.Pattern[T, P](rep), func() *ebnf.Mismatch[T, P] {
+			return ebnf.NewMismatch(rep, c.beginPos, herePos, nil, slices.Clone(c.matches[:n]))
+		})
+		return false, nil
+	}
+
+	return c.complete(n, herePos)
 }
 
 func (rep *Repetition[T, P]) matchPossessive(r ebnf.Reader[T, P], beginPos P, k ebnf.Continuation[T, P]) (bool, error) {

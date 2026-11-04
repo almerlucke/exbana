@@ -96,7 +96,7 @@ func (a *Alternation[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T
 			return false, err
 		}
 
-		ebnf.LogMismatch(r, ebnf.Pattern[T, P](a), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch[T, P](a, beginPos, endPos, nil, nil) })
+		ebnf.LogFailure(r, ebnf.Pattern[T, P](a), beginPos, endPos)
 
 		return false, nil
 	}

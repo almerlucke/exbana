@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -379,4 +380,210 @@ func formatElement[T any](v T) string {
 	}
 
 	return fmt.Sprint(v)
+}
+
+// CanMatchNothing returns true if the node can match without consuming anything. A pattern the analysis can not look
+// into is assumed to, which is the safe answer for the questions it is used for.
+func (g *Grammar[T, P]) CanMatchNothing(n *Node[T, P]) bool {
+	return g.nullable(n, g.nullableRules())
+}
+
+func (g *Grammar[T, P]) nullable(n *Node[T, P], rules map[string]bool) bool {
+	switch n.Kind {
+	case KindLiteral:
+		return len(n.Values) == 0
+	case KindClass:
+		return false
+	case KindEnd:
+		return true
+	case KindSeq:
+		for _, c := range n.Children {
+			if !g.nullable(c, rules) {
+				return false
+			}
+		}
+
+		return true
+	case KindAlt:
+		for _, c := range n.Children {
+			if g.nullable(c, rules) {
+				return true
+			}
+		}
+
+		return false
+	case KindRepeat:
+		return n.Min == 0 || g.nullable(n.Children[0], rules)
+	case KindExcept:
+		return g.nullable(n.Children[0], rules)
+	case KindRef:
+		return rules[n.ID]
+	}
+
+	return true // opaque
+}
+
+// nullableRules finds the rules that can match nothing. Rules use each other, so it repeats until nothing changes; a rule
+// only ever goes from "can not" to "can", which is why that ends.
+func (g *Grammar[T, P]) nullableRules() map[string]bool {
+	rules := map[string]bool{}
+
+	for changed := true; changed; {
+		changed = false
+
+		for _, name := range g.Order {
+			if !rules[name] && g.nullable(g.Rules[name].Children[0], rules) {
+				rules[name] = true
+				changed = true
+			}
+		}
+	}
+
+	return rules
+}
+
+// LeftCalls returns the rules that can be entered at the very position where the node starts, without anything having
+// been consumed: the rules a parser would call before it has looked at the input. A rule that can call itself this way
+// is left recursive.
+func (g *Grammar[T, P]) LeftCalls(n *Node[T, P]) []string {
+	calls := map[string]bool{}
+	g.leftCalls(n, g.nullableRules(), calls)
+
+	out := make([]string, 0, len(calls))
+	for name := range calls {
+		out = append(out, name)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+func (g *Grammar[T, P]) leftCalls(n *Node[T, P], rules map[string]bool, calls map[string]bool) {
+	switch n.Kind {
+	case KindRef:
+		calls[n.ID] = true
+	case KindSeq:
+		for _, c := range n.Children {
+			g.leftCalls(c, rules, calls)
+
+			if !g.nullable(c, rules) {
+				break
+			}
+		}
+	case KindAlt:
+		for _, c := range n.Children {
+			g.leftCalls(c, rules, calls)
+		}
+	case KindRepeat:
+		g.leftCalls(n.Children[0], rules, calls)
+	case KindExcept:
+		// the exception is looked at from the same position as the pattern
+		g.leftCalls(n.Children[0], rules, calls)
+		g.leftCalls(n.Children[1], rules, calls)
+	}
+}
+
+// SplitLeftRecursive splits the definition of a rule that is directly left recursive,
+//
+//	r = base1 | base2 | r tail1 | r tail2
+//
+// into its base branches and its tail branches. A tail is a sequence whose first part is a use of the rule itself; the
+// rest of the sequence, after that first part, is what the tail adds. If the rule has no branch that starts with itself
+// there are no tails and nothing is left recursive. It reports a rule that is left recursive in another way: through
+// another rule, or through a base branch, or with no base branch at all.
+func (g *Grammar[T, P]) SplitLeftRecursive(rule string) (bases, tails []*Node[T, P], err error) {
+	def, ok := g.Rules[rule]
+	if !ok {
+		return nil, nil, fmt.Errorf("there is no rule %q", rule)
+	}
+
+	body := def.Children[0]
+	branches := []*Node[T, P]{body}
+
+	if body.Kind == KindAlt {
+		branches = body.Children
+	}
+
+	for _, b := range branches {
+		switch {
+		case b.Kind == KindRef && b.ID == rule:
+			return nil, nil, fmt.Errorf("a branch of %s is only %s", rule, rule)
+		case b.Kind == KindSeq && len(b.Children) > 0 && b.Children[0].Kind == KindRef && b.Children[0].ID == rule:
+			if len(b.Children) == 1 {
+				return nil, nil, fmt.Errorf("a branch of %s is only %s", rule, rule)
+			}
+
+			tails = append(tails, b)
+		default:
+			bases = append(bases, b)
+		}
+	}
+
+	if len(tails) == 0 {
+		return bases, nil, nil
+	}
+
+	if len(bases) == 0 {
+		return nil, nil, fmt.Errorf("every branch of %s starts with %s, there is nothing for it to start from", rule, rule)
+	}
+
+	// a base branch must not get back to the rule at the same position, that is left recursion the loop does not cover
+	for _, b := range bases {
+		if slices.Contains(g.LeftCalls(b), rule) {
+			return nil, nil, fmt.Errorf("%s calls itself at the same position through more than a first part of a branch", rule)
+		}
+	}
+
+	return bases, tails, nil
+}
+
+// LeftCycles returns the rules that can enter themselves at the same position, directly or through other rules: a parser
+// for them would call itself without consuming anything and never stop. A rule that is left recursive in the way
+// SplitLeftRecursive understands (a directly recursive tail) is not counted, its tails come after its base branches.
+func (g *Grammar[T, P]) LeftCycles() []string {
+	rules := g.nullableRules()
+
+	edges := map[string][]string{}
+
+	for _, name := range g.Order {
+		calls := map[string]bool{}
+
+		if bases, tails, err := g.SplitLeftRecursive(name); err == nil && len(tails) > 0 {
+			for _, b := range bases {
+				g.leftCalls(b, rules, calls)
+			}
+		} else {
+			g.leftCalls(g.Rules[name].Children[0], rules, calls)
+		}
+
+		for callee := range calls {
+			edges[name] = append(edges[name], callee)
+		}
+	}
+
+	var cyclic []string
+
+	for _, name := range g.Order {
+		// can the rule get back to itself
+		seen := map[string]bool{}
+		stack := append([]string(nil), edges[name]...)
+
+		for len(stack) > 0 {
+			next := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+
+			if next == name {
+				cyclic = append(cyclic, name)
+				break
+			}
+
+			if !seen[next] {
+				seen[next] = true
+				stack = append(stack, edges[next]...)
+			}
+		}
+	}
+
+	return cyclic
 }

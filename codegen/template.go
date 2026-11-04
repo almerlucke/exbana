@@ -11,7 +11,14 @@ import (
 	"fmt"
 	"iter"
 	"math"
+{{- if .IsText}}
+	"sort"
+	"strconv"
+{{- end}}
 	"strings"
+{{- if .UTF8}}
+	"unicode/utf8"
+{{- end}}
 {{- range .Imports}}
 	{{printf "%q" .}}
 {{- end}}
@@ -24,11 +31,17 @@ const (
 {{- range $i, $r := .Rules}}
 	{{$r.Const}}{{if eq $i 0}} {{$.Rule}} = iota{{end}}
 {{- end}}
+{{- if .Recover}}
+	{{.ErrorRule}}{{if eq (len .Rules) 0}} {{.Rule}} = iota{{end}}
+{{- end}}
 )
 
 var {{.Prefix}}ruleNames = [...]string{
 {{- range .Rules}}
 	{{printf "%q" .Name}},
+{{- end}}
+{{- if .Recover}}
+	"error",
 {{- end}}
 }
 
@@ -50,13 +63,29 @@ type {{.Node}} struct {
 }
 
 // {{.Tree}} is the rules that matched, in the order they began: a node is followed by its children.
-// It stays valid until the parser that made it parses again.
+// It stays valid until the parser that made it parses again, see Clone.
 type {{.Tree}} struct {
-	Input []{{.Elem}}
+	Input {{.In}}
 	Nodes []{{.Node}}
 
 	// End is where the match ended. It is not always the end of the input: add an end pattern to the grammar to require that.
 	End int
+{{- if .IsText}}
+
+	lines []int
+{{- end}}
+}
+
+// Rule is the rule of a node.
+func (t *{{.Tree}}) Rule(node int) {{.Rule}} {
+	return t.Nodes[node].Rule
+}
+
+// Span is where a node starts and ends in the input.
+func (t *{{.Tree}}) Span(node int) (begin, end int) {
+	n := t.Nodes[node]
+
+	return int(n.Begin), int(n.End)
 }
 
 // Children are the nodes directly below a node, or the top level nodes if parent is -1.
@@ -77,8 +106,57 @@ func (t *{{.Tree}}) Children(parent int) iter.Seq[int] {
 	}
 }
 
+// Find are the nodes directly below a node, or at the top level if parent is -1, that are of the rule.
+func (t *{{.Tree}}) Find(parent int, rule {{.Rule}}) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for c := range t.Children(parent) {
+			if t.Nodes[c].Rule == rule && !yield(c) {
+				return
+			}
+		}
+	}
+}
+
+// First is the first node directly below a node, or at the top level if parent is -1, that is of the rule.
+func (t *{{.Tree}}) First(parent int, rule {{.Rule}}) (node int, ok bool) {
+	for c := range t.Find(parent, rule) {
+		return c, true
+	}
+
+	return -1, false
+}
+{{range .Rules}}
+// Find{{.Ident}} are the nodes of rule {{printf "%q" .Name}} directly below a node, or at the top level if parent is -1.
+func (t *{{$.Tree}}) Find{{.Ident}}(parent int) iter.Seq[int] {
+	return t.Find(parent, {{.Const}})
+}
+
+// First{{.Ident}} is the first node of rule {{printf "%q" .Name}} directly below a node, or at the top level if parent is -1.
+func (t *{{$.Tree}}) First{{.Ident}}(parent int) (node int, ok bool) {
+	return t.First(parent, {{.Const}})
+}
+{{end}}
+// Walk visits all the nodes in the order they began, with how deep they are (the top level is 0). If visit returns false
+// the nodes below that node are skipped.
+func (t *{{.Tree}}) Walk(visit func(node, depth int) bool) {
+	var ends []int // where the nodes we are inside of end, innermost last
+
+	for i := 0; i < len(t.Nodes); {
+		for len(ends) > 0 && ends[len(ends)-1] <= i {
+			ends = ends[:len(ends)-1]
+		}
+
+		if visit(i, len(ends)) {
+			ends = append(ends, i+int(t.Nodes[i].Size))
+			i++
+		} else {
+			i += int(t.Nodes[i].Size)
+		}
+	}
+}
+
 // Slice is the part of the input the node matched.
-func (t *{{.Tree}}) Slice(node int) []{{.Elem}} {
+func (t *{{.Tree}}) Slice(node int) {{.SliceType}} {
 	n := t.Nodes[node]
 
 	return t.Input[n.Begin:n.End]
@@ -86,7 +164,56 @@ func (t *{{.Tree}}) Slice(node int) []{{.Elem}} {
 {{if .IsText}}
 // Text is the part of the input the node matched, as a string.
 func (t *{{.Tree}}) Text(node int) string {
+{{- if .UTF8}}
+	return t.Slice(node)
+{{- else}}
 	return string(t.Slice(node))
+{{- end}}
+}
+
+// Position is the line and the column, both counted from 1, of an offset in the input. Columns count characters.
+func (t *{{.Tree}}) Position(offset int) (line, col int) {
+	offset = max(0, min(offset, len(t.Input)))
+
+	if t.lines == nil {
+		t.lines = []int{0}
+
+		for i := 0; i < len(t.Input); i++ {
+			if t.Input[i] == '\n' {
+				t.lines = append(t.lines, i+1)
+			}
+		}
+	}
+
+	line = sort.SearchInts(t.lines, offset+1)
+{{- if .UTF8}}
+	col = utf8.RuneCountInString(t.Input[t.lines[line-1]:offset]) + 1
+{{- else}}
+	col = offset - t.lines[line-1] + 1
+{{- end}}
+
+	return line, col
+}
+
+// Dump shows the tree, one node on a line, indented by how deep it is: the rule, where it starts and ends, and the start of
+// its text.
+func (t *{{.Tree}}) Dump() string {
+	var sb strings.Builder
+
+	t.Walk(func(node, depth int) bool {
+		n := t.Nodes[node]
+
+		text := []rune(t.Text(node))
+		if len(text) > 30 {
+			text = append(text[:30], '.', '.', '.')
+		}
+
+		fmt.Fprintf(&sb, "%s%s %d-%d %s\n", strings.Repeat("  ", depth), n.Rule, n.Begin, n.End, strconv.Quote(string(text)))
+
+		return true
+	})
+
+	return sb.String()
 }
 {{end}}
 // Clone returns a copy of the tree that stays valid when the parser parses again.
@@ -99,11 +226,11 @@ func (t *{{.Tree}}) Clone() *{{.Tree}} {
 
 // {{.SynErr}} says where the input went wrong and what would have been accepted there.
 type {{.SynErr}} struct {
-	// Pos is the index of the element where the parse got the farthest.
+	// Pos is the offset in the input where the parse got the farthest.
 	Pos int
 {{- if .IsText}}
 
-	// Line and Col are where Pos is in the text, counted from 1.
+	// Line and Col are where Pos is in the text, counted from 1. Columns count characters.
 	Line, Col int
 {{- end}}
 
@@ -155,7 +282,7 @@ var {{.ErrDeep}} = errors.New("{{.Package}}: rules are nested too deeply")
 // {{.Parser}} parses. Use one for one parse at a time; it keeps its buffers between parses, which makes the next
 // parse cheaper.
 type {{.Parser}} struct {
-	in    []{{.Elem}}
+	in    {{.In}}
 	nodes []{{.Node}}
 
 	// the farthest failure
@@ -166,6 +293,12 @@ type {{.Parser}} struct {
 	depth    int
 	maxDepth int
 	tooDeep  bool
+{{- if .Recover}}
+
+	// recovery
+	recovering bool
+	errors     []*{{.SynErr}}
+{{- end}}
 }
 
 // {{.NewFn}} creates a parser.
@@ -179,10 +312,15 @@ func (p *{{.Parser}}) SetMaxDepth(n int) {
 }
 
 // {{.ParseFn}} parses the input with a new parser.
-func {{.ParseFn}}(input []{{.Elem}}) (*{{.Tree}}, error) {
+func {{.ParseFn}}(input {{.In}}) (*{{.Tree}}, error) {
 	return {{.NewFn}}().Parse(input)
 }
-{{if .IsRune}}
+{{if .UTF8}}
+// ParseBytes parses UTF-8 text in a slice of bytes, which is copied once.
+func (p *{{.Parser}}) ParseBytes(input []byte) (*{{.Tree}}, error) {
+	return p.Parse(string(input))
+}
+{{else if .IsRune}}
 // ParseString parses a string, as runes.
 func (p *{{.Parser}}) ParseString(s string) (*{{.Tree}}, error) {
 	return p.Parse([]rune(s))
@@ -190,13 +328,46 @@ func (p *{{.Parser}}) ParseString(s string) (*{{.Tree}}, error) {
 {{end}}
 // Parse matches the grammar at the start of the input. The match does not have to reach the end of the input, see
 // {{.Tree}}.End. If it does not match the error is a *{{.SynErr}}.
-func (p *{{.Parser}}) Parse(input []{{.Elem}}) (*{{.Tree}}, error) {
+func (p *{{.Parser}}) Parse(input {{.In}}) (*{{.Tree}}, error) {
+{{- if .Recover}}
+	p.recovering = false
+{{- end}}
+
+	return p.parse(input)
+}
+{{if .Recover}}
+// ParseAll parses like Parse, but a syntax error in a rule that has a recovery does not stop the parse: the error is
+// noted, the parser skips to where the recovery says to go on, and carries on with the rest of the input. It returns the
+// tree and every error, in the order they were found. The tree is nil if the parse failed beyond recovery, and the last
+// error is then the one that stopped it. The nodes that were skipped are of the rule {{.ErrorRule}}.
+func (p *{{.Parser}}) ParseAll(input {{.In}}) (*{{.Tree}}, []error) {
+	p.recovering = true
+	defer func() { p.recovering = false }()
+
+	tree, err := p.parse(input)
+
+	var errs []error
+	for _, e := range p.errors {
+		errs = append(errs, e)
+	}
+
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	return tree, errs
+}
+{{end}}
+func (p *{{.Parser}}) parse(input {{.In}}) (*{{.Tree}}, error) {
 	if len(input) > math.MaxInt32 {
 		return nil, errors.New("{{.Package}}: input too long")
 	}
 
 	p.in, p.nodes, p.expected = input, p.nodes[:0], p.expected[:0]
 	p.errPos, p.silent, p.depth, p.tooDeep = -1, 0, 0, false
+{{- if .Recover}}
+	p.errors = p.errors[:0]
+{{- end}}
 
 	end := p.{{.Root}}(0)
 	if end < 0 {
@@ -209,7 +380,16 @@ func (p *{{.Parser}}) Parse(input []{{.Elem}}) (*{{.Tree}}, error) {
 
 	return &{{.Tree}}{Input: input, Nodes: p.nodes, End: end}, nil
 }
+{{if .UTF8}}
+// rune is the character at pos and how many bytes it takes. Bytes that are not UTF-8 are one character each, U+FFFD.
+func (p *{{.Parser}}) rune(pos int) (rune, int) {
+	if c := p.in[pos]; c < utf8.RuneSelf {
+		return rune(c), 1
+	}
 
+	return utf8.DecodeRuneInString(p.in[pos:])
+}
+{{end}}
 // fail notes that something named desc was expected at pos and did not match; only the farthest failure is kept.
 func (p *{{.Parser}}) fail(pos int, desc string) {
 	if p.silent > 0 {
@@ -237,7 +417,11 @@ func (p *{{.Parser}}) syntaxError() *{{.SynErr}} {
 
 	e := &{{.SynErr}}{Pos: pos, Expected: append([]string(nil), p.expected...), AtEnd: pos >= len(p.in)}
 	if !e.AtEnd {
+{{- if .UTF8}}
+		e.Found, _ = p.rune(pos)
+{{- else}}
 		e.Found = p.in[pos]
+{{- end}}
 	}
 {{- if .IsText}}
 

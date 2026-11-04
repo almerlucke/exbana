@@ -24,10 +24,18 @@ import (
 type codegenCase struct {
 	G       int
 	Grammar string
-	In      string
+	In      []byte // may be invalid UTF-8
 	Ok      bool
 	End     int
 	Err     string // the message of the farthest failure, empty if the grammar logged none
+
+	// what ParseAll must do for the grammars that recover: skip to the next c after the farthest failure
+	HasRecovery  bool
+	RecNoTree    bool
+	RecEnd       int
+	RecNodes     int
+	RecErrs      []string
+	RecErrsKnown bool
 }
 
 func TestGeneratedParsersAgreeWithTheirGrammars(t *testing.T) {
@@ -40,8 +48,9 @@ func TestGeneratedParsersAgreeWithTheirGrammars(t *testing.T) {
 	files := map[string]string{}
 
 	var (
-		cases    []codegenCase
-		registry strings.Builder
+		cases      []codegenCase
+		registry   strings.Builder
+		recoverers strings.Builder
 	)
 
 	matched, failed := 0, 0
@@ -67,21 +76,55 @@ func TestGeneratedParsersAgreeWithTheirGrammars(t *testing.T) {
 		var printedGrammar bytes.Buffer
 		_ = start.Print(&printedGrammar)
 
-		name := fmt.Sprintf("G%d", i)
+		// the same parser reading a slice of runes and reading UTF-8 text
+		for _, utf8 := range []bool{false, true} {
+			name := fmt.Sprintf("G%d", i)
+			parse := "New%sParser().ParseString(s)"
+			end := "tree.End"
 
-		src, err := codegen.Generate[rune, runes.Pos](start, codegen.Config[rune, runes.Pos]{Package: "probe", Name: name})
-		if err != nil {
-			t.Fatalf("grammar %s: %v", printedGrammar.String(), err)
+			if utf8 {
+				name = fmt.Sprintf("U%d", i)
+				parse = "New%sParser().Parse(s)"
+				end = "utf8.RuneCountInString(s[:tree.End])" // the grammar counts characters, the parser bytes
+			}
+
+			src, err := codegen.Generate[rune, runes.Pos](start, codegen.Config[rune, runes.Pos]{Package: "probe", Name: name, UTF8: utf8})
+			if err != nil {
+				t.Fatalf("grammar %s: %v", printedGrammar.String(), err)
+			}
+
+			files[strings.ToLower(name)+".go"] = string(src)
+
+			fmt.Fprintf(&registry, "\t{%q, func(s string) (bool, int, string, bool) {\n\t\ttree, err := "+parse+"\n\t\tif err != nil {\n\t\t\treturn false, 0, err.Error(), false\n\t\t}\n\t\tn := tree.Nodes\n\t\treturn true, "+end+", \"\", len(n) == 1 && n[0].Begin == 0 && int(n[0].End) == tree.End && n[0].Size == 1\n\t}},\n", name, name)
 		}
 
-		files[strings.ToLower(name)+".go"] = string(src)
+		// the first hundred also get a parser that recovers from an error in the grammar: it skips to the next c
+		if i < 100 {
+			rname := fmt.Sprintf("R%d", i)
 
-		fmt.Fprintf(&registry, "\t{%q, func(s string) (bool, int, string, bool) {\n\t\ttree, err := New%sParser().ParseString(s)\n\t\tif err != nil {\n\t\t\treturn false, 0, err.Error(), false\n\t\t}\n\t\tn := tree.Nodes\n\t\treturn true, tree.End, \"\", len(n) == 1 && n[0].Begin == 0 && int(n[0].End) == tree.End && n[0].Size == 1\n\t}},\n", name, name)
+			rsrc, err := codegen.Generate[rune, runes.Pos](start, codegen.Config[rune, runes.Pos]{
+				Package: "probe", Name: rname,
+				Recover: map[string]codegen.Recovery[rune, runes.Pos]{"start": {Until: leafNode('c').p, Consume: true}},
+			})
+			if err != nil {
+				t.Fatalf("grammar %s: %v", printedGrammar.String(), err)
+			}
+
+			files[strings.ToLower(rname)+".go"] = string(rsrc)
+
+			fmt.Fprintf(&recoverers, "\t%d: func(s string) (bool, int, int, []string) {\n\t\ttree, errs := New%sParser().ParseAll([]rune(s))\n\t\tvar msgs []string\n\t\tfor _, e := range errs {\n\t\t\tmsgs = append(msgs, e.Error())\n\t\t}\n\t\tif tree == nil {\n\t\t\treturn true, 0, 0, msgs\n\t\t}\n\t\treturn false, tree.End, len(tree.Nodes), msgs\n\t},\n", i, rname)
+		}
 
 		for range 14 {
-			in := make([]rune, rng.Intn(9))
-			for j := range in {
-				in[j] = rune('a' + rng.Intn(3))
+			// mostly the characters the grammars know, with some that take several bytes, a byte that is not text, and a line break
+			var in []byte
+			for range rng.Intn(9) {
+				switch r := rng.Intn(14); {
+				case r < 9:
+					in = append(in, byte('a'+r%3))
+				default:
+					in = append(in, []string{"é", "€", "😀", "\xff", "\n"}[r-9]...)
+				}
 			}
 
 			rd := newRunes(string(in))
@@ -92,7 +135,7 @@ func TestGeneratedParsersAgreeWithTheirGrammars(t *testing.T) {
 				t.Fatal(perr)
 			}
 
-			c := codegenCase{G: i, Grammar: printedGrammar.String(), In: string(in), Ok: ok}
+			c := codegenCase{G: i, Grammar: printedGrammar.String(), In: in, Ok: ok}
 
 			if ok {
 				c.End = m.End.Index
@@ -102,6 +145,32 @@ func TestGeneratedParsersAgreeWithTheirGrammars(t *testing.T) {
 					c.Err = e.Error()
 				}
 				failed++
+			}
+
+			if i < 100 {
+				c.HasRecovery = true
+				chars := []rune(string(in))
+
+				switch last := log.Last(); {
+				case ok:
+					c.RecEnd, c.RecNodes = m.End.Index, 1
+				case last == nil || last.Pos.Index <= 0:
+					// nothing matched before the failure, so the rule does not recover and the parse fails
+					c.RecNoTree = true
+					c.RecErrs, c.RecErrsKnown = []string{c.Err}, c.Err != ""
+				default:
+					// the error is the one the grammar reports, and the rule skips to the next c after it and takes it
+					end := len(chars)
+					for j := last.Pos.Index; j < len(chars); j++ {
+						if chars[j] == 'c' {
+							end = j + 1
+							break
+						}
+					}
+
+					c.RecEnd, c.RecNodes = end, 2
+					c.RecErrs, c.RecErrsKnown = []string{c.Err}, true
+				}
 			}
 
 			cases = append(cases, c)
@@ -114,7 +183,7 @@ func TestGeneratedParsersAgreeWithTheirGrammars(t *testing.T) {
 
 	data, _ := json.Marshal(cases)
 	files["cases.json"] = string(data)
-	files["probe_test.go"] = strings.Replace(codegenHarness, "/*REGISTRY*/", registry.String(), 1)
+	files["probe_test.go"] = strings.Replace(strings.Replace(codegenHarness, "/*REGISTRY*/", registry.String(), 1), "/*RECOVERERS*/", recoverers.String(), 1)
 
 	out := gentest.Run(t, files)
 	t.Logf("%d parsers, %d cases (%d matched, %d failed): %s", len(roots), len(cases), matched, failed, strings.TrimSpace(out))
@@ -145,15 +214,23 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"unicode/utf8"
 )
 
 type testCase struct {
 	G       int
 	Grammar string
-	In      string
+	In      []byte
 	Ok      bool
 	End     int
 	Err     string
+
+	HasRecovery  bool
+	RecNoTree    bool
+	RecEnd       int
+	RecNodes     int
+	RecErrs      []string
+	RecErrsKnown bool
 }
 
 var parsers = []struct {
@@ -161,6 +238,26 @@ var parsers = []struct {
 	parse func(string) (ok bool, end int, err string, shapeOk bool)
 }{
 /*REGISTRY*/}
+
+// recoverers: no tree, where the match ends, how many nodes, the error messages
+var recoverers = map[int]func(string) (bool, int, int, []string){
+/*RECOVERERS*/}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+var _ = utf8.RuneError
 
 func TestAgainstTheGrammars(t *testing.T) {
 	data, err := os.ReadFile("cases.json")
@@ -176,18 +273,40 @@ func TestAgainstTheGrammars(t *testing.T) {
 	bad := 0
 
 	for _, c := range cases {
-		ok, end, msg, shapeOk := parsers[c.G].parse(c.In)
+		// both ways of reading the input
+		for _, pr := range parsers[2*c.G : 2*c.G+2] {
+			ok, end, msg, shapeOk := pr.parse(string(c.In))
 
-		switch {
-		case ok != c.Ok:
-			t.Errorf("%s %s on %q: matched=%v, the grammar says %v", parsers[c.G].name, c.Grammar, c.In, ok, c.Ok)
-			bad++
-		case ok && (end != c.End || !shapeOk):
-			t.Errorf("%s %s on %q: ends at %d (tree ok %v), the grammar says %d", parsers[c.G].name, c.Grammar, c.In, end, shapeOk, c.End)
-			bad++
-		case !ok && c.Err != "" && msg != c.Err:
-			t.Errorf("%s %s on %q:\n  generated %q\n  grammar   %q", parsers[c.G].name, c.Grammar, c.In, msg, c.Err)
-			bad++
+			switch {
+			case ok != c.Ok:
+				t.Errorf("%s %s on %q: matched=%v, the grammar says %v", pr.name, c.Grammar, c.In, ok, c.Ok)
+				bad++
+			case ok && (end != c.End || !shapeOk):
+				t.Errorf("%s %s on %q: ends at %d (tree ok %v), the grammar says %d", pr.name, c.Grammar, c.In, end, shapeOk, c.End)
+				bad++
+			case !ok && c.Err != "" && msg != c.Err:
+				t.Errorf("%s %s on %q:\n  generated %q\n  grammar   %q", pr.name, c.Grammar, c.In, msg, c.Err)
+				bad++
+			}
+		}
+
+		if c.HasRecovery {
+			noTree, end, nodes, msgs := recoverers[c.G](string(c.In))
+
+			switch {
+			case noTree != c.RecNoTree:
+				t.Errorf("R%d %s on %q: no tree=%v, expected %v (errors %v)", c.G, c.Grammar, c.In, noTree, c.RecNoTree, msgs)
+				bad++
+			case !noTree && (end != c.RecEnd || nodes != c.RecNodes):
+				t.Errorf("R%d %s on %q: ends at %d with %d nodes, expected %d and %d", c.G, c.Grammar, c.In, end, nodes, c.RecEnd, c.RecNodes)
+				bad++
+			case c.RecErrsKnown && !equalStrings(msgs, c.RecErrs):
+				t.Errorf("R%d %s on %q: errors %q, expected %q", c.G, c.Grammar, c.In, msgs, c.RecErrs)
+				bad++
+			case !c.RecErrsKnown && len(msgs) != len(c.RecErrs):
+				t.Errorf("R%d %s on %q: %d errors, expected %d", c.G, c.Grammar, c.In, len(msgs), len(c.RecErrs))
+				bad++
+			}
 		}
 
 		if bad >= 10 {

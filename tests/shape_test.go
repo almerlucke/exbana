@@ -275,3 +275,146 @@ func TestAnalyzeAlsoWorksForOtherElementTypes(t *testing.T) {
 		t.Errorf("grammar = %q", g.String())
 	}
 }
+
+func analyzed(t *testing.T, p pat) *ebnf.Grammar[rune, runes.Pos] {
+	t.Helper()
+
+	g, err := ebnf.Analyze[rune, runes.Pos](p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return g
+}
+
+func TestCanMatchNothing(t *testing.T) {
+	a := vector.Text[runes.Pos]("a")
+	digit := entity.Between[rune, runes.Pos]('0', '9')
+
+	maybe := rule.New[rune, runes.Pos]("maybe", repetition.Optional[rune, runes.Pos](a))
+	needs := rule.New[rune, runes.Pos]("needs", a)
+
+	for name, c := range map[string]struct {
+		p    pat
+		want bool
+	}{
+		"literal":             {a, false},
+		"empty literal":       {vector.Text[runes.Pos](""), true},
+		"class":               {digit, false},
+		"end":                 {end.New[rune, runes.Pos](), true},
+		"sequence":            {concatenation.New[rune, runes.Pos](a, digit), false},
+		"sequence of nothing": {concatenation.New[rune, runes.Pos](maybe, repetition.Any[rune, runes.Pos](a)), true},
+		"alternation":         {alternation.New[rune, runes.Pos](a, maybe), true},
+		"alternation of some": {alternation.New[rune, runes.Pos](a, digit), false},
+		"star":                {repetition.Any[rune, runes.Pos](a), true},
+		"plus":                {repetition.OneOrMore[rune, runes.Pos](a), false},
+		"plus of nothing":     {repetition.OneOrMore[rune, runes.Pos](maybe), true},
+		"except":              {except.New[rune, runes.Pos](a, digit), false},
+		"rule":                {needs, false},
+		"rule of nothing":     {maybe, true},
+		"opaque":              {anyOne{}, true},
+	} {
+		g := analyzed(t, c.p)
+		root := g.Root
+
+		if root.Kind == ebnf.KindRef {
+			root = g.Rules[root.ID].Children[0]
+		}
+
+		if got := g.CanMatchNothing(root); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestLeftCallsAndCycles(t *testing.T) {
+	x, y := vector.Text[runes.Pos]("x"), vector.Text[runes.Pos]("y")
+
+	// a calls b before it has consumed anything, b calls c only after an x
+	a, b, c := rule.Declare[rune, runes.Pos]("a"), rule.Declare[rune, runes.Pos]("b"), rule.Declare[rune, runes.Pos]("c")
+	a.Define(concatenation.New[rune, runes.Pos](repetition.Optional[rune, runes.Pos](x), b, y))
+	b.Define(concatenation.New[rune, runes.Pos](x, c))
+	c.Define(y)
+
+	g := analyzed(t, a)
+
+	if got := g.LeftCalls(g.Rules["a"].Children[0]); !slices.Equal(got, []string{"b"}) {
+		t.Errorf("a calls %v at its start", got)
+	}
+	if got := g.LeftCalls(g.Rules["b"].Children[0]); len(got) != 0 {
+		t.Errorf("b calls %v at its start, but only after an x", got)
+	}
+	if got := g.LeftCycles(); len(got) != 0 {
+		t.Errorf("cycles in a grammar without recursion: %v", got)
+	}
+
+	// indirect left recursion: p = q "x" | "y", q = p "z"
+	p, q := rule.Declare[rune, runes.Pos]("p"), rule.Declare[rune, runes.Pos]("q")
+	p.Define(alternation.New[rune, runes.Pos](concatenation.New[rune, runes.Pos](q, x), y))
+	q.Define(concatenation.New[rune, runes.Pos](p, vector.Text[runes.Pos]("z")))
+
+	if got := analyzed(t, p).LeftCycles(); !slices.Equal(got, []string{"p", "q"}) {
+		t.Errorf("cycles = %v, want p and q", got)
+	}
+
+	// recursion after something was consumed is not left recursion
+	r := rule.Declare[rune, runes.Pos]("r")
+	r.Define(alternation.New[rune, runes.Pos](concatenation.New[rune, runes.Pos](x, r), y))
+
+	if got := analyzed(t, r).LeftCycles(); len(got) != 0 {
+		t.Errorf("right recursion reported as a cycle: %v", got)
+	}
+
+	// a directly recursive tail is the shape the generator turns into a loop, it is not a cycle
+	e := rule.Declare[rune, runes.Pos]("e")
+	e.Define(alternation.New[rune, runes.Pos](concatenation.New[rune, runes.Pos](e, x), y))
+
+	if got := analyzed(t, e).LeftCycles(); len(got) != 0 {
+		t.Errorf("a directly left recursive rule is a cycle: %v", got)
+	}
+}
+
+func TestSplitLeftRecursive(t *testing.T) {
+	x, y, z := vector.Text[runes.Pos]("x"), vector.Text[runes.Pos]("y"), vector.Text[runes.Pos]("z")
+
+	build := func(define func(self *rule.Rule[rune, runes.Pos]) pat) *ebnf.Grammar[rune, runes.Pos] {
+		self := rule.Declare[rune, runes.Pos]("r")
+		self.Define(define(self))
+
+		return analyzed(t, self)
+	}
+
+	// two bases and two tails
+	g := build(func(r *rule.Rule[rune, runes.Pos]) pat {
+		return alternation.New[rune, runes.Pos](x, concatenation.New[rune, runes.Pos](r, y), z, concatenation.New[rune, runes.Pos](r, z, x))
+	})
+
+	bases, tails, err := g.SplitLeftRecursive("r")
+	if err != nil || len(bases) != 2 || len(tails) != 2 || tails[1].Children[0].ID != "r" || len(tails[1].Children) != 3 {
+		t.Errorf("bases %d tails %d err %v", len(bases), len(tails), err)
+	}
+
+	// no tails: nothing is left recursive
+	g = build(func(r *rule.Rule[rune, runes.Pos]) pat {
+		return alternation.New[rune, runes.Pos](x, concatenation.New[rune, runes.Pos](y, r))
+	})
+	if bases, tails, err := g.SplitLeftRecursive("r"); err != nil || len(bases) != 2 || len(tails) != 0 {
+		t.Errorf("right recursion: bases %d tails %d err %v", len(bases), len(tails), err)
+	}
+
+	for name, define := range map[string]func(r *rule.Rule[rune, runes.Pos]) pat{
+		"only itself": func(r *rule.Rule[rune, runes.Pos]) pat { return alternation.New[rune, runes.Pos](x, r) },
+		"no base":     func(r *rule.Rule[rune, runes.Pos]) pat { return concatenation.New[rune, runes.Pos](r, x) },
+		"through a base": func(r *rule.Rule[rune, runes.Pos]) pat {
+			return alternation.New[rune, runes.Pos](concatenation.New[rune, runes.Pos](concatenation.New[rune, runes.Pos](r, y), z), concatenation.New[rune, runes.Pos](r, x), x)
+		},
+	} {
+		if _, _, err := build(define).SplitLeftRecursive("r"); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+
+	if _, _, err := build(func(r *rule.Rule[rune, runes.Pos]) pat { return x }).SplitLeftRecursive("nothing"); err == nil {
+		t.Error("an unknown rule is not an error")
+	}
+}

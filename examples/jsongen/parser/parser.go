@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // JSONRule names a rule of the grammar. The nodes of a JSONTree are rules.
@@ -51,13 +54,27 @@ type JSONNode struct {
 }
 
 // JSONTree is the rules that matched, in the order they began: a node is followed by its children.
-// It stays valid until the parser that made it parses again.
+// It stays valid until the parser that made it parses again, see Clone.
 type JSONTree struct {
-	Input []rune
+	Input string
 	Nodes []JSONNode
 
 	// End is where the match ended. It is not always the end of the input: add an end pattern to the grammar to require that.
 	End int
+
+	lines []int
+}
+
+// Rule is the rule of a node.
+func (t *JSONTree) Rule(node int) JSONRule {
+	return t.Nodes[node].Rule
+}
+
+// Span is where a node starts and ends in the input.
+func (t *JSONTree) Span(node int) (begin, end int) {
+	n := t.Nodes[node]
+
+	return int(n.Begin), int(n.End)
 }
 
 // Children are the nodes directly below a node, or the top level nodes if parent is -1.
@@ -78,8 +95,117 @@ func (t *JSONTree) Children(parent int) iter.Seq[int] {
 	}
 }
 
+// Find are the nodes directly below a node, or at the top level if parent is -1, that are of the rule.
+func (t *JSONTree) Find(parent int, rule JSONRule) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for c := range t.Children(parent) {
+			if t.Nodes[c].Rule == rule && !yield(c) {
+				return
+			}
+		}
+	}
+}
+
+// First is the first node directly below a node, or at the top level if parent is -1, that is of the rule.
+func (t *JSONTree) First(parent int, rule JSONRule) (node int, ok bool) {
+	for c := range t.Find(parent, rule) {
+		return c, true
+	}
+
+	return -1, false
+}
+
+// FindValue are the nodes of rule "value" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindValue(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleValue)
+}
+
+// FirstValue is the first node of rule "value" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstValue(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleValue)
+}
+
+// FindString are the nodes of rule "string" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindString(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleString)
+}
+
+// FirstString is the first node of rule "string" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstString(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleString)
+}
+
+// FindNumber are the nodes of rule "number" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindNumber(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleNumber)
+}
+
+// FirstNumber is the first node of rule "number" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstNumber(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleNumber)
+}
+
+// FindArray are the nodes of rule "array" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindArray(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleArray)
+}
+
+// FirstArray is the first node of rule "array" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstArray(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleArray)
+}
+
+// FindObject are the nodes of rule "object" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindObject(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleObject)
+}
+
+// FirstObject is the first node of rule "object" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstObject(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleObject)
+}
+
+// FindMember are the nodes of rule "member" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindMember(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleMember)
+}
+
+// FirstMember is the first node of rule "member" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstMember(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleMember)
+}
+
+// FindLiteral are the nodes of rule "literal" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FindLiteral(parent int) iter.Seq[int] {
+	return t.Find(parent, JSONRuleLiteral)
+}
+
+// FirstLiteral is the first node of rule "literal" directly below a node, or at the top level if parent is -1.
+func (t *JSONTree) FirstLiteral(parent int) (node int, ok bool) {
+	return t.First(parent, JSONRuleLiteral)
+}
+
+// Walk visits all the nodes in the order they began, with how deep they are (the top level is 0). If visit returns false
+// the nodes below that node are skipped.
+func (t *JSONTree) Walk(visit func(node, depth int) bool) {
+	var ends []int // where the nodes we are inside of end, innermost last
+
+	for i := 0; i < len(t.Nodes); {
+		for len(ends) > 0 && ends[len(ends)-1] <= i {
+			ends = ends[:len(ends)-1]
+		}
+
+		if visit(i, len(ends)) {
+			ends = append(ends, i+int(t.Nodes[i].Size))
+			i++
+		} else {
+			i += int(t.Nodes[i].Size)
+		}
+	}
+}
+
 // Slice is the part of the input the node matched.
-func (t *JSONTree) Slice(node int) []rune {
+func (t *JSONTree) Slice(node int) string {
 	n := t.Nodes[node]
 
 	return t.Input[n.Begin:n.End]
@@ -87,7 +213,48 @@ func (t *JSONTree) Slice(node int) []rune {
 
 // Text is the part of the input the node matched, as a string.
 func (t *JSONTree) Text(node int) string {
-	return string(t.Slice(node))
+	return t.Slice(node)
+}
+
+// Position is the line and the column, both counted from 1, of an offset in the input. Columns count characters.
+func (t *JSONTree) Position(offset int) (line, col int) {
+	offset = max(0, min(offset, len(t.Input)))
+
+	if t.lines == nil {
+		t.lines = []int{0}
+
+		for i := 0; i < len(t.Input); i++ {
+			if t.Input[i] == '\n' {
+				t.lines = append(t.lines, i+1)
+			}
+		}
+	}
+
+	line = sort.SearchInts(t.lines, offset+1)
+	col = utf8.RuneCountInString(t.Input[t.lines[line-1]:offset]) + 1
+
+	return line, col
+}
+
+// Dump shows the tree, one node on a line, indented by how deep it is: the rule, where it starts and ends, and the start of
+// its text.
+func (t *JSONTree) Dump() string {
+	var sb strings.Builder
+
+	t.Walk(func(node, depth int) bool {
+		n := t.Nodes[node]
+
+		text := []rune(t.Text(node))
+		if len(text) > 30 {
+			text = append(text[:30], '.', '.', '.')
+		}
+
+		fmt.Fprintf(&sb, "%s%s %d-%d %s\n", strings.Repeat("  ", depth), n.Rule, n.Begin, n.End, strconv.Quote(string(text)))
+
+		return true
+	})
+
+	return sb.String()
 }
 
 // Clone returns a copy of the tree that stays valid when the parser parses again.
@@ -100,10 +267,10 @@ func (t *JSONTree) Clone() *JSONTree {
 
 // JSONSyntaxError says where the input went wrong and what would have been accepted there.
 type JSONSyntaxError struct {
-	// Pos is the index of the element where the parse got the farthest.
+	// Pos is the offset in the input where the parse got the farthest.
 	Pos int
 
-	// Line and Col are where Pos is in the text, counted from 1.
+	// Line and Col are where Pos is in the text, counted from 1. Columns count characters.
 	Line, Col int
 
 	// Expected are the names of what would have matched at Pos. Leaves without a name are left out.
@@ -144,7 +311,7 @@ var JSONErrTooDeep = errors.New("parser: rules are nested too deeply")
 // JSONParser parses. Use one for one parse at a time; it keeps its buffers between parses, which makes the next
 // parse cheaper.
 type JSONParser struct {
-	in    []rune
+	in    string
 	nodes []JSONNode
 
 	// the farthest failure
@@ -168,18 +335,23 @@ func (p *JSONParser) SetMaxDepth(n int) {
 }
 
 // JSONParse parses the input with a new parser.
-func JSONParse(input []rune) (*JSONTree, error) {
+func JSONParse(input string) (*JSONTree, error) {
 	return NewJSONParser().Parse(input)
 }
 
-// ParseString parses a string, as runes.
-func (p *JSONParser) ParseString(s string) (*JSONTree, error) {
-	return p.Parse([]rune(s))
+// ParseBytes parses UTF-8 text in a slice of bytes, which is copied once.
+func (p *JSONParser) ParseBytes(input []byte) (*JSONTree, error) {
+	return p.Parse(string(input))
 }
 
 // Parse matches the grammar at the start of the input. The match does not have to reach the end of the input, see
 // JSONTree.End. If it does not match the error is a *JSONSyntaxError.
-func (p *JSONParser) Parse(input []rune) (*JSONTree, error) {
+func (p *JSONParser) Parse(input string) (*JSONTree, error) {
+
+	return p.parse(input)
+}
+
+func (p *JSONParser) parse(input string) (*JSONTree, error) {
 	if len(input) > math.MaxInt32 {
 		return nil, errors.New("parser: input too long")
 	}
@@ -187,7 +359,7 @@ func (p *JSONParser) Parse(input []rune) (*JSONTree, error) {
 	p.in, p.nodes, p.expected = input, p.nodes[:0], p.expected[:0]
 	p.errPos, p.silent, p.depth, p.tooDeep = -1, 0, 0, false
 
-	end := p.m84(0)
+	end := p.m87(0)
 	if end < 0 {
 		if p.tooDeep {
 			return nil, JSONErrTooDeep
@@ -197,6 +369,15 @@ func (p *JSONParser) Parse(input []rune) (*JSONTree, error) {
 	}
 
 	return &JSONTree{Input: input, Nodes: p.nodes, End: end}, nil
+}
+
+// rune is the character at pos and how many bytes it takes. Bytes that are not UTF-8 are one character each, U+FFFD.
+func (p *JSONParser) rune(pos int) (rune, int) {
+	if c := p.in[pos]; c < utf8.RuneSelf {
+		return rune(c), 1
+	}
+
+	return utf8.DecodeRuneInString(p.in[pos:])
 }
 
 // fail notes that something named desc was expected at pos and did not match; only the farthest failure is kept.
@@ -226,7 +407,7 @@ func (p *JSONParser) syntaxError() *JSONSyntaxError {
 
 	e := &JSONSyntaxError{Pos: pos, Expected: append([]string(nil), p.expected...), AtEnd: pos >= len(p.in)}
 	if !e.AtEnd {
-		e.Found = p.in[pos]
+		e.Found, _ = p.rune(pos)
 	}
 
 	e.Line, e.Col = 1, 1
@@ -286,90 +467,79 @@ func (p *JSONParser) ruleValue(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m3(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '"' {
+func (p *JSONParser) m2(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "\"" {
 		return pos + 1
 	}
 	p.fail(pos, "\"\\\"\"")
 	return -1
 }
 
-func (p *JSONParser) m6(pos int) int {
+func (p *JSONParser) m4(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if !(x == '"' || x == '\\') {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m8(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '\\' {
+func (p *JSONParser) m5(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "\\" {
 		return pos + 1
 	}
 	p.fail(pos, "\"\\\\\"")
 	return -1
 }
 
-func (p *JSONParser) m10(pos int) int {
+func (p *JSONParser) m6(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == '"' || x == '\\' || x == '/' || x == 'b' || x == 'f' || x == 'n' || x == 'r' || x == 't' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m12(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 'u' {
+func (p *JSONParser) m7(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "u" {
 		return pos + 1
 	}
 	p.fail(pos, "\"u\"")
 	return -1
 }
 
-func (p *JSONParser) m13(pos int) int {
+func (p *JSONParser) m8(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x >= '0' && x <= '9' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m14(pos int) int {
+func (p *JSONParser) m9(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x >= '0' && x <= '9' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m15(pos int) int {
+func (p *JSONParser) m10(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x >= '0' && x <= '9' {
-			return pos + 1
-		}
-	}
-	p.fail(pos, "")
-	return -1
-}
-
-func (p *JSONParser) m16(pos int) int {
-	if pos < len(p.in) {
-		x := p.in[pos]
-		if x >= '0' && x <= '9' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
@@ -377,104 +547,78 @@ func (p *JSONParser) m16(pos int) int {
 }
 
 func (p *JSONParser) m11(pos int) int {
-	q := pos
-	if q = p.m12(q); q < 0 {
-		return -1
-	}
-	if q = p.m13(q); q < 0 {
-		return -1
-	}
-	if q = p.m14(q); q < 0 {
-		return -1
-	}
-	if q = p.m15(q); q < 0 {
-		return -1
-	}
-	if q = p.m16(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *JSONParser) m9(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m10(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m11(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *JSONParser) m7(pos int) int {
-	q := pos
-	if q = p.m8(q); q < 0 {
-		return -1
-	}
-	if q = p.m9(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *JSONParser) m5(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m6(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m7(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *JSONParser) m4(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m5(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *JSONParser) m17(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '"' {
-		return pos + 1
-	}
-	p.fail(pos, "\"\\\"\"")
-	return -1
-}
-
-func (p *JSONParser) m19(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
-		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+		x, w := p.rune(pos)
+		if x >= '0' && x <= '9' {
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m18(pos int) int {
+func (p *JSONParser) m12(pos int) int {
+	q := pos
+	if q = p.m7(q); q < 0 {
+		return -1
+	}
+	if q = p.m8(q); q < 0 {
+		return -1
+	}
+	if q = p.m9(q); q < 0 {
+		return -1
+	}
+	if q = p.m10(q); q < 0 {
+		return -1
+	}
+	if q = p.m11(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *JSONParser) m13(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m6(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m12(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *JSONParser) m14(pos int) int {
+	q := pos
+	if q = p.m5(q); q < 0 {
+		return -1
+	}
+	if q = p.m13(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *JSONParser) m15(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m4(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m14(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *JSONParser) m3(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m19(q)
+		r := p.m15(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -488,18 +632,55 @@ func (p *JSONParser) m18(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m2(pos int) int {
+func (p *JSONParser) m16(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "\"" {
+		return pos + 1
+	}
+	p.fail(pos, "\"\\\"\"")
+	return -1
+}
+
+func (p *JSONParser) m18(pos int) int {
+	if pos < len(p.in) {
+		x, w := p.rune(pos)
+		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
+			return pos + w
+		}
+	}
+	p.fail(pos, "")
+	return -1
+}
+
+func (p *JSONParser) m17(pos int) int {
+	q, n := pos, 0
+	for {
+		mark := len(p.nodes)
+		r := p.m18(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *JSONParser) m19(pos int) int {
 	q := pos
+	if q = p.m2(q); q < 0 {
+		return -1
+	}
 	if q = p.m3(q); q < 0 {
 		return -1
 	}
-	if q = p.m4(q); q < 0 {
+	if q = p.m16(q); q < 0 {
 		return -1
 	}
 	if q = p.m17(q); q < 0 {
-		return -1
-	}
-	if q = p.m18(q); q < 0 {
 		return -1
 	}
 	return q
@@ -513,7 +694,7 @@ func (p *JSONParser) ruleString(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, JSONNode{Rule: JSONRuleString, Begin: int32(pos)})
-	end := p.m2(pos)
+	end := p.m19(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -524,19 +705,19 @@ func (p *JSONParser) ruleString(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m22(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '-' {
+func (p *JSONParser) m21(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "-" {
 		return pos + 1
 	}
 	p.fail(pos, "\"-\"")
 	return -1
 }
 
-func (p *JSONParser) m21(pos int) int {
+func (p *JSONParser) m20(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m22(q)
+		r := p.m21(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -550,41 +731,41 @@ func (p *JSONParser) m21(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m24(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '0' {
+func (p *JSONParser) m22(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "0" {
 		return pos + 1
 	}
 	p.fail(pos, "\"0\"")
 	return -1
 }
 
-func (p *JSONParser) m26(pos int) int {
+func (p *JSONParser) m23(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x >= '1' && x <= '9' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m28(pos int) int {
+func (p *JSONParser) m25(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x >= '0' && x <= '9' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m27(pos int) int {
+func (p *JSONParser) m24(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m28(q)
+		r := p.m25(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -598,54 +779,54 @@ func (p *JSONParser) m27(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m25(pos int) int {
+func (p *JSONParser) m26(pos int) int {
 	q := pos
-	if q = p.m26(q); q < 0 {
+	if q = p.m23(q); q < 0 {
 		return -1
 	}
-	if q = p.m27(q); q < 0 {
+	if q = p.m24(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *JSONParser) m23(pos int) int {
+func (p *JSONParser) m27(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m24(pos); q >= 0 {
+	if q := p.m22(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m25(pos); q >= 0 {
+	if q := p.m26(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *JSONParser) m31(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '.' {
+func (p *JSONParser) m29(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "." {
 		return pos + 1
 	}
 	p.fail(pos, "\".\"")
 	return -1
 }
 
-func (p *JSONParser) m33(pos int) int {
+func (p *JSONParser) m31(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x >= '0' && x <= '9' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m32(pos int) int {
+func (p *JSONParser) m30(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m33(q)
+		r := p.m31(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -662,22 +843,22 @@ func (p *JSONParser) m32(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m30(pos int) int {
+func (p *JSONParser) m32(pos int) int {
 	q := pos
-	if q = p.m31(q); q < 0 {
+	if q = p.m29(q); q < 0 {
 		return -1
 	}
-	if q = p.m32(q); q < 0 {
+	if q = p.m30(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *JSONParser) m29(pos int) int {
+func (p *JSONParser) m28(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m30(q)
+		r := p.m32(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -691,22 +872,51 @@ func (p *JSONParser) m29(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m36(pos int) int {
+func (p *JSONParser) m34(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == 'e' || x == 'E' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
+func (p *JSONParser) m36(pos int) int {
+	if pos < len(p.in) {
+		x, w := p.rune(pos)
+		if x == '+' || x == '-' {
+			return pos + w
+		}
+	}
+	p.fail(pos, "")
+	return -1
+}
+
+func (p *JSONParser) m35(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m36(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
 func (p *JSONParser) m38(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
-		if x == '+' || x == '-' {
-			return pos + 1
+		x, w := p.rune(pos)
+		if x >= '0' && x <= '9' {
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
@@ -715,7 +925,7 @@ func (p *JSONParser) m38(pos int) int {
 
 func (p *JSONParser) m37(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m38(q)
 		if r < 0 {
@@ -728,25 +938,31 @@ func (p *JSONParser) m37(pos int) int {
 		}
 		q = r
 	}
+	if n < 1 {
+		return -1
+	}
 	return q
 }
 
-func (p *JSONParser) m40(pos int) int {
-	if pos < len(p.in) {
-		x := p.in[pos]
-		if x >= '0' && x <= '9' {
-			return pos + 1
-		}
+func (p *JSONParser) m39(pos int) int {
+	q := pos
+	if q = p.m34(q); q < 0 {
+		return -1
 	}
-	p.fail(pos, "")
-	return -1
+	if q = p.m35(q); q < 0 {
+		return -1
+	}
+	if q = p.m37(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *JSONParser) m39(pos int) int {
+func (p *JSONParser) m33(pos int) int {
 	q, n := pos, 0
-	for {
+	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m40(q)
+		r := p.m39(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -757,31 +973,25 @@ func (p *JSONParser) m39(pos int) int {
 		}
 		q = r
 	}
-	if n < 1 {
-		return -1
-	}
 	return q
 }
 
-func (p *JSONParser) m35(pos int) int {
-	q := pos
-	if q = p.m36(q); q < 0 {
-		return -1
+func (p *JSONParser) m41(pos int) int {
+	if pos < len(p.in) {
+		x, w := p.rune(pos)
+		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
+			return pos + w
+		}
 	}
-	if q = p.m37(q); q < 0 {
-		return -1
-	}
-	if q = p.m39(q); q < 0 {
-		return -1
-	}
-	return q
+	p.fail(pos, "")
+	return -1
 }
 
-func (p *JSONParser) m34(pos int) int {
+func (p *JSONParser) m40(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
-		r := p.m35(q)
+		r := p.m41(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -796,49 +1006,20 @@ func (p *JSONParser) m34(pos int) int {
 }
 
 func (p *JSONParser) m42(pos int) int {
-	if pos < len(p.in) {
-		x := p.in[pos]
-		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
-		}
-	}
-	p.fail(pos, "")
-	return -1
-}
-
-func (p *JSONParser) m41(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m42(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *JSONParser) m20(pos int) int {
 	q := pos
-	if q = p.m21(q); q < 0 {
+	if q = p.m20(q); q < 0 {
 		return -1
 	}
-	if q = p.m23(q); q < 0 {
+	if q = p.m27(q); q < 0 {
 		return -1
 	}
-	if q = p.m29(q); q < 0 {
+	if q = p.m28(q); q < 0 {
 		return -1
 	}
-	if q = p.m34(q); q < 0 {
+	if q = p.m33(q); q < 0 {
 		return -1
 	}
-	if q = p.m41(q); q < 0 {
+	if q = p.m40(q); q < 0 {
 		return -1
 	}
 	return q
@@ -852,7 +1033,7 @@ func (p *JSONParser) ruleNumber(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, JSONNode{Rule: JSONRuleNumber, Begin: int32(pos)})
-	end := p.m20(pos)
+	end := p.m42(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -863,30 +1044,30 @@ func (p *JSONParser) ruleNumber(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m44(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '[' {
+func (p *JSONParser) m43(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "[" {
 		return pos + 1
 	}
 	p.fail(pos, "\"[\"")
 	return -1
 }
 
-func (p *JSONParser) m46(pos int) int {
+func (p *JSONParser) m45(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m45(pos int) int {
+func (p *JSONParser) m44(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m46(q)
+		r := p.m45(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -900,63 +1081,23 @@ func (p *JSONParser) m45(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m52(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == ',' {
+func (p *JSONParser) m48(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "," {
 		return pos + 1
 	}
 	p.fail(pos, "\",\"")
 	return -1
 }
 
-func (p *JSONParser) m54(pos int) int {
+func (p *JSONParser) m50(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
-}
-
-func (p *JSONParser) m53(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m54(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *JSONParser) m51(pos int) int {
-	q := pos
-	if q = p.m52(q); q < 0 {
-		return -1
-	}
-	if q = p.m53(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *JSONParser) m50(pos int) int {
-	q := pos
-	if q = p.m51(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleValue(q); q < 0 {
-		return -1
-	}
-	return q
 }
 
 func (p *JSONParser) m49(pos int) int {
@@ -977,9 +1118,9 @@ func (p *JSONParser) m49(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m48(pos int) int {
+func (p *JSONParser) m51(pos int) int {
 	q := pos
-	if q = p.ruleValue(q); q < 0 {
+	if q = p.m48(q); q < 0 {
 		return -1
 	}
 	if q = p.m49(q); q < 0 {
@@ -988,11 +1129,22 @@ func (p *JSONParser) m48(pos int) int {
 	return q
 }
 
+func (p *JSONParser) m52(pos int) int {
+	q := pos
+	if q = p.m51(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleValue(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
 func (p *JSONParser) m47(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
-		r := p.m48(q)
+		r := p.m52(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1006,30 +1158,59 @@ func (p *JSONParser) m47(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m55(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == ']' {
+func (p *JSONParser) m53(pos int) int {
+	q := pos
+	if q = p.ruleValue(q); q < 0 {
+		return -1
+	}
+	if q = p.m47(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *JSONParser) m46(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m53(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *JSONParser) m54(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "]" {
 		return pos + 1
 	}
 	p.fail(pos, "\"]\"")
 	return -1
 }
 
-func (p *JSONParser) m57(pos int) int {
+func (p *JSONParser) m56(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m56(pos int) int {
+func (p *JSONParser) m55(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m57(q)
+		r := p.m56(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1043,21 +1224,21 @@ func (p *JSONParser) m56(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m43(pos int) int {
+func (p *JSONParser) m57(pos int) int {
 	q := pos
+	if q = p.m43(q); q < 0 {
+		return -1
+	}
 	if q = p.m44(q); q < 0 {
 		return -1
 	}
-	if q = p.m45(q); q < 0 {
+	if q = p.m46(q); q < 0 {
 		return -1
 	}
-	if q = p.m47(q); q < 0 {
+	if q = p.m54(q); q < 0 {
 		return -1
 	}
 	if q = p.m55(q); q < 0 {
-		return -1
-	}
-	if q = p.m56(q); q < 0 {
 		return -1
 	}
 	return q
@@ -1071,7 +1252,7 @@ func (p *JSONParser) ruleArray(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, JSONNode{Rule: JSONRuleArray, Begin: int32(pos)})
-	end := p.m43(pos)
+	end := p.m57(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -1082,30 +1263,30 @@ func (p *JSONParser) ruleArray(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m59(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '{' {
+func (p *JSONParser) m58(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "{" {
 		return pos + 1
 	}
 	p.fail(pos, "\"{\"")
 	return -1
 }
 
-func (p *JSONParser) m61(pos int) int {
+func (p *JSONParser) m60(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m60(pos int) int {
+func (p *JSONParser) m59(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m61(q)
+		r := p.m60(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1119,63 +1300,23 @@ func (p *JSONParser) m60(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m67(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == ',' {
+func (p *JSONParser) m63(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "," {
 		return pos + 1
 	}
 	p.fail(pos, "\",\"")
 	return -1
 }
 
-func (p *JSONParser) m69(pos int) int {
+func (p *JSONParser) m65(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
-}
-
-func (p *JSONParser) m68(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m69(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *JSONParser) m66(pos int) int {
-	q := pos
-	if q = p.m67(q); q < 0 {
-		return -1
-	}
-	if q = p.m68(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *JSONParser) m65(pos int) int {
-	q := pos
-	if q = p.m66(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleMember(q); q < 0 {
-		return -1
-	}
-	return q
 }
 
 func (p *JSONParser) m64(pos int) int {
@@ -1196,9 +1337,9 @@ func (p *JSONParser) m64(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m63(pos int) int {
+func (p *JSONParser) m66(pos int) int {
 	q := pos
-	if q = p.ruleMember(q); q < 0 {
+	if q = p.m63(q); q < 0 {
 		return -1
 	}
 	if q = p.m64(q); q < 0 {
@@ -1207,11 +1348,22 @@ func (p *JSONParser) m63(pos int) int {
 	return q
 }
 
+func (p *JSONParser) m67(pos int) int {
+	q := pos
+	if q = p.m66(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleMember(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
 func (p *JSONParser) m62(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
-		r := p.m63(q)
+		r := p.m67(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1225,30 +1377,59 @@ func (p *JSONParser) m62(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m70(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == '}' {
+func (p *JSONParser) m68(pos int) int {
+	q := pos
+	if q = p.ruleMember(q); q < 0 {
+		return -1
+	}
+	if q = p.m62(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *JSONParser) m61(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m68(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *JSONParser) m69(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == "}" {
 		return pos + 1
 	}
 	p.fail(pos, "\"}\"")
 	return -1
 }
 
-func (p *JSONParser) m72(pos int) int {
+func (p *JSONParser) m71(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m71(pos int) int {
+func (p *JSONParser) m70(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m72(q)
+		r := p.m71(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1262,21 +1443,21 @@ func (p *JSONParser) m71(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m58(pos int) int {
+func (p *JSONParser) m72(pos int) int {
 	q := pos
+	if q = p.m58(q); q < 0 {
+		return -1
+	}
 	if q = p.m59(q); q < 0 {
 		return -1
 	}
-	if q = p.m60(q); q < 0 {
+	if q = p.m61(q); q < 0 {
 		return -1
 	}
-	if q = p.m62(q); q < 0 {
+	if q = p.m69(q); q < 0 {
 		return -1
 	}
 	if q = p.m70(q); q < 0 {
-		return -1
-	}
-	if q = p.m71(q); q < 0 {
 		return -1
 	}
 	return q
@@ -1290,7 +1471,7 @@ func (p *JSONParser) ruleObject(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, JSONNode{Rule: JSONRuleObject, Begin: int32(pos)})
-	end := p.m58(pos)
+	end := p.m72(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -1301,30 +1482,30 @@ func (p *JSONParser) ruleObject(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m74(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == ':' {
+func (p *JSONParser) m73(pos int) int {
+	if len(p.in)-pos >= 1 && p.in[pos:pos+1] == ":" {
 		return pos + 1
 	}
 	p.fail(pos, "\":\"")
 	return -1
 }
 
-func (p *JSONParser) m76(pos int) int {
+func (p *JSONParser) m75(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m75(pos int) int {
+func (p *JSONParser) m74(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m76(q)
+		r := p.m75(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1338,15 +1519,15 @@ func (p *JSONParser) m75(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m73(pos int) int {
+func (p *JSONParser) m76(pos int) int {
 	q := pos
 	if q = p.ruleString(q); q < 0 {
 		return -1
 	}
-	if q = p.m74(q); q < 0 {
+	if q = p.m73(q); q < 0 {
 		return -1
 	}
-	if q = p.m75(q); q < 0 {
+	if q = p.m74(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleValue(q); q < 0 {
@@ -1363,7 +1544,7 @@ func (p *JSONParser) ruleMember(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, JSONNode{Rule: JSONRuleMember, Begin: int32(pos)})
-	end := p.m73(pos)
+	end := p.m76(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -1374,63 +1555,63 @@ func (p *JSONParser) ruleMember(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m79(pos int) int {
-	if pos+4 <= len(p.in) && p.in[pos+0] == 't' && p.in[pos+1] == 'r' && p.in[pos+2] == 'u' && p.in[pos+3] == 'e' {
+func (p *JSONParser) m77(pos int) int {
+	if len(p.in)-pos >= 4 && p.in[pos:pos+4] == "true" {
 		return pos + 4
 	}
 	p.fail(pos, "\"true\"")
 	return -1
 }
 
-func (p *JSONParser) m80(pos int) int {
-	if pos+5 <= len(p.in) && p.in[pos+0] == 'f' && p.in[pos+1] == 'a' && p.in[pos+2] == 'l' && p.in[pos+3] == 's' && p.in[pos+4] == 'e' {
+func (p *JSONParser) m78(pos int) int {
+	if len(p.in)-pos >= 5 && p.in[pos:pos+5] == "false" {
 		return pos + 5
 	}
 	p.fail(pos, "\"false\"")
 	return -1
 }
 
-func (p *JSONParser) m81(pos int) int {
-	if pos+4 <= len(p.in) && p.in[pos+0] == 'n' && p.in[pos+1] == 'u' && p.in[pos+2] == 'l' && p.in[pos+3] == 'l' {
+func (p *JSONParser) m79(pos int) int {
+	if len(p.in)-pos >= 4 && p.in[pos:pos+4] == "null" {
 		return pos + 4
 	}
 	p.fail(pos, "\"null\"")
 	return -1
 }
 
-func (p *JSONParser) m78(pos int) int {
+func (p *JSONParser) m80(pos int) int {
 	mark := len(p.nodes)
+	if q := p.m77(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m78(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
 	if q := p.m79(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m80(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m81(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *JSONParser) m83(pos int) int {
+func (p *JSONParser) m82(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m82(pos int) int {
+func (p *JSONParser) m81(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m83(q)
+		r := p.m82(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1444,12 +1625,12 @@ func (p *JSONParser) m82(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m77(pos int) int {
+func (p *JSONParser) m83(pos int) int {
 	q := pos
-	if q = p.m78(q); q < 0 {
+	if q = p.m80(q); q < 0 {
 		return -1
 	}
-	if q = p.m82(q); q < 0 {
+	if q = p.m81(q); q < 0 {
 		return -1
 	}
 	return q
@@ -1463,7 +1644,7 @@ func (p *JSONParser) ruleLiteral(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, JSONNode{Rule: JSONRuleLiteral, Begin: int32(pos)})
-	end := p.m77(pos)
+	end := p.m83(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -1474,22 +1655,22 @@ func (p *JSONParser) ruleLiteral(pos int) int {
 	return end
 }
 
-func (p *JSONParser) m86(pos int) int {
+func (p *JSONParser) m85(pos int) int {
 	if pos < len(p.in) {
-		x := p.in[pos]
+		x, w := p.rune(pos)
 		if x == ' ' || x == '\t' || x == '\n' || x == '\r' {
-			return pos + 1
+			return pos + w
 		}
 	}
 	p.fail(pos, "")
 	return -1
 }
 
-func (p *JSONParser) m85(pos int) int {
+func (p *JSONParser) m84(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m86(q)
+		r := p.m85(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -1503,7 +1684,7 @@ func (p *JSONParser) m85(pos int) int {
 	return q
 }
 
-func (p *JSONParser) m87(pos int) int {
+func (p *JSONParser) m86(pos int) int {
 	if pos == len(p.in) {
 		return pos
 	}
@@ -1511,15 +1692,15 @@ func (p *JSONParser) m87(pos int) int {
 	return -1
 }
 
-func (p *JSONParser) m84(pos int) int {
+func (p *JSONParser) m87(pos int) int {
 	q := pos
-	if q = p.m85(q); q < 0 {
+	if q = p.m84(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleValue(q); q < 0 {
 		return -1
 	}
-	if q = p.m87(q); q < 0 {
+	if q = p.m86(q); q < 0 {
 		return -1
 	}
 	return q

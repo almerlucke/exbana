@@ -102,19 +102,204 @@ func (scratch) MatchCont(ebnf.Reader[rune, runes.Pos], ebnf.Continuation[rune, r
 func (scratch) Generate(*ebnf.GenContext, ebnf.Writer[rune]) error { return nil }
 func (scratch) Print(w io.Writer) error                            { return nil }
 
-func TestRefusesLeftRecursionAndInexactLiterals(t *testing.T) {
-	expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
-	expr.Define(alt(conc(expr, text("-"), between('0', '9')), between('0', '9')).SetOrthogonal(true))
-
-	_, err := codegen.Generate[rune, runes.Pos](expr, cfg{Package: "p"})
-	if got := strings.Join(problems(t, err), "\n"); !strings.Contains(got, "rule expr is left recursive") {
-		t.Errorf("problems:\n%s", got)
-	}
-
+func TestRefusesInexactLiterals(t *testing.T) {
 	fold := vector.New[rune, runes.Pos](func(a, b rune) bool { return a == b }, 'a', 'b')
-	_, err = codegen.Generate[rune, runes.Pos](fold, cfg{Package: "p"})
+
+	_, err := codegen.Generate[rune, runes.Pos](fold, cfg{Package: "p"})
 	if got := strings.Join(problems(t, err), "\n"); !strings.Contains(got, "compared with a function") {
 		t.Errorf("problems:\n%s", got)
+	}
+}
+
+// expr = expr ("+" | "-") term | term, term = term ("*" | "/") factor | factor, factor = number | "(" expr ")"
+func arithmetic(t *testing.T) pat {
+	t.Helper()
+
+	number := rule.New[rune, runes.Pos]("number", some(between('0', '9')))
+	expr, term := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true), rule.Declare[rune, runes.Pos]("term").SetLeftRecursive(true)
+	factor := rule.Declare[rune, runes.Pos]("factor")
+	add := rule.New[rune, runes.Pos]("add", alt(text("+"), text("-")))
+	mul := rule.New[rune, runes.Pos]("mul", alt(text("*"), text("/")))
+
+	expr.Define(alt(conc(expr, add, term), term))
+	term.Define(alt(conc(term, mul, factor), factor))
+	factor.Define(alt(number, conc(text("("), expr, text(")"))))
+
+	input := rule.New[rune, runes.Pos]("input", conc(expr, end.New[rune, runes.Pos]().Printed("end of input")))
+
+	if res, err := optimize.Optimize[rune, runes.Pos](input, optimize.Options{Closed: true}); err != nil || len(res.Blocked()) != 0 {
+		t.Fatalf("%v\n%v", err, res)
+	}
+
+	return input
+}
+
+func TestLeftRecursionIsGeneratedAsALoop(t *testing.T) {
+	var files = map[string]string{}
+
+	for _, utf8 := range []bool{false, true} {
+		name := map[bool]string{false: "R", true: "U"}[utf8]
+
+		src, err := codegen.Generate[rune, runes.Pos](arithmetic(t), cfg{Package: "probe", Name: name, UTF8: utf8})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		files[strings.ToLower(name)+".go"] = string(src)
+	}
+
+	files["calc_test.go"] = `package probe
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// eval walks the tree: a left recursive rule is a node with its parts as children, in order, which is the order of
+// evaluation, so the operators group to the left
+func eval(t *testing.T, tree *RTree, node int) int {
+	var children []int
+	for c := range tree.Children(node) {
+		children = append(children, c)
+	}
+
+	switch tree.Rule(node) {
+	case RRuleNumber:
+		n, _ := strconv.Atoi(tree.Text(node))
+		return n
+	case RRuleFactor:
+		if first, ok := tree.FirstNumber(node); ok {
+			return eval(t, tree, first)
+		}
+		first, _ := tree.FirstExpr(node)
+		return eval(t, tree, first)
+	case RRuleExpr, RRuleTerm:
+		v := eval(t, tree, children[0])
+		for i := 1; i < len(children); i += 2 {
+			r := eval(t, tree, children[i+1])
+			switch tree.Text(children[i]) {
+			case "+":
+				v += r
+			case "-":
+				v -= r
+			case "*":
+				v *= r
+			case "/":
+				v /= r
+			}
+		}
+		return v
+	}
+
+	t.Fatalf("rule %v", tree.Rule(node))
+
+	return 0
+}
+
+func TestArithmetic(t *testing.T) {
+	p := NewRParser()
+
+	for in, want := range map[string]int{
+		"7": 7, "1+2": 3, "1+2*3": 7, "(1+2)*3": 9, "10-3-2": 5, "100/10/5": 2, "2*3+4*5": 26, "1-2-3-4": -8,
+		"((((1))))": 1, "2*(3+(4-1))": 12, "8/4/2*3-1": 2,
+	} {
+		tree, err := p.ParseString(in)
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+
+		top, _ := tree.FirstExpr(0)
+		if got := eval(t, tree, top); got != want {
+			t.Errorf("%q = %d, want %d", in, got, want)
+		}
+	}
+
+	// one node for the whole chain, with the terms and the operators as its children
+	tree, _ := p.ParseString("1+2*3-4")
+	if got := strings.Split(strings.TrimSpace(tree.Dump()), "\n")[1]; got != "  expr 0-7 \"1+2*3-4\"" {
+		t.Errorf("the expression: %s", got)
+	}
+
+	var parts []string
+	top, _ := tree.FirstExpr(0)
+	for c := range tree.Children(top) {
+		parts = append(parts, tree.Rule(c).String()+"="+tree.Text(c))
+	}
+	if strings.Join(parts, " ") != "term=1 add=+ term=2*3 add=- term=4" {
+		t.Errorf("parts: %v", parts)
+	}
+
+	// the same in text mode
+	if tree, err := NewUParser().Parse("(1+2)*3"); err != nil || tree.End != 7 {
+		t.Errorf("text: %v %v", tree, err)
+	}
+
+	for in, want := range map[string]string{
+		"":      "syntax error at 1:1: unexpected end of input",
+		"1+":    "syntax error at 1:3: unexpected end of input",
+		"1+*":   "syntax error at 1:3: unexpected '*'",
+		"(1+2":  "syntax error at 1:5: unexpected end of input",
+		"1 + 2": "syntax error at 1:2: unexpected ' '",
+	} {
+		_, err := p.ParseString(in)
+		if err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", in, err, want)
+		}
+	}
+}
+`
+
+	gentest.Run(t, files)
+}
+
+func TestLeftRecursionThatCanNotBeALoopIsRefused(t *testing.T) {
+	x, y := text("x"), text("y")
+
+	define := func(d func(r *rule.Rule[rune, runes.Pos]) pat, marked bool) pat {
+		r := rule.Declare[rune, runes.Pos]("r").SetLeftRecursive(marked)
+		r.Define(d(r))
+
+		return r
+	}
+
+	// r = r "x" | "y"
+	simple := func(r *rule.Rule[rune, runes.Pos]) pat { return alt(conc(r, x), y) }
+
+	for name, c := range map[string]struct {
+		grammar pat
+		want    string
+	}{
+		"not marked":      {define(simple, false), "left recursive and not marked"},
+		"no base":         {define(func(r *rule.Rule[rune, runes.Pos]) pat { return conc(r, x) }, true), "nothing for it to start from"},
+		"tail may follow": {conc(define(simple, true), text("xz")), "what a tail starts with and what follows the rule"},
+		"tail matches nothing": {define(func(r *rule.Rule[rune, runes.Pos]) pat {
+			return alt(conc(r, many(x).SetPossessive(true)), y)
+		}, true), "can match nothing"},
+		"tails start the same": {define(func(r *rule.Rule[rune, runes.Pos]) pat {
+			return alt(conc(r, x, y), conc(r, x), y)
+		}, true), "tails 1 and 2"},
+	} {
+		_, err := codegen.Generate[rune, runes.Pos](c.grammar, cfg{Package: "p"})
+		if got := strings.Join(problems(t, err), "\n"); !strings.Contains(got, c.want) {
+			t.Errorf("%s: problems:\n%s", name, got)
+		}
+	}
+
+	// the loop is generated when it is asked for, whatever the analysis says
+	if _, err := codegen.Generate[rune, runes.Pos](conc(define(simple, true), text("xz")), cfg{Package: "p", Commit: true}); err != nil {
+		t.Errorf("Commit: %v", err)
+	}
+
+	// left recursion through another rule can not be a loop
+	p, q := rule.Declare[rune, runes.Pos]("p"), rule.Declare[rune, runes.Pos]("q")
+	p.Define(alt(conc(q, x), y))
+	q.Define(conc(p, text("z")))
+
+	_, err := codegen.Generate[rune, runes.Pos](p, cfg{Package: "p", Commit: true})
+	if got := strings.Join(problems(t, err), "\n"); !strings.Contains(got, "can call itself without consuming anything") {
+		t.Errorf("indirect: problems:\n%s", got)
 	}
 }
 
@@ -549,4 +734,549 @@ func TestLevels(t *testing.T) {
 	}
 }
 `})
+}
+
+func TestClassesThatNeedNoTestForTheElement(t *testing.T) {
+	// any element, and an empty class: the generated test does not look at the element, which must still compile
+	anyOne := rule.New[rune, runes.Pos]("any", entity.Any[rune, runes.Pos]())
+	none := rule.New[rune, runes.Pos]("none", entity.In[rune, runes.Pos]())
+
+	files := map[string]string{}
+
+	for name, g := range map[string]pat{"Any": anyOne, "None": none} {
+		for _, utf8 := range []bool{false, true} {
+			src, err := codegen.Generate[rune, runes.Pos](g, cfg{Package: "probe", Name: name + map[bool]string{false: "R", true: "U"}[utf8], UTF8: utf8})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			files[strings.ToLower(name)+map[bool]string{false: "r", true: "u"}[utf8]+".go"] = string(src)
+		}
+	}
+
+	files["any_test.go"] = `package probe
+
+import "testing"
+
+func TestAny(t *testing.T) {
+	if tree, err := NewAnyRParser().ParseString("xy"); err != nil || tree.End != 1 {
+		t.Errorf("runes: %v %v", tree, err)
+	}
+
+	// a character of several bytes is one element
+	if tree, err := NewAnyUParser().Parse("é!"); err != nil || tree.End != 2 {
+		t.Errorf("utf8: %v %v", tree, err)
+	}
+
+	if _, err := NewAnyRParser().ParseString(""); err == nil {
+		t.Error("any element matched nothing")
+	}
+
+	if _, err := NewNoneRParser().ParseString("x"); err == nil {
+		t.Error("an empty class matched")
+	}
+
+	if _, err := NewNoneUParser().Parse("é"); err == nil {
+		t.Error("an empty class matched")
+	}
+}
+`
+
+	gentest.Run(t, files)
+}
+
+func TestUTF8InputWithMultiByteCharactersAndBrokenBytes(t *testing.T) {
+	letter := entity.In[rune, runes.Pos](entity.Range[rune]{Lo: 'a', Hi: 'z'}, entity.Range[rune]{Lo: 'é', Hi: 'é'}, entity.Range[rune]{Lo: 'λ', Hi: 'λ'}).Printed("letter")
+	word := rule.New[rune, runes.Pos]("word", some(letter).SetPossessive(true))
+	greeting := rule.New[rune, runes.Pos]("greeting", conc(text("héllo"), text(" "), word, maybe(text("🙂")).SetPossessive(true), end.New[rune, runes.Pos]().Printed("end of input")))
+
+	src, err := codegen.Generate[rune, runes.Pos](greeting, cfg{Package: "probe", Name: "Hi", UTF8: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// a literal with a character that is not valid text is refused
+	bad := rule.New[rune, runes.Pos]("bad", vector.Literal[rune, runes.Pos](0xD800))
+	if _, err := codegen.Generate[rune, runes.Pos](bad, cfg{Package: "probe", UTF8: true}); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Errorf("err = %v, want a refusal of a literal that is not valid UTF-8", err)
+	}
+
+	// text needs rune elements
+	if _, err := codegen.Generate[byte, int](rule.New[byte, int]("b", entity.Equals[byte, int](1)), codegen.Config[byte, int]{Package: "probe", UTF8: true}); err == nil || !strings.Contains(err.Error(), "runes") {
+		t.Errorf("err = %v, want UTF8 to need runes", err)
+	}
+
+	// what the grammar says about inputs that do not match, with characters of several bytes and bytes that are not text:
+	// the generated parser has to say the same, with line and column counted in characters
+	var cases strings.Builder
+
+	for _, in := range []string{"héllo é1", "héllo \xff", "héllo", "hello", "héllo \xffa", "\xffhéllo", "héllo λ🙂x", "héllo \n", "", "héllo é\xff"} {
+		rd, _ := runes.New(strings.NewReader(in))
+		log := runes.NewFarthestLog(rd)
+
+		ok, _, err := ebnf.Parse[rune, runes.Pos](greeting, ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		want := ""
+		if e := log.Err(); !ok && e != nil {
+			want = e.Error()
+		}
+
+		fmt.Fprintf(&cases, "\t{%q, %v, %q},\n", in, ok, want)
+	}
+
+	gentest.Run(t, map[string]string{"hi.go": string(src), "hi_test.go": `package probe
+
+import (
+	"testing"
+	"unsafe"
+)
+
+var cases = []struct {
+	in   string
+	ok   bool
+	want string
+}{
+` + cases.String() + `}
+
+func TestAgainstTheGrammar(t *testing.T) {
+	p := NewHiParser()
+
+	for _, c := range cases {
+		tree, err := p.Parse(c.in)
+
+		if (err == nil) != c.ok {
+			t.Errorf("%q: matched=%v (%v), the grammar says %v", c.in, err == nil, err, c.ok)
+			continue
+		}
+
+		if err != nil && c.want != "" && err.Error() != c.want {
+			t.Errorf("%q:\n  generated %q\n  grammar   %q", c.in, err.Error(), c.want)
+		}
+
+		_ = tree
+	}
+}
+
+func TestUTF8(t *testing.T) {
+	p := NewHiParser()
+
+	tree, err := p.Parse("héllo λé🙂")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// positions are bytes: h é(2) l l o space = 7 bytes, the word is λ(2) é(2), the smiley is 4
+	if tree.End != 7+2+2+4 {
+		t.Errorf("end = %d", tree.End)
+	}
+
+	word, _ := tree.FirstWord(0)
+	if tree.Text(word) != "λé" {
+		t.Errorf("word = %q", tree.Text(word))
+	}
+
+	// the text of a node is a slice of the input, not a copy
+	if unsafe.StringData(tree.Text(word)) != unsafe.StringData(tree.Input[7:]) {
+		t.Error("Text copied the input")
+	}
+
+	// the position of a node counts characters
+	if line, col := tree.Position(7); line != 1 || col != 7 {
+		t.Errorf("position of the word: %d:%d", line, col)
+	}
+
+	if tree, err := p.ParseBytes([]byte("héllo ab")); err != nil || tree.End != 9 {
+		t.Errorf("bytes: %v %v", tree, err)
+	}
+}
+`})
+}
+
+func TestTreeHelpers(t *testing.T) {
+	number := rule.New[rune, runes.Pos]("number", some(between('0', '9')).SetPossessive(true))
+	op := rule.New[rune, runes.Pos]("operator", alt(text("+"), text("-")).SetOrthogonal(true))
+	sum := rule.New[rune, runes.Pos]("sum", conc(number, many(conc(op, number)).SetPossessive(true)))
+	doc := rule.New[rune, runes.Pos]("document", conc(sum, text("\n"), sum))
+
+	src, err := codegen.Generate[rune, runes.Pos](doc, cfg{Package: "probe", Name: "T"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gentest.Run(t, map[string]string{"t.go": string(src), "t_test.go": `package probe
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestHelpers(t *testing.T) {
+	tree, err := NewTParser().ParseString("12+3\n4-56-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if tree.Rule(0) != TRuleDocument {
+		t.Fatalf("rule = %v", tree.Rule(0))
+	}
+
+	// two sums below the document
+	var sums []int
+	for s := range tree.FindSum(0) {
+		sums = append(sums, s)
+	}
+	if len(sums) != 2 {
+		t.Fatalf("%d sums", len(sums))
+	}
+
+	// the numbers and operators below the second sum
+	var seen []string
+	for c := range tree.Children(sums[1]) {
+		seen = append(seen, tree.Rule(c).String()+"="+tree.Text(c))
+	}
+	if strings.Join(seen, " ") != "number=4 operator=- number=56 operator=- number=7" {
+		t.Errorf("children: %v", seen)
+	}
+
+	if first, ok := tree.FirstNumber(sums[0]); !ok || tree.Text(first) != "12" {
+		t.Errorf("first number: %d %v", first, ok)
+	}
+
+	if _, ok := tree.FirstOperator(0); ok {
+		t.Error("the operators are below the sums, not directly below the document")
+	}
+
+	var ops int
+	for range tree.Find(sums[0], TRuleOperator) {
+		ops++
+	}
+	if ops != 1 {
+		t.Errorf("%d operators", ops)
+	}
+
+	// the spans and the positions
+	b, e := tree.Span(sums[1])
+	if b != 5 || e != 11 {
+		t.Errorf("span = %d-%d", b, e)
+	}
+
+	if line, col := tree.Position(b); line != 2 || col != 1 {
+		t.Errorf("position of the second sum: %d:%d", line, col)
+	}
+	if line, col := tree.Position(8); line != 2 || col != 4 {
+		t.Errorf("position of offset 8: %d:%d", line, col)
+	}
+	if line, col := tree.Position(0); line != 1 || col != 1 {
+		t.Errorf("position 0: %d:%d", line, col)
+	}
+	if line, col := tree.Position(999); line != 2 || col != 7 {
+		t.Errorf("a position past the end is the end: %d:%d", line, col)
+	}
+
+	// walking: skip the children of the first sum
+	var visited []string
+	tree.Walk(func(node, depth int) bool {
+		visited = append(visited, strings.Repeat(".", depth)+tree.Rule(node).String())
+		return node != sums[0]
+	})
+	if got := strings.Join(visited, " "); !strings.HasPrefix(got, "document .sum .sum") {
+		t.Errorf("visited: %s", got)
+	}
+	if !strings.Contains(strings.Join(visited, " "), ".sum ..number ..operator ..number ..operator ..number") {
+		t.Errorf("the second sum was not entered: %v", visited)
+	}
+	for _, v := range visited[:3] {
+		if strings.Contains(v, "number") {
+			t.Errorf("the first sum was entered: %v", visited)
+		}
+	}
+
+	dump := tree.Dump()
+	if !strings.HasPrefix(dump, "document 0-11 \"12+3\\n4-56-7\"\n  sum 0-4 \"12+3\"\n") {
+		t.Errorf("dump:\n%s", dump)
+	}
+}
+`})
+}
+
+// statements = { "let" name "=" number ";" } end : a language to recover in
+func statements(t *testing.T) (program pat, stmt *rule.Rule[rune, runes.Pos]) {
+	t.Helper()
+
+	space := entity.OneOf[rune, runes.Pos](' ', '\n', '\t')
+	ws := many(space).SetPossessive(true)
+	letter := between('a', 'z').Printed("letter")
+	digit := between('0', '9').Printed("digit")
+
+	ident := rule.New[rune, runes.Pos]("ident", some(letter))
+	number := rule.New[rune, runes.Pos]("number", some(digit))
+
+	stmt = rule.New[rune, runes.Pos]("stmt", conc(text("let"), some(space), ident, ws, text("="), ws, number, ws, text(";"), ws))
+	program = rule.New[rune, runes.Pos]("program", conc(ws, many(stmt), end.New[rune, runes.Pos]().Printed("end of input")))
+
+	if res, err := optimize.Optimize[rune, runes.Pos](program, optimize.Options{}); err != nil || len(res.Blocked()) != 0 {
+		t.Fatalf("%v\n%v", err, res)
+	}
+
+	return program, stmt
+}
+
+func TestErrorRecovery(t *testing.T) {
+	var files = map[string]string{}
+
+	for _, utf8 := range []bool{false, true} {
+		program, _ := statements(t)
+
+		// after a syntax error in a statement, skip to the next ; (and the white space after it) and go on
+		resume := conc(text(";"), many(entity.OneOf[rune, runes.Pos](' ', '\n', '\t')).SetPossessive(true))
+
+		name := map[bool]string{false: "R", true: "U"}[utf8]
+
+		src, err := codegen.Generate[rune, runes.Pos](program, cfg{
+			Package: "probe", Name: name, UTF8: utf8,
+			Recover: map[string]codegen.Recovery[rune, runes.Pos]{"stmt": {Until: resume, Consume: true}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		files[strings.ToLower(name)+".go"] = string(src)
+	}
+
+	files["recover_test.go"] = `package probe
+
+import (
+	"strings"
+	"testing"
+)
+
+func stmts(tree *RTree) []string {
+	var out []string
+	for c := range tree.FindStmt(0) {
+		out = append(out, strings.TrimSpace(tree.Text(c)))
+	}
+
+	return out
+}
+
+func TestRecovery(t *testing.T) {
+	p := NewRParser()
+
+	// no errors: ParseAll is Parse
+	valid := "let a = 1;\nlet b = 2;\n"
+	strict, err := p.ParseString(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strict.Dump()
+
+	tree, errs := p.ParseAll([]rune(valid))
+	if len(errs) != 0 || tree == nil || tree.Dump() != want {
+		t.Fatalf("a valid document: %v %v", errs, tree)
+	}
+
+	// an error in the middle: the statements before and after it are parsed
+	in := "let a = 1;\nlet = 2;\nlet b = 3;\n"
+	_, strictErr := p.ParseString(in)
+
+	tree, errs = p.ParseAll([]rune(in))
+	if tree == nil || len(errs) != 1 {
+		t.Fatalf("tree %v errors %v", tree, errs)
+	}
+
+	if errs[0].Error() != strictErr.Error() {
+		t.Errorf("the first error is the one Parse reports:\n  %v\n  %v", errs[0], strictErr)
+	}
+
+	if tree.End != len([]rune(in)) {
+		t.Errorf("end = %d", tree.End)
+	}
+
+	got := stmts(tree)
+	if len(got) != 3 || got[0] != "let a = 1;" || got[1] != "let = 2;" || got[2] != "let b = 3;" {
+		t.Errorf("statements: %q", got)
+	}
+
+	// the skipped text is an error node inside the statement
+	second := -1
+	n := 0
+	for c := range tree.FindStmt(0) {
+		if n++; n == 2 {
+			second = c
+		}
+	}
+	e, ok := tree.First(second, RRuleError)
+	if !ok || strings.TrimSpace(tree.Text(e)) != "let = 2;" {
+		t.Errorf("error node: %d %v", e, ok)
+	}
+
+	// several errors, and one at the end of the input
+	tree, errs = p.ParseAll([]rune("let = 1; let b = 2; let c = ; let d = 4; let e ="))
+	if tree == nil || len(errs) != 3 {
+		t.Fatalf("tree %v errors %v", tree, errs)
+	}
+	if got := stmts(tree); len(got) != 5 {
+		t.Errorf("statements: %q", got)
+	}
+	if !strings.Contains(errs[2].Error(), "unexpected end of input") {
+		t.Errorf("last error: %v", errs[2])
+	}
+
+	// a statement that was recovered has the error node and nothing of what matched before the error: "let c = ;" had
+	// an ident, which is not part of the tree
+	for c := range tree.FindStmt(0) {
+		if _, recovered := tree.First(c, RRuleError); !recovered {
+			continue
+		}
+
+		n := 0
+		for range tree.Children(c) {
+			n++
+		}
+
+		if n != 1 {
+			t.Errorf("the recovered statement %q has %d children, want only the error", tree.Text(c), n)
+		}
+	}
+
+	// garbage before a statement is not an error in it, and nothing else takes it: the parse fails
+	tree, errs = p.ParseAll([]rune("let a = 1; ??? let b = 2;"))
+	if tree != nil || len(errs) != 1 || !strings.Contains(errs[0].Error(), "unexpected '?'") {
+		t.Errorf("tree %v errors %v", tree, errs)
+	}
+
+	// the parser is in a good state afterwards, and Parse does not recover
+	if _, err := p.ParseString(in); err == nil {
+		t.Error("Parse recovered")
+	}
+	if _, err := p.ParseString(valid); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRecoveryInText(t *testing.T) {
+	p := NewUParser()
+
+	in := "let é = 1;\nlet b = 2;\nlet ü = λ; let c = 3;"
+	tree, errs := p.ParseAll(in)
+	if tree == nil || len(errs) != 2 {
+		t.Fatalf("tree %v errors %v", tree, errs)
+	}
+
+	// the lines and columns count characters, and the skipping moved by characters
+	if errs[0].Error() != "syntax error at 1:5: unexpected 'é', expected letter" {
+		t.Errorf("first: %v", errs[0])
+	}
+	if !strings.HasPrefix(errs[1].Error(), "syntax error at 3:5: unexpected 'ü'") {
+		t.Errorf("second: %v", errs[1])
+	}
+
+	var names []string
+	for c := range tree.FindStmt(0) {
+		names = append(names, strings.TrimSpace(tree.Text(c)))
+	}
+	if len(names) != 4 || names[3] != "let c = 3;" {
+		t.Errorf("statements: %q", names)
+	}
+
+	if tree.End != len(in) {
+		t.Errorf("end = %d, want %d", tree.End, len(in))
+	}
+}
+`
+
+	gentest.Run(t, files)
+}
+
+func TestRecoveryIsCheckedWhenGenerating(t *testing.T) {
+	program, _ := statements(t)
+
+	for name, recover := range map[string]map[string]codegen.Recovery[rune, runes.Pos]{
+		"no such rule":      {"nothing": {Until: text(";")}},
+		"no Until":          {"stmt": {}},
+		"Until uses a rule": {"stmt": {Until: rule.New[rune, runes.Pos]("r", text(";"))}},
+		"Until backtracks":  {"stmt": {Until: alt(text("a"), text("ab"))}},
+	} {
+		_, err := codegen.Generate[rune, runes.Pos](program, cfg{Package: "p", Recover: recover})
+		if err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}
+
+func TestLeftRecursionOverOtherElementTypes(t *testing.T) {
+	// bytes: the analysis maps them to integers, so the loop can be proven
+	digit := entity.Between[byte, int]('0', '9')
+	num := rule.New[byte, int]("num", repetition.OneOrMore[byte, int](digit).SetPossessive(true))
+	sum := rule.Declare[byte, int]("sum").SetLeftRecursive(true)
+	sum.Define(alternation.New[byte, int](
+		concatenation.New[byte, int](sum, entity.Equals[byte, int]('+'), num), num,
+	))
+
+	src, err := codegen.Generate[byte, int](sum, codegen.Config[byte, int]{Package: "probe", Name: "Sum"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gentest.Run(t, map[string]string{"sum.go": string(src), "sum_test.go": `package probe
+
+import "testing"
+
+func TestSum(t *testing.T) {
+	tree, err := NewSumParser().Parse([]byte("1+22+333"))
+	if err != nil || tree.End != 8 {
+		t.Fatalf("%v %v", tree, err)
+	}
+
+	// one node for the chain, and the three numbers and nothing for the plus signs
+	n := 0
+	for range tree.FindNum(0) {
+		n++
+	}
+	if len(tree.Nodes) != 4 || n != 3 {
+		t.Errorf("%d nodes, %d numbers", len(tree.Nodes), n)
+	}
+}
+`})
+
+	// tokens: nothing is known about what the functions accept. Alone, with one base and one tail and nothing after it, the
+	// rule is a loop whatever the elements are; followed by something, the tail might be what follows, which can not be told
+	kind := func(k int, name string) *entity.Entity[token, int] {
+		return entity.New[token, int](func(x token) bool { return x.Kind == k }).Named(name)
+	}
+
+	tsum := rule.Declare[token, int]("sum").SetLeftRecursive(true)
+	tsum.Define(alternation.New[token, int](
+		concatenation.New[token, int](tsum, kind(1, "plus"), kind(0, "number")), kind(0, "number"),
+	))
+
+	followed := concatenation.New[token, int](tsum, kind(2, "semicolon"))
+
+	conf := codegen.Config[token, int]{
+		Package: "probe", ElemType: "Token",
+		Class: func(n *ebnf.Node[token, int]) (string, bool) {
+			return map[string]string{"plus": "x.Kind == KindPlus", "number": "x.Kind == KindNumber"}[n.ID], true
+		},
+	}
+
+	conf.Class = func(n *ebnf.Node[token, int]) (string, bool) {
+		return map[string]string{"plus": "x.Kind == KindPlus", "number": "x.Kind == KindNumber", "semicolon": "x.Kind == KindSemicolon"}[n.ID], true
+	}
+
+	if _, err := codegen.Generate[token, int](tsum, conf); err != nil {
+		t.Errorf("alone: %v", err)
+	}
+
+	_, err = codegen.Generate[token, int](followed, conf)
+	if got := strings.Join(problems(t, err), "\n"); !strings.Contains(got, "can not be shown to match like a loop") {
+		t.Errorf("followed: problems:\n%s", got)
+	}
+
+	conf.Commit = true
+	if _, err := codegen.Generate[token, int](followed, conf); err != nil {
+		t.Errorf("Commit: %v", err)
+	}
 }

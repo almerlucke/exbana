@@ -224,6 +224,11 @@ func TestGeneratedJSONParserSpeed(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	textSrc, err := codegen.Generate[rune, runes.Pos](optimized, codegen.Config[rune, runes.Pos]{Package: "probe", Name: "Text", UTF8: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	doc := jsonDocument(2000)
 
 	bench := `package probe
@@ -257,6 +262,33 @@ func BenchmarkGenerated(b *testing.B) {
 	}
 }
 
+func BenchmarkGeneratedFromString(b *testing.B) {
+	doc := document(b)
+	p := NewTextParser()
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(doc)))
+
+	for b.Loop() {
+		if _, err := p.Parse(doc); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGeneratedFromStringWithTheConversion(b *testing.B) {
+	doc := document(b)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(doc)))
+
+	for b.Loop() {
+		if _, err := NewJSONParser().ParseString(doc); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkStdlibValid(b *testing.B) {
 	doc := []byte(document(b))
 
@@ -285,6 +317,6 @@ func BenchmarkStdlibUnmarshal(b *testing.B) {
 }
 `
 
-	out := gentest.RunWith(t, map[string]string{"json.go": string(src), "doc.json": doc, "bench_test.go": bench}, "-run", "^$", "-bench", ".", "-benchtime", "30x")
+	out := gentest.RunWith(t, map[string]string{"json.go": string(src), "text.go": string(textSrc), "doc.json": doc, "bench_test.go": bench}, "-run", "^$", "-bench", ".", "-benchtime", "30x")
 	t.Logf("document of %d bytes:\n%s", len(doc), out)
 }

@@ -12,10 +12,16 @@ type Integer interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint8 | ~uint16 | ~uint32
 }
 
-type analysis[T Integer, P any] struct {
+type analysis[T, P any] struct {
 	g     *ebnf.Grammar[T, P]
 	opts  Options
 	runes bool
+
+	// conv maps an element to an integer. Without it nothing is known about what a leaf accepts.
+	conv func(T) int64
+
+	// the left recursive rules and how they split into base branches and tails
+	lr map[string]lrSplit[T, P]
 
 	// what can be said about every node and rule on its own: whether it can match nothing, and which elements it can
 	// start with
@@ -32,17 +38,29 @@ type analysis[T Integer, P any] struct {
 	ruleDet map[string]bool
 }
 
-func newAnalysis[T Integer, P any](g *ebnf.Grammar[T, P], opts Options) *analysis[T, P] {
+type lrSplit[T, P any] struct {
+	bases, tails []*ebnf.Node[T, P]
+	err          error
+}
+
+func newAnalysis[T, P any](g *ebnf.Grammar[T, P], opts Options, conv func(T) int64) *analysis[T, P] {
 	var zero T
 
 	_, isRune := any(zero).(rune)
 
 	a := &analysis[T, P]{
-		g: g, opts: opts, runes: isRune,
+		g: g, opts: opts, runes: isRune, conv: conv, lr: map[string]lrSplit[T, P]{},
 		ruleNullable: map[string]bool{}, ruleFirst: map[string]set{},
 		nodeNullable: map[*ebnf.Node[T, P]]bool{}, nodeFirst: map[*ebnf.Node[T, P]]set{},
 		follow: map[string]set{}, nodeFollow: map[*ebnf.Node[T, P]]set{},
 		ruleDet: map[string]bool{},
+	}
+
+	for _, name := range g.Order {
+		if g.Rules[name].LeftRecursive {
+			bases, tails, err := g.SplitLeftRecursive(name)
+			a.lr[name] = lrSplit[T, P]{bases, tails, err}
+		}
 	}
 
 	a.computeFirst()
@@ -52,10 +70,14 @@ func newAnalysis[T Integer, P any](g *ebnf.Grammar[T, P], opts Options) *analysi
 	return a
 }
 
-func classSet[T Integer, P any](n *ebnf.Node[T, P]) set {
+func (a *analysis[T, P]) classSet(n *ebnf.Node[T, P]) set {
+	if a.conv == nil {
+		return all
+	}
+
 	iv := make([]interval, len(n.Ranges))
 	for i, r := range n.Ranges {
-		iv[i] = interval{int64(r[0]), int64(r[1])}
+		iv[i] = interval{a.conv(r[0]), a.conv(r[1])}
 	}
 
 	s := normalize(iv)
@@ -78,15 +100,15 @@ func (a *analysis[T, P]) nullableFirst(n *ebnf.Node[T, P]) (bool, set) {
 		switch {
 		case len(n.Values) == 0:
 			null = true
-		case n.Exact:
-			v := int64(n.Values[0])
+		case n.Exact && a.conv != nil:
+			v := a.conv(n.Values[0])
 			first = set{{v, v}}
 		default:
 			first = all // compared with a function nobody can look into
 		}
 	case ebnf.KindClass:
 		if n.Exact {
-			first = classSet(n)
+			first = a.classSet(n)
 		} else {
 			first = all
 		}
@@ -155,22 +177,7 @@ func (a *analysis[T, P]) walkFollow(n *ebnf.Node[T, P], f set) (changed bool) {
 
 	switch n.Kind {
 	case ebnf.KindSeq:
-		// the follow of a part is what the next part starts with, and if that part can match nothing, what comes after it
-		fol := f
-
-		for i := len(n.Children) - 1; i >= 0; i-- {
-			c := n.Children[i]
-			changed = a.walkFollow(c, fol) || changed
-
-			if c.Kind == ebnf.KindEnd {
-				// the end of the stream: nothing is consumed after it, and where it does not match (before an element)
-				// whatever comes after it is not reached either
-				fol = empty
-				continue
-			}
-
-			fol = union(a.nodeFirst[c], ternary(a.nodeNullable[c], fol, empty))
-		}
+		changed = a.walkSeq(n.Children, f)
 	case ebnf.KindAlt:
 		for _, c := range n.Children {
 			changed = a.walkFollow(c, f) || changed
@@ -197,6 +204,80 @@ func (a *analysis[T, P]) walkFollow(n *ebnf.Node[T, P], f set) (changed bool) {
 	return changed
 }
 
+// walkSeq gives the parts of a sequence what can follow each of them: the follow of a part is what the next part starts with,
+// and if that part can match nothing, what comes after it.
+func (a *analysis[T, P]) walkSeq(parts []*ebnf.Node[T, P], f set) (changed bool) {
+	fol := f
+
+	for i := len(parts) - 1; i >= 0; i-- {
+		c := parts[i]
+		changed = a.walkFollow(c, fol) || changed
+
+		if c.Kind == ebnf.KindEnd {
+			// the end of the stream: nothing is consumed after it, and where it does not match (before an element)
+			// whatever comes after it is not reached either
+			fol = empty
+			continue
+		}
+
+		fol = union(a.nodeFirst[c], ternary(a.nodeNullable[c], fol, empty))
+	}
+
+	return changed
+}
+
+// seqInfo is whether a series of parts can match nothing and with which elements it can start.
+func (a *analysis[T, P]) seqInfo(parts []*ebnf.Node[T, P]) (null bool, first set) {
+	null = true
+
+	for _, c := range parts {
+		if null {
+			first = union(first, a.nodeFirst[c])
+		}
+
+		null = null && a.nodeNullable[c]
+	}
+
+	return null, first
+}
+
+// walkRule gives what can follow to the nodes of a rule. A left recursive rule that is a base followed by tails is walked as
+// the loop it can be: after the base, and after every tail, come more tails, or what follows the rule.
+func (a *analysis[T, P]) walkRule(name string) bool {
+	body := a.g.Rules[name].Children[0]
+	f := a.follow[name]
+
+	sp, ok := a.lr[name]
+	if !ok || sp.err != nil || len(sp.tails) == 0 {
+		return a.walkFollow(body, f)
+	}
+
+	a.nodeFollow[body] = f
+
+	var tailsFirst set
+
+	for _, t := range sp.tails {
+		_, first := a.seqInfo(t.Children[1:])
+		tailsFirst = union(tailsFirst, first)
+	}
+
+	inner := union(tailsFirst, f)
+	changed := false
+
+	for _, b := range sp.bases {
+		changed = a.walkFollow(b, inner) || changed
+	}
+
+	for _, t := range sp.tails {
+		// the first part is the rule itself, which is not a call: it is the loop
+		a.nodeFollow[t] = inner
+		a.nodeFollow[t.Children[0]] = inner
+		changed = a.walkSeq(t.Children[1:], inner) || changed
+	}
+
+	return changed
+}
+
 func ternary[V any](cond bool, yes, no V) V {
 	if cond {
 		return yes
@@ -217,24 +298,36 @@ func (a *analysis[T, P]) computeFollow() {
 		changed = a.walkFollow(a.g.Root, rootFollow)
 
 		for _, name := range a.g.Order {
-			changed = a.walkFollow(a.g.Rules[name].Children[0], a.follow[name]) || changed
+			changed = a.walkRule(name) || changed
 		}
 	}
 }
 
 // computeDeterminism finds the rules that have only one way to match that can lead to a match of the whole. A rule that
-// uses itself is assumed to have one way until a way is found that it has not; marked left recursive rules offer all of their
-// matches and never have one.
+// uses itself is assumed to have one way until a way is found that it has not. A left recursive rule offers all of its matches,
+// which comes down to one way if it can be evaluated as a loop, see lrLoopSafe.
 func (a *analysis[T, P]) computeDeterminism() {
 	for _, name := range a.g.Order {
-		a.ruleDet[name] = !a.g.Rules[name].LeftRecursive
+		a.ruleDet[name] = true
 	}
 
 	for changed := true; changed; {
 		changed = false
 
 		for _, name := range a.g.Order {
-			if a.ruleDet[name] && !a.det(a.g.Rules[name].Children[0]) {
+			if !a.ruleDet[name] {
+				continue
+			}
+
+			var det bool
+
+			if sp, ok := a.lr[name]; ok && len(sp.tails) > 0 || ok && sp.err != nil {
+				det, _ = a.lrLoopSafe(name)
+			} else {
+				det = a.det(a.g.Rules[name].Children[0])
+			}
+
+			if !det {
 				a.ruleDet[name] = false
 				changed = true
 			}
@@ -348,4 +441,68 @@ func (a *analysis[T, P]) orthogonalSafe(n *ebnf.Node[T, P]) (bool, string) {
 	}
 
 	return true, "the branches start with different elements, so at most one can match"
+}
+
+// lrLoopSafe: a left recursive rule, a base followed by tails, can be evaluated as a loop that takes a base branch and then tails
+// for as long as they match, and that is what the rule matches when it is asked for its longest match: at most one base
+// branch and at most one tail can match, each in only one way, and what a tail starts with can not also be what follows the
+// rule (or giving a tail back could help).
+func (a *analysis[T, P]) lrLoopSafe(name string) (bool, string) {
+	sp := a.lr[name]
+	if sp.err != nil {
+		return false, sp.err.Error()
+	}
+
+	for i, b := range sp.bases {
+		if a.nodeNullable[b] {
+			return false, fmt.Sprintf("base branch %d can match nothing", i+1) + ternary(a.nodeFirst[b].isAll(), opaqueHint, "")
+		}
+
+		if !a.det(b) {
+			return false, fmt.Sprintf("base branch %d can match in more than one way", i+1)
+		}
+	}
+
+	for i := range sp.bases {
+		for j := i + 1; j < len(sp.bases); j++ {
+			if x, y := a.nodeFirst[sp.bases[i]], a.nodeFirst[sp.bases[j]]; !intersect(x, y).isEmpty() {
+				return false, a.overlapReason(fmt.Sprintf("base branches %d and %d", i+1, j+1), x, y, false)
+			}
+		}
+	}
+
+	var (
+		tailsFirst set
+		firsts     []set
+	)
+
+	for i, t := range sp.tails {
+		null, first := a.seqInfo(t.Children[1:])
+		if null {
+			return false, fmt.Sprintf("tail %d can match nothing, the loop would not end", i+1) + ternary(first.isAll(), opaqueHint, "")
+		}
+
+		for _, c := range t.Children[1:] {
+			if !a.det(c) {
+				return false, fmt.Sprintf("tail %d can match in more than one way", i+1)
+			}
+		}
+
+		firsts = append(firsts, first)
+		tailsFirst = union(tailsFirst, first)
+	}
+
+	for i := range firsts {
+		for j := i + 1; j < len(firsts); j++ {
+			if !intersect(firsts[i], firsts[j]).isEmpty() {
+				return false, a.overlapReason(fmt.Sprintf("tails %d and %d", i+1, j+1), firsts[i], firsts[j], false)
+			}
+		}
+	}
+
+	if follow := a.follow[name]; !intersect(tailsFirst, follow).isEmpty() {
+		return false, a.overlapReason("what a tail starts with and what follows the rule", tailsFirst, follow, true)
+	}
+
+	return true, fmt.Sprintf("a base branch then tails: the tails start with %s, what follows the rule never does", tailsFirst.format(a.runes))
 }

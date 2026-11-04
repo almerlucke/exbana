@@ -1,9 +1,9 @@
 // Package codegen writes a parser as Go source from a grammar made of patterns. The grammar is the specification and the
 // test: design and check it with the patterns, then generate code that does the same without any of the machinery the
 // patterns need to be flexible: no closures, no tree of match objects, no backtracking. The generated code does not use
-// this library at all.
+// this library at all (it needs Go 1.23 or newer, for the iterators of its tree).
 //
-//	src, err := codegen.Generate(grammar, codegen.Config[rune, runes.Pos]{Package: "calc", Name: "Calc"})
+//	src, err := codegen.Generate(grammar, codegen.Config[rune, runes.Pos]{Package: "calc", Name: "Calc", UTF8: true})
 //	os.WriteFile("calc_parser.go", src, 0o644)
 //
 // # What can be generated
@@ -14,20 +14,33 @@
 // places that backtrack is refused, and the error lists them; Config.Commit generates code for it anyway, with "first match wins"
 // where the grammar would have tried more, which is the meaning the grammar gets when optimize.Result.Force is applied.
 //
-// Left recursive rules are refused, write them as a loop. Leaves have to be declarative (entity.Between, In, Equals,
-// vector.Text and the like) so that the generator can see what they accept; a leaf made from a function needs a
-// Config.Class that says what it is as Go code.
+// A rule that is left recursive, a base branch or a tail that starts with the rule itself (expr = expr "+" term | term), is
+// generated as a loop: the base, then the tails for as long as they match. That is what the rule matches when it is asked for its
+// longest match, if at most one base branch and one tail can match at each step and what a tail starts with cannot also start
+// what follows the rule; the optimizer proves it, and the rule has to be marked with SetLeftRecursive. Left recursion in any other
+// form (through other rules, or with no base branch) is refused: it would call itself without consuming anything.
 //
-// # Any element type
+// Leaves have to be declarative (entity.Between, In, Equals, vector.Text and the like) so that the generator can see what they
+// accept; a leaf made from a function needs a Config.Class that says what it is as Go code.
 //
-// The generated parser reads a slice of any element type, with an int as position. Runes, bytes, integers, strings and
-// floats work out of the box. For another type, like a struct for a token, set Config.ElemType and, for the leaves that
-// are functions, Config.Class.
+// # The input
+//
+// The parser reads a slice of any element type, with an int as position. Runes, bytes, integers, strings and floats work out of
+// the box. For another type, like a struct for a token, set Config.ElemType and, for the leaves that are functions,
+// Config.Class. For text there is Config.UTF8: the parser reads a string (or bytes) and decodes characters as it goes, which
+// takes a quarter of the memory of a slice of runes and no conversion.
 //
 // # What the parser returns
 //
-// A flat tree of the rules that matched (their names are constants), in a slice of small nodes, and a SyntaxError with
-// the farthest failure and what was expected there, formatted like ebnf.FarthestLog. Evaluating the tree is up to you.
+// A flat tree of the rules that matched (their names are constants) in a slice of small nodes, with methods to walk it, to find
+// the nodes of a rule, to get the line and column of a position and to dump it; and a SyntaxError with the farthest failure and
+// what was expected there, formatted like ebnf.FarthestLog. Evaluating the tree is up to you. A left recursive rule is one node
+// that has its base and its tails as children, in order.
+//
+// # Error recovery
+//
+// Config.Recover makes a rule survive a syntax error: ParseAll notes the error, skips to a place the grammar names, and goes on,
+// so that all the errors of a document are found in one run.
 package codegen
 
 import (
@@ -38,8 +51,10 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	ebnf "github.com/almerlucke/exbana/v3"
+	"github.com/almerlucke/exbana/v3/optimize"
 )
 
 // Config says how to generate the parser.
@@ -54,6 +69,14 @@ type Config[T, P any] struct {
 	// ElemType is the Go type of the elements the parser reads. The default is rune for int32, byte for uint8, and the
 	// name of the type otherwise.
 	ElemType string
+
+	// UTF8 makes the parser read text as a string of UTF-8 (Parse takes a string, ParseBytes a slice of bytes) instead of a
+	// slice of runes. Positions are byte offsets; columns in errors still count characters. That is a quarter of the memory
+	// and no conversion pass, and Tree.Text is a slice of the input without a copy. The elements have to be runes.
+	UTF8 bool
+
+	// Recover says, for rules, how to go on after a syntax error in them: see Recovery. The keys are rule names.
+	Recover map[string]Recovery[T, P]
 
 	// Format writes an element as a Go expression. The default handles the numeric types, strings and booleans.
 	Format func(T) string
@@ -71,6 +94,23 @@ type Config[T, P any] struct {
 	// MaxDepth limits how deeply rules can nest; deeper than this the parser stops with an error instead of overflowing
 	// the stack. The default is 100000.
 	MaxDepth int
+}
+
+// Recovery makes a rule survive a syntax error. When the rule fails after it has matched something, the parser notes the error,
+// skips elements until the sync pattern matches, and treats the rule as matched: it spans the skipped text and has a child
+// node of the rule Error where the text was skipped. ParseAll, which collects all the errors, is the only parse that does this;
+// Parse stops at the first error as before.
+//
+// A rule that fails on its very first element does not recover: that is how a repetition of it ends, not an error in it.
+// Garbage between two rules is for the grammar to skip, with an alternative that takes it.
+type Recovery[T, P any] struct {
+	// Until is where to go on: elements are skipped one at a time, starting where the parse got stuck, until it matches. It must
+	// be a pattern of the kind the generator accepts, without rules. At the end of the input the skipping stops.
+	Until ebnf.Pattern[T, P]
+
+	// Consume makes the match of Until part of the recovered rule (the ";" that ends a statement). Otherwise the parse goes on
+	// at the match, which is then for the rest of the grammar to take (a "}" that closes a block).
+	Consume bool
 }
 
 // Error is returned by Generate when the grammar can not be generated, with everything that is in the way.
@@ -94,6 +134,7 @@ func Generate[T, P any](p ebnf.Pattern[T, P], cfg Config[T, P]) ([]byte, error) 
 	}
 
 	c := newCompiler(g, cfg)
+	c.root = p
 
 	c.validate()
 
@@ -108,26 +149,40 @@ type compiler[T, P any] struct {
 	g   *ebnf.Grammar[T, P]
 	cfg Config[T, P]
 
+	root ebnf.Pattern[T, P]
+
 	elem   string
 	isText bool // runes and bytes: errors have a line and a column, and nodes have text
+	utf8   bool // the input is a string of UTF-8, and the elements runes decoded from it
 
 	problems []string
+	untils   map[string]*ebnf.Node[T, P] // the Until pattern of every rule that has a recovery
+
+	// left recursive rules that are generated as a loop, and what the optimizer found about each of them
+	lr    map[string]lrSplit[T, P]
+	loops map[string]optimize.Decision[T, P]
 
 	// names
-	used      map[string]bool
-	ruleFn    map[string]string
-	ruleConst map[string]string
-	counter   int
+	used        map[string]bool
+	ruleFn      map[string]string
+	ruleConst   map[string]string
+	ruleIdent   map[string]string
+	ruleRecover map[string]string
+	counter     int
 
 	funcs strings.Builder
 	lits  strings.Builder
 }
 
+type lrSplit[T, P any] struct {
+	bases, tails []*ebnf.Node[T, P]
+}
+
 func newCompiler[T, P any](g *ebnf.Grammar[T, P], cfg Config[T, P]) *compiler[T, P] {
 	c := &compiler[T, P]{
-		g: g, cfg: cfg,
+		g: g, cfg: cfg, lr: map[string]lrSplit[T, P]{}, loops: map[string]optimize.Decision[T, P]{},
 		used:   map[string]bool{},
-		ruleFn: map[string]string{}, ruleConst: map[string]string{},
+		ruleFn: map[string]string{}, ruleConst: map[string]string{}, ruleIdent: map[string]string{}, ruleRecover: map[string]string{},
 	}
 
 	c.elem = cfg.ElemType
@@ -140,6 +195,11 @@ func newCompiler[T, P any](g *ebnf.Grammar[T, P], cfg Config[T, P]) *compiler[T,
 		default:
 			c.elem = t.String()
 		}
+	}
+
+	c.utf8 = cfg.UTF8
+	if c.utf8 {
+		c.elem = "rune"
 	}
 
 	c.isText = c.elem == "rune" || c.elem == "byte"
@@ -157,69 +217,170 @@ func (c *compiler[T, P]) problem(format string, args ...any) {
 
 // validate finds everything that can not be generated.
 func (c *compiler[T, P]) validate() {
-	var visit func(n *ebnf.Node[T, P], rule string)
-
-	visit = func(n *ebnf.Node[T, P], rule string) {
-		where := ""
-		if rule != "" {
-			where = " in " + rule
-		}
-
-		switch n.Kind {
-		case ebnf.KindOpaque:
-			c.problem("a pattern that can not be looked into%s: %s (write it with the declarative patterns, or implement ebnf.Structured)", where, n.String())
-		case ebnf.KindLiteral:
-			if !n.Exact {
-				c.problem("a literal that is compared with a function%s: %s (use vector.Literal or vector.Text)", where, n.String())
-			} else {
-				for _, v := range n.Values {
-					if _, err := c.value(v); err != nil {
-						c.problem("%v", err)
-						break
-					}
-				}
-			}
-		case ebnf.KindClass:
-			if !n.Exact {
-				if c.cfg.Class == nil {
-					c.problem("a class decided by a function%s: %s (use entity.Between, In, Equals and the like, or set Config.Class)", where, classLabel(n))
-				} else if _, ok := c.cfg.Class(n); !ok {
-					c.problem("Config.Class does not know the class decided by a function%s: %s", where, classLabel(n))
-				}
-			} else {
-				for _, r := range n.Ranges {
-					for _, v := range r {
-						if _, err := c.value(v); err != nil {
-							c.problem("%v", err)
-							return
-						}
-					}
-				}
-			}
-		case ebnf.KindRepeat:
-			if !n.Possessive && !c.cfg.Commit {
-				c.problem("a repetition that backtracks%s: %s (run optimize.Optimize, mark it possessive, or set Config.Commit)", where, n.String())
-			}
-		case ebnf.KindAlt:
-			if !n.Orthogonal && !c.cfg.Commit {
-				c.problem("an alternation that backtracks%s: %s (run optimize.Optimize, mark it orthogonal, or set Config.Commit)", where, n.String())
-			}
-		}
-
-		for _, ch := range n.Children {
-			visit(ch, rule)
-		}
+	if c.utf8 && reflect.TypeFor[T]().Kind() != reflect.Int32 {
+		c.problem("Config.UTF8 reads text, the elements of the grammar have to be runes and not %s", reflect.TypeFor[T]())
+		return
 	}
 
-	visit(c.g.Root, "")
+	c.validateNode(c.g.Root, "")
 
 	for _, name := range c.g.Order {
 		def := c.g.Rules[name]
-		if def.LeftRecursive {
-			c.problem("rule %s is left recursive (write it as a loop: a left recursive rule offers all of its matches)", name)
+
+		bases, tails, err := c.g.SplitLeftRecursive(name)
+
+		switch {
+		case def.LeftRecursive && err != nil:
+			c.problem("rule %s is marked left recursive but %v (the generator turns a rule of the form base | rule tail into a loop)", name, err)
+			c.validateNode(def.Children[0], " in "+name)
+		case err == nil && len(tails) > 0 && !def.LeftRecursive:
+			c.problem("rule %s is left recursive and not marked: use SetLeftRecursive on it, the generator turns it into a loop", name)
+		case def.LeftRecursive && len(tails) > 0:
+			// a loop: the bases and what the tails add after the rule itself are what is generated
+			c.lr[name] = lrSplit[T, P]{bases, tails}
+
+			for _, b := range bases {
+				c.validateNode(b, " in "+name)
+			}
+
+			for _, t := range tails {
+				for _, part := range t.Children[1:] {
+					c.validateNode(part, " in "+name)
+				}
+			}
+		default:
+			c.validateNode(def.Children[0], " in "+name)
+		}
+	}
+
+	// a rule that can call itself before it has consumed anything would never stop
+	for _, name := range c.g.LeftCycles() {
+		c.problem("rule %s can call itself without consuming anything, directly or through other rules (left recursion: write it as a loop)", name)
+	}
+
+	c.proveLoops()
+
+	c.untils = map[string]*ebnf.Node[T, P]{}
+
+	for name, rec := range c.cfg.Recover {
+		if _, ok := c.g.Rules[name]; !ok {
+			c.problem("Config.Recover names a rule that the grammar does not have: %s", name)
+			continue
 		}
 
-		visit(def.Children[0], name)
+		if rec.Until == nil {
+			c.problem("the recovery of %s has no Until pattern", name)
+			continue
+		}
+
+		ug, err := ebnf.Analyze(rec.Until)
+		if err != nil {
+			c.problem("the recovery of %s: %v", name, err)
+			continue
+		}
+
+		if len(ug.Rules) > 0 {
+			c.problem("the recovery of %s uses rules: Until has to be a pattern without them", name)
+			continue
+		}
+
+		c.validateNode(ug.Root, " in the recovery of "+name)
+		c.untils[name] = ug.Root
+	}
+}
+
+// proveLoops asks the optimizer whether the left recursive rules can be evaluated as a loop: a base and then tails, for as
+// long as they match, is what the rules offer as their longest match when at most one thing can match at every step and
+// what a tail starts with can not be what follows the rule. The parser has nothing after its root, so the grammar is
+// closed. Config.Commit takes the answer for granted.
+func (c *compiler[T, P]) proveLoops() {
+	if len(c.lr) == 0 || c.cfg.Commit {
+		return
+	}
+
+	res, err := optimize.AnalyzeFunc(c.root, optimize.Options{Closed: true}, c.conv())
+	if err != nil {
+		c.problem("%v", err)
+		return
+	}
+
+	for _, d := range res.Decisions {
+		if d.Kind != optimize.Loop {
+			continue
+		}
+
+		c.loops[d.Rule] = d
+
+		if _, generated := c.lr[d.Rule]; generated && !d.Safe {
+			c.problem("rule %s is left recursive and can not be shown to match like a loop: %s (set Config.Commit to generate the loop anyway)", d.Rule, d.Reason)
+		}
+	}
+}
+
+// conv maps an element to an integer for the analysis, if the elements are integers.
+func (c *compiler[T, P]) conv() func(T) int64 {
+	switch reflect.TypeFor[T]().Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return func(v T) int64 { return reflect.ValueOf(v).Int() }
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		return func(v T) int64 { return int64(reflect.ValueOf(v).Uint()) }
+	}
+
+	return nil
+}
+
+// validateNode finds what can not be generated in a node and in the nodes below it. where says where the node is, for
+// the messages.
+func (c *compiler[T, P]) validateNode(n *ebnf.Node[T, P], where string) {
+	switch n.Kind {
+	case ebnf.KindOpaque:
+		c.problem("a pattern that can not be looked into%s: %s (write it with the declarative patterns, or implement ebnf.Structured)", where, n.String())
+	case ebnf.KindLiteral:
+		if !n.Exact {
+			c.problem("a literal that is compared with a function%s: %s (use vector.Literal or vector.Text)", where, n.String())
+		} else {
+			for _, v := range n.Values {
+				if _, err := c.value(v); err != nil {
+					c.problem("%v", err)
+					break
+				}
+
+				// a literal is compared as bytes, so it has to be valid UTF-8, and U+FFFD would also match a byte that is not
+				if r := reflect.ValueOf(v); c.utf8 && (!utf8.ValidRune(rune(r.Int())) || rune(r.Int()) == utf8.RuneError) {
+					c.problem("a literal%s has a character that can not be compared as UTF-8 (U+FFFD or not a character): %s", where, n.String())
+					break
+				}
+			}
+		}
+	case ebnf.KindClass:
+		if !n.Exact {
+			if c.cfg.Class == nil {
+				c.problem("a class decided by a function%s: %s (use entity.Between, In, Equals and the like, or set Config.Class)", where, classLabel(n))
+			} else if _, ok := c.cfg.Class(n); !ok {
+				c.problem("Config.Class does not know the class decided by a function%s: %s", where, classLabel(n))
+			}
+		} else {
+			for _, r := range n.Ranges {
+				for _, v := range r {
+					if _, err := c.value(v); err != nil {
+						c.problem("%v", err)
+						return
+					}
+				}
+			}
+		}
+	case ebnf.KindRepeat:
+		if !n.Possessive && !c.cfg.Commit {
+			c.problem("a repetition that backtracks%s: %s (run optimize.Optimize, mark it possessive, or set Config.Commit)", where, n.String())
+		}
+	case ebnf.KindAlt:
+		if !n.Orthogonal && !c.cfg.Commit {
+			c.problem("an alternation that backtracks%s: %s (run optimize.Optimize, mark it orthogonal, or set Config.Commit)", where, n.String())
+		}
+	}
+
+	for _, ch := range n.Children {
+		c.validateNode(ch, where)
 	}
 }
 
@@ -375,8 +536,13 @@ func ternary[V any](cond bool, yes, no V) V {
 // emit writes the method that matches the node and returns its name. It takes a position and returns the position after
 // the match, or -1.
 func (c *compiler[T, P]) emit(n *ebnf.Node[T, P]) string {
-	if n.Kind == ebnf.KindRef {
+	switch n.Kind {
+	case ebnf.KindRef:
 		return c.ruleFn[n.ID]
+	case ebnf.KindSeq:
+		return c.emitSeq(c.emitAll(n.Children))
+	case ebnf.KindAlt:
+		return c.emitAlt(c.emitAll(n.Children), n.ID)
 	}
 
 	name := c.next("m")
@@ -393,40 +559,27 @@ func (c *compiler[T, P]) emit(n *ebnf.Node[T, P]) string {
 	case ebnf.KindLiteral:
 		c.emitLiteral(f, n, name)
 	case ebnf.KindClass:
-		fmt.Fprintf(f, "\tif pos < len(p.in) {\n\t\tx := p.in[pos]\n\t\tif %s {\n\t\t\treturn pos + 1\n\t\t}\n\t}\n", c.classCond(n))
+		cond := c.classCond(n)
+
+		// the element is only read when the test looks at it (any element, or none, needs no test)
+		read, width := "", "1"
+
+		switch {
+		case !strings.Contains(cond, "x"):
+		case c.utf8:
+			read, width = "\t\tx, w := p.rune(pos)\n", "w"
+		default:
+			read = "\t\tx := p.in[pos]\n"
+		}
+
+		if c.utf8 && !strings.Contains(cond, "x") {
+			read, width = "\t\t_, w := p.rune(pos)\n", "w"
+		}
+
+		fmt.Fprintf(f, "\tif pos < len(p.in) {\n%s\t\tif %s {\n\t\t\treturn pos + %s\n\t\t}\n\t}\n", read, cond, width)
 		fmt.Fprintf(f, "\tp.fail(pos, %s)\n\treturn -1\n", quote(description(n)))
 	case ebnf.KindEnd:
 		fmt.Fprintf(f, "\tif pos == len(p.in) {\n\t\treturn pos\n\t}\n\tp.fail(pos, %s)\n\treturn -1\n", quote(description(n)))
-	case ebnf.KindSeq:
-		parts := make([]string, len(n.Children))
-		for i, ch := range n.Children {
-			parts[i] = c.emit(ch)
-		}
-
-		fmt.Fprintf(f, "\tq := pos\n")
-
-		for _, part := range parts {
-			fmt.Fprintf(f, "\tif q = p.%s(q); q < 0 {\n\t\treturn -1\n\t}\n", part)
-		}
-
-		fmt.Fprintf(f, "\treturn q\n")
-	case ebnf.KindAlt:
-		parts := make([]string, len(n.Children))
-		for i, ch := range n.Children {
-			parts[i] = c.emit(ch)
-		}
-
-		fmt.Fprintf(f, "\tmark := len(p.nodes)\n")
-
-		for _, part := range parts {
-			fmt.Fprintf(f, "\tif q := p.%s(pos); q >= 0 {\n\t\treturn q\n\t}\n\tp.nodes = p.nodes[:mark]\n", part)
-		}
-
-		if n.ID != "" {
-			fmt.Fprintf(f, "\tp.fail(pos, %s)\n", quote(n.ID))
-		}
-
-		fmt.Fprintf(f, "\treturn -1\n")
 	case ebnf.KindRepeat:
 		item := c.emit(n.Children[0])
 
@@ -466,7 +619,102 @@ func (c *compiler[T, P]) emit(n *ebnf.Node[T, P]) string {
 	return name
 }
 
+// emitAll writes the methods of the nodes and returns their names.
+func (c *compiler[T, P]) emitAll(nodes []*ebnf.Node[T, P]) []string {
+	names := make([]string, len(nodes))
+	for i, n := range nodes {
+		names[i] = c.emit(n)
+	}
+
+	return names
+}
+
+// emitSeq writes the method that matches the methods one after the other.
+func (c *compiler[T, P]) emitSeq(parts []string) string {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+
+	name := c.next("m")
+	f := &c.funcs
+
+	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos int) int {\n\tq := pos\n", name)
+
+	for _, part := range parts {
+		fmt.Fprintf(f, "\tif q = p.%s(q); q < 0 {\n\t\treturn -1\n\t}\n", part)
+	}
+
+	fmt.Fprintf(f, "\treturn q\n}\n\n")
+
+	return name
+}
+
+// emitAlt writes the method that matches the first of the methods that matches. If the alternation has a name, a failure
+// is reported with it.
+func (c *compiler[T, P]) emitAlt(parts []string, id string) string {
+	if len(parts) == 1 && id == "" {
+		return parts[0]
+	}
+
+	name := c.next("m")
+	f := &c.funcs
+
+	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos int) int {\n\tmark := len(p.nodes)\n", name)
+
+	for _, part := range parts {
+		fmt.Fprintf(f, "\tif q := p.%s(pos); q >= 0 {\n\t\treturn q\n\t}\n\tp.nodes = p.nodes[:mark]\n", part)
+	}
+
+	if id != "" {
+		fmt.Fprintf(f, "\tp.fail(pos, %s)\n", quote(id))
+	}
+
+	fmt.Fprintf(f, "\treturn -1\n}\n\n")
+
+	return name
+}
+
+// emitLoop writes the method for a left recursive rule: a base branch, then tails for as long as they match.
+func (c *compiler[T, P]) emitLoop(lr lrSplit[T, P]) string {
+	base := c.emitAlt(c.emitAll(lr.bases), "")
+
+	tails := make([]string, len(lr.tails))
+	for i, t := range lr.tails {
+		// the first part of a tail is the rule itself, which the loop stands for
+		tails[i] = c.emitSeq(c.emitAll(t.Children[1:]))
+	}
+
+	tail := c.emitAlt(tails, "")
+
+	name := c.next("m")
+	f := &c.funcs
+
+	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos int) int {\n\tq := p.%s(pos)\n\tif q < 0 {\n\t\treturn -1\n\t}\n", name, base)
+	fmt.Fprintf(f, "\tfor {\n\t\tmark := len(p.nodes)\n\t\te := p.%s(q)\n\t\tif e <= q {\n\t\t\tp.nodes = p.nodes[:mark]\n\t\t\tbreak\n\t\t}\n\t\tq = e\n\t}\n\treturn q\n}\n\n", tail)
+
+	return name
+}
+
 func (c *compiler[T, P]) emitLiteral(f *strings.Builder, n *ebnf.Node[T, P], name string) {
+	if c.utf8 {
+		runes := make([]rune, len(n.Values))
+		for i, v := range n.Values {
+			runes[i] = rune(reflect.ValueOf(v).Int())
+		}
+
+		lit := string(runes)
+
+		if len(lit) == 0 {
+			fmt.Fprintf(f, "\treturn pos\n")
+			return
+		}
+
+		fmt.Fprintf(f, "\tif len(p.in)-pos >= %d && p.in[pos:pos+%d] == %s {\n\t\treturn pos + %d\n\t}\n", len(lit), len(lit), strconv.Quote(lit), len(lit))
+		fmt.Fprintf(f, "\tp.fail(pos, %s)\n\treturn -1\n", quote(description(n)))
+
+		return
+	}
+
 	vals := make([]string, len(n.Values))
 
 	for i, v := range n.Values {
@@ -495,7 +743,19 @@ func (c *compiler[T, P]) emitLiteral(f *strings.Builder, n *ebnf.Node[T, P], nam
 
 // emitRule writes the method of a rule: it adds a node to the tree and matches the definition.
 func (c *compiler[T, P]) emitRule(name string, def *ebnf.Node[T, P]) {
-	body := c.emit(def.Children[0])
+	var body string
+
+	if lr, ok := c.lr[name]; ok {
+		body = c.emitLoop(lr)
+	} else {
+		body = c.emit(def.Children[0])
+	}
+
+	rec, recovers := c.cfg.Recover[name]
+	if recovers {
+		c.emitRecovery(name, rec)
+	}
+
 	f := &c.funcs
 
 	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos int) int {\n", c.ruleFn[name])
@@ -512,7 +772,15 @@ func (c *compiler[T, P]) emitRule(name string, def *ebnf.Node[T, P]) {
 		fmt.Fprintf(f, "\tp.silent--\n")
 	}
 
-	fmt.Fprintf(f, "\tp.depth--\n\tif end < 0 {\n\t\tp.nodes = p.nodes[:i]\n")
+	fmt.Fprintf(f, "\tp.depth--\n")
+
+	if recovers {
+		// failing after something matched is a syntax error in this rule; failing at its first element is not (it is how a
+		// repetition of the rule ends)
+		fmt.Fprintf(f, "\tif end < 0 && p.recovering && p.silent == 0 && p.errPos > pos {\n\t\tend = p.%s(pos, i)\n\t}\n", c.ruleRecover[name])
+	}
+
+	fmt.Fprintf(f, "\tif end < 0 {\n\t\tp.nodes = p.nodes[:i]\n")
 
 	if def.Atomic {
 		fmt.Fprintf(f, "\t\tp.fail(pos, %s)\n", quote(name))
@@ -522,35 +790,81 @@ func (c *compiler[T, P]) emitRule(name string, def *ebnf.Node[T, P]) {
 	fmt.Fprintf(f, "\tp.nodes[i].End = int32(end)\n\tp.nodes[i].Size = int32(len(p.nodes) - i)\n\treturn end\n}\n\n")
 }
 
-type tmplData struct {
-	Package  string
-	Imports  []string
-	Prefix   string
-	Parser   string
-	Node     string
-	Tree     string
-	Rule     string
-	SynErr   string
-	ErrDeep  string
-	NewFn    string
-	ParseFn  string
-	Elem     string
-	IsText   bool
-	IsRune   bool
-	MaxDepth int
-	Root     string
-	Rules    []ruleData
-	Funcs    string
-	Lits     string
+// emitRecovery writes the method that skips to where the parse can go on after a syntax error in the rule.
+func (c *compiler[T, P]) emitRecovery(name string, rec Recovery[T, P]) {
+	sync := c.emit(c.untils[name])
+	f := &c.funcs
+
+	step := "s++"
+	if c.utf8 {
+		step = "_, w := p.rune(s)\n\t\ts += w"
+	}
+
+	fmt.Fprintf(f, "// %s notes the syntax error in the rule that began at pos, and skips to where the parse can go on. i is the node of the rule.\n", c.ruleRecover[name])
+	fmt.Fprintf(f, "func (p *\x00P\x00) %s(pos, i int) int {\n", c.ruleRecover[name])
+	fmt.Fprintf(f, "\tp.errors = append(p.errors, p.syntaxError())\n")
+	fmt.Fprintf(f, "\ts := p.errPos\n\tp.errPos, p.expected = -1, p.expected[:0]\n")
+	fmt.Fprintf(f, "\tp.nodes = p.nodes[:i+1]\n")
+	fmt.Fprintf(f, "\tfor s < len(p.in) {\n\t\tp.silent++\n\t\te := p.%s(s)\n\t\tp.silent--\n\t\tp.nodes = p.nodes[:i+1]\n", sync)
+
+	if rec.Consume {
+		fmt.Fprintf(f, "\t\tif e >= 0 {\n\t\t\ts = e\n\t\t\tbreak\n\t\t}\n")
+	} else {
+		fmt.Fprintf(f, "\t\tif e >= 0 {\n\t\t\tbreak\n\t\t}\n")
+	}
+
+	fmt.Fprintf(f, "\t\t%s\n\t}\n", step)
+	fmt.Fprintf(f, "\tp.nodes = append(p.nodes, \x00N\x00{Rule: %s, Begin: int32(pos), End: int32(s), Size: 1})\n\treturn s\n}\n\n", c.errorConst())
 }
 
-type ruleData struct{ Const, Name string }
+func (c *compiler[T, P]) errorConst() string {
+	return c.cfg.Name + "RuleError"
+}
+
+type tmplData struct {
+	Package   string
+	Imports   []string
+	Prefix    string
+	Parser    string
+	Node      string
+	Tree      string
+	Rule      string
+	SynErr    string
+	ErrDeep   string
+	NewFn     string
+	ParseFn   string
+	Elem      string
+	In        string
+	SliceType string
+	UTF8      bool
+	Recover   bool
+	ErrorRule string
+	IsText    bool
+	IsRune    bool
+	MaxDepth  int
+	Root      string
+	Rules     []ruleData
+	Funcs     string
+	Lits      string
+}
+
+type ruleData struct{ Const, Name, Ident string }
 
 func (c *compiler[T, P]) generate() ([]byte, error) {
 	// the rules are named before any code is written, they use each other
+	idents := map[string]bool{}
+
 	for _, name := range c.g.Order {
-		c.ruleConst[name] = c.unique(c.cfg.Name + "Rule" + camel(name))
-		c.ruleFn[name] = c.unique("rule" + camel(name))
+		ident := camel(name)
+		for i := 2; idents[ident]; i++ {
+			ident = camel(name) + strconv.Itoa(i)
+		}
+
+		idents[ident] = true
+		c.ruleIdent[name] = ident
+		c.ruleConst[name] = c.unique(c.cfg.Name + "Rule" + ident)
+		c.ruleFn[name] = c.unique("rule" + ident)
+		c.ruleRecover[name] = c.unique("recover" + ident)
 	}
 
 	for _, name := range c.g.Order {
@@ -564,11 +878,17 @@ func (c *compiler[T, P]) generate() ([]byte, error) {
 		Parser: c.cfg.Name + "Parser", Node: c.cfg.Name + "Node", Tree: c.cfg.Name + "Tree", Rule: c.cfg.Name + "Rule",
 		SynErr: c.cfg.Name + "SyntaxError", ErrDeep: c.cfg.Name + "ErrTooDeep",
 		NewFn: "New" + c.cfg.Name + "Parser", ParseFn: c.cfg.Name + "Parse",
-		Elem: c.elem, IsText: c.isText, IsRune: c.elem == "rune", MaxDepth: c.cfg.MaxDepth, Root: root,
+		Elem: c.elem, IsText: c.isText, IsRune: c.elem == "rune" && !c.utf8, UTF8: c.utf8, MaxDepth: c.cfg.MaxDepth, Root: root,
+		In: "[]" + c.elem, SliceType: "[]" + c.elem,
+		Recover: len(c.cfg.Recover) > 0, ErrorRule: c.errorConst(),
+	}
+
+	if c.utf8 {
+		d.In, d.SliceType = "string", "string"
 	}
 
 	for _, name := range c.g.Order {
-		d.Rules = append(d.Rules, ruleData{Const: c.ruleConst[name], Name: name})
+		d.Rules = append(d.Rules, ruleData{Const: c.ruleConst[name], Name: name, Ident: c.ruleIdent[name]})
 	}
 
 	// the methods and the literals refer to the names of the types

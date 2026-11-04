@@ -172,9 +172,7 @@ func (r *Rule[T, P]) wrap(m *ebnf.Match[T, P]) *ebnf.Match[T, P] {
 
 func (r *Rule[T, P]) logFailure(rd ebnf.Reader[T, P], begin P) {
 	if r.atomic {
-		ebnf.LogMismatch(rd, ebnf.Pattern[T, P](r), func() *ebnf.Mismatch[T, P] {
-			return ebnf.NewMismatch(r, begin, begin, nil, nil)
-		})
+		ebnf.LogFailure(rd, ebnf.Pattern[T, P](r), begin, begin)
 	}
 }
 

@@ -47,7 +47,7 @@ func (v *Vector[T, P]) Match(rd ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], err
 				return false, nil, err
 			}
 
-			ebnf.LogMismatch(rd, ebnf.Pattern[T, P](v), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch[T, P](v, beginPos, endPos, nil, nil) })
+			ebnf.LogFailure(rd, ebnf.Pattern[T, P](v), beginPos, endPos)
 
 			return false, nil, nil
 		}

@@ -40,56 +40,91 @@ func (c *Concatenation[T, P]) matchCont(rd ebnf.Reader[T, P], k ebnf.Continuatio
 		return false, err
 	}
 
-	matches := make([]*ebnf.Match[T, P], 0, len(c.patterns))
-	failed := ebnf.NewFailSet(rd)
+	s := &concatCall[T, P]{
+		c:        c,
+		rd:       rd,
+		k:        k,
+		beginPos: beginPos,
+		matches:  make([]*ebnf.Match[T, P], 0, len(c.patterns)),
+	}
+	ebnf.InitFailSet(&s.failed, rd)
 
-	var step func(i int) (bool, error)
+	return s.step(0)
+}
 
-	step = func(i int) (bool, error) {
-		subBeginPos, err := rd.Position()
-		if ebnf.IsStreamError(err) {
-			return false, err
-		}
+// concatCall is the state of one MatchCont call of a concatenation.
+type concatCall[T, P any] struct {
+	c        *Concatenation[T, P]
+	rd       ebnf.Reader[T, P]
+	k        ebnf.Continuation[T, P]
+	beginPos P
 
-		// the rest of the concatenation (and the continuation) already failed from here
-		if failed.Has(i, subBeginPos) {
-			return false, nil
-		}
+	// matches holds the match of every sub pattern so far. When the concatenation is complete the slice itself is handed
+	// to the continuation, which saves a copy on the way that succeeds. It is then shared, and has to be copied before
+	// backtracking changes it.
+	matches []*ebnf.Match[T, P]
+	shared  bool
 
-		if i == len(c.patterns) {
-			matched, err := k(ebnf.NewMatch(c, beginPos, subBeginPos, nil, slices.Clone(matches)))
-			if err == nil && !matched {
-				failed.Add(i, subBeginPos)
-			}
+	failed ebnf.FailSet[P]
+}
 
-			return matched, err
-		}
+// set records the match of sub pattern i, forgetting the ones after it
+func (s *concatCall[T, P]) set(i int, m *ebnf.Match[T, P]) {
+	if s.shared {
+		s.matches = slices.Clone(s.matches[:i:i])
+		s.matches = slices.Grow(s.matches, len(s.c.patterns)-i)
+		s.shared = false
+	}
 
-		pm := c.patterns[i]
+	s.matches = append(s.matches[:i], m)
+}
 
-		matched, err := pm.MatchCont(rd, func(m *ebnf.Match[T, P]) (bool, error) {
-			matches = append(matches[:i], m)
-			return step(i + 1)
-		})
-		if err != nil || matched {
-			return matched, err
-		}
+func (s *concatCall[T, P]) step(i int) (bool, error) {
+	c, rd := s.c, s.rd
 
-		subEndPos, err := rd.Position()
-		if ebnf.IsStreamError(err) {
-			return false, err
-		}
+	subBeginPos, err := rd.Position()
+	if ebnf.IsStreamError(err) {
+		return false, err
+	}
 
-		ebnf.LogMismatch(rd, ebnf.Pattern[T, P](c), func() *ebnf.Mismatch[T, P] {
-			return ebnf.NewMismatch(c, beginPos, subEndPos, ebnf.NewMatch(pm, subBeginPos, subEndPos, nil, nil), slices.Clone(matches[:i]))
-		})
-
-		failed.Add(i, subBeginPos)
-
+	// the rest of the concatenation (and the continuation) already failed from here
+	if s.failed.Has(i, subBeginPos) {
 		return false, nil
 	}
 
-	return step(0)
+	if i == len(c.patterns) {
+		s.shared = true
+
+		matched, err := s.k(ebnf.NewMatch(c, s.beginPos, subBeginPos, nil, s.matches[:i:i]))
+		if err == nil && !matched {
+			s.failed.Add(i, subBeginPos)
+		}
+
+		return matched, err
+	}
+
+	pm := c.patterns[i]
+
+	matched, err := pm.MatchCont(rd, func(m *ebnf.Match[T, P]) (bool, error) {
+		s.set(i, m)
+		return s.step(i + 1)
+	})
+	if err != nil || matched {
+		return matched, err
+	}
+
+	subEndPos, err := rd.Position()
+	if ebnf.IsStreamError(err) {
+		return false, err
+	}
+
+	ebnf.LogMismatch(rd, ebnf.Pattern[T, P](c), func() *ebnf.Mismatch[T, P] {
+		return ebnf.NewMismatch(c, s.beginPos, subEndPos, ebnf.NewMatch(pm, subBeginPos, subEndPos, nil, nil), slices.Clone(s.matches[:i]))
+	})
+
+	s.failed.Add(i, subBeginPos)
+
+	return false, nil
 }
 
 // Generate writes a concatenation of patterns to a writer

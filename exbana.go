@@ -53,6 +53,9 @@
 // does not is [KindOpaque]. The declarative leaves of the entity and vector packages (Between, In, Equals, Text and the
 // like) say what they accept, where a leaf made from a function is only "one element".
 //
+// The codegen package writes a parser as Go source from an analysed grammar: a parser that does not use this library, much
+// faster, that returns a flat tree of the rules and the same syntax errors.
+//
 // The optimize package uses it to find the repetitions and alternations that never need to backtrack and to make them
 // possessive and orthogonal, which makes a grammar faster without changing what it matches.
 package exbana

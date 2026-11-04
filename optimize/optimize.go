@@ -162,6 +162,35 @@ func canBeKey[T, P any](p ebnf.Pattern[T, P]) (ok bool) {
 	return true
 }
 
+// Force makes every repetition possessive and every alternation orthogonal, safe or not, and returns how many patterns it
+// changed. That changes what the grammar matches wherever Blocked says it is not safe: the repetition keeps what it matched
+// and the alternation keeps the first branch that matches, whatever follows. It is how a grammar is made deterministic on
+// purpose, by someone who knows that is what it means; the code generator accepts such a grammar.
+func (r *Result[T, P]) Force() int {
+	forced := map[ebnf.Pattern[T, P]]bool{}
+
+	for _, d := range r.Decisions {
+		if d.pattern != nil && canBeKey(d.pattern) {
+			forced[d.pattern] = true
+		}
+	}
+
+	changed := 0
+
+	for p := range forced {
+		switch v := p.(type) {
+		case *repetition.Repetition[T, P]:
+			v.SetPossessive(true)
+			changed++
+		case *alternation.Alternation[T, P]:
+			v.SetOrthogonal(true)
+			changed++
+		}
+	}
+
+	return changed
+}
+
 // Optimize is Analyze followed by Apply.
 func Optimize[T Integer, P any](p ebnf.Pattern[T, P], opts Options) (*Result[T, P], error) {
 	res, err := Analyze(p, opts)

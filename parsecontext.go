@@ -1,5 +1,7 @@
 package exbana
 
+import "slices"
+
 // ParseContext is a reader with everything a parse needs besides the grammar: where mismatches are logged and the
 // failure memo. Patterns find it through the reader they are given, so the grammar itself is never changed by a
 // parse. That makes one grammar usable by many parses at the same time, each with its own context.
@@ -23,6 +25,14 @@ type frameStack[T, P any] struct {
 
 	// frames that are done, kept to be used again: a rule call would otherwise allocate a frame every time
 	free []*RuleFrame[T, P]
+
+	// the matches of left recursive rules, see RuleResult
+	results map[Pattern[T, P]][]ruleResult[T, P]
+}
+
+type ruleResult[T, P any] struct {
+	pos     P
+	matches []*Match[T, P]
 }
 
 // RuleFrame is a rule that is being matched at a position. A rule uses it to notice that it is being entered again
@@ -118,6 +128,52 @@ func (c *ParseContext[T, P]) FindOpenFrame(p Pattern[T, P], pos P) *RuleFrame[T,
 	}
 
 	return nil
+}
+
+// RuleResult returns the matches a left recursive rule has found at the position earlier in this parse. A rule that is
+// used at many positions, like an expression in the parentheses of an expression, would otherwise grow its seed again
+// every time it is reached, and nested use makes that exponential. It is independent of WithMemo.
+// While a rule is growing a seed at the position nothing is known: what is found there depends on the seed.
+func (c *ParseContext[T, P]) RuleResult(p Pattern[T, P], pos P) ([]*Match[T, P], bool) {
+	if c.growingAt(pos) {
+		return nil, false
+	}
+
+	entries := c.frames.results[p]
+
+	i, found := slices.BinarySearchFunc(entries, pos, func(e ruleResult[T, P], target P) int {
+		// negative when e is before target
+		return -c.Length(e.pos, target)
+	})
+	if !found {
+		return nil, false
+	}
+
+	return entries[i].matches, true
+}
+
+// SetRuleResult remembers the matches of a left recursive rule at the position, see RuleResult. It is ignored while a
+// rule is growing a seed at the position.
+func (c *ParseContext[T, P]) SetRuleResult(p Pattern[T, P], pos P, matches []*Match[T, P]) {
+	if c.growingAt(pos) {
+		return
+	}
+
+	if c.frames.results == nil {
+		c.frames.results = make(map[Pattern[T, P]][]ruleResult[T, P])
+	}
+
+	entries := c.frames.results[p]
+
+	i, found := slices.BinarySearchFunc(entries, pos, func(e ruleResult[T, P], target P) int {
+		return -c.Length(e.pos, target)
+	})
+	if found {
+		entries[i].matches = matches
+		return
+	}
+
+	c.frames.results[p] = slices.Insert(entries, i, ruleResult[T, P]{pos: pos, matches: matches})
 }
 
 // growingAt returns true if a rule is growing a seed at the position. Results of patterns at that position depend on

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	ebnf "github.com/almerlucke/exbana/v3"
 )
@@ -77,8 +78,10 @@ func (r *Rule[T, P]) SetAtomic(atomic bool) *Rule[T, P] {
 // handed to the recursive calls, until no new match appears. The result is left associative, "1-2-3" matches as
 // "(1-2)-3". Indirect left recursion (a = b "x", b = a "y") works if one rule in the cycle is marked.
 //
-// A marked rule works out all its matches before it offers the first, which costs time for every round. Growing a
-// chain of n terms takes about n rounds, so quadratic time in n. Mark only the rules that need it.
+// A marked rule works out all its matches before it offers the first, and offers them longest first. The work is
+// proportional to the number of matches, a chain of n terms takes time linear in n. What a marked rule found at a
+// position is remembered for the rest of the parse, so using it at many positions, like an expression inside the
+// parentheses of an expression, costs no more than parsing the text once.
 //
 // A rule that is not marked and is entered again at the same position returns ErrLeftRecursion instead of
 // recursing without end.
@@ -138,7 +141,7 @@ func (r *Rule[T, P]) MatchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) 
 	}
 
 	if r.leftRec {
-		return r.matchGrowing(ctx, begin, k)
+		return r.matchGrowingCached(ctx, begin, k)
 	}
 
 	frame := ctx.PushFrame(r, begin, false)
@@ -191,7 +194,26 @@ func offer[T, P any](rd ebnf.Reader[T, P], matches []*ebnf.Match[T, P], k ebnf.C
 	return false, nil
 }
 
+// matchGrowingCached is matchGrowing, but a rule that is used at the same position again gets the matches it found
+// the first time.
+func (r *Rule[T, P]) matchGrowingCached(ctx *ebnf.ParseContext[T, P], begin P, k ebnf.Continuation[T, P]) (bool, error) {
+	if results, known := ctx.RuleResult(r, begin); known {
+		return offer(ctx, results, k)
+	}
+
+	return r.matchGrowing(ctx, begin, k)
+}
+
 // matchGrowing matches a left recursive rule by growing a seed until it is stable.
+//
+// Each round runs the definition with the left recursive calls answered from the seed, and what it finds that is not
+// known yet joins the matches. The next round only has to answer the recursive calls with the new matches, which
+// makes the work proportional to the number of matches and not to its square. That is enough because a match built
+// on an old match was found in an earlier round, and a second recursive call at the same position can only follow an
+// empty match, so what it combines ends where the other seed match ends: it adds a different tree for an end that
+// is already known, and ends are what matching needs.
+//
+// The matches are offered longest first.
 func (r *Rule[T, P]) matchGrowing(ctx *ebnf.ParseContext[T, P], begin P, k ebnf.Continuation[T, P]) (bool, error) {
 	frame := ctx.PushFrame(r, begin, true)
 
@@ -200,7 +222,10 @@ func (r *Rule[T, P]) matchGrowing(ctx *ebnf.ParseContext[T, P], begin P, k ebnf.
 		inner = ebnf.Silent(inner)
 	}
 
-	var results []*ebnf.Match[T, P]
+	var (
+		results []*ebnf.Match[T, P]
+		known   = ebnf.NewEndSet[T, P](ctx)
+	)
 
 	for {
 		frame.Used = false
@@ -211,12 +236,11 @@ func (r *Rule[T, P]) matchGrowing(ctx *ebnf.ParseContext[T, P], begin P, k ebnf.
 			return false, err
 		}
 
-		found, ends := []*ebnf.Match[T, P]{}, ebnf.NewEndSet[T, P](ctx)
+		var fresh []*ebnf.Match[T, P]
 
-		// every way the definition matches, one for each end, with the current seed standing in for the recursive calls
 		_, err := r.inner.MatchCont(inner, func(m *ebnf.Match[T, P]) (bool, error) {
-			if ends.Add(m.End) {
-				found = append(found, r.wrap(m))
+			if known.Add(m.End) {
+				fresh = append(fresh, r.wrap(m))
 			}
 
 			return false, nil
@@ -226,42 +250,24 @@ func (r *Rule[T, P]) matchGrowing(ctx *ebnf.ParseContext[T, P], begin P, k ebnf.
 			return false, err
 		}
 
-		if !frame.Used {
-			results = found
+		results = append(results, fresh...)
+
+		// nothing used the seed, or nothing new was found: the seed is stable
+		if !frame.Used || len(fresh) == 0 {
 			break
 		}
 
-		// the seed only grows, which is what makes sure the rounds end: there are only so many positions
-		grown := false
-
-		for _, m := range frame.Seed {
-			if ends.Add(m.End) {
-				found = append(found, m)
-			}
-		}
-
-		seen := ebnf.NewEndSet[T, P](ctx)
-		for _, m := range frame.Seed {
-			seen.Add(m.End)
-		}
-
-		for _, m := range found {
-			if !seen.Has(m.End) {
-				grown = true
-				break
-			}
-		}
-
-		frame.Seed = found
-
-		if !grown {
-			results = found
-			break
-		}
+		frame.Seed = fresh
 	}
 
 	// the rule is done, what follows is not part of working out its matches
 	ctx.PopFrame(frame)
+
+	slices.SortStableFunc(results, func(a, b *ebnf.Match[T, P]) int {
+		return ctx.Length(begin, b.End) - ctx.Length(begin, a.End)
+	})
+
+	ctx.SetRuleResult(r, begin, results)
 
 	if len(results) == 0 {
 		r.logFailure(ctx, begin)

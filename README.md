@@ -30,7 +30,7 @@ The fundamental interface representing an EBNF pattern. It has three methods: `M
 Everything else is optional and found by asking the pattern: `Named` (an `ID`, which `Match.Unpack`, syntax errors and printing use), `Evaluator` (turns a match into a value, which `Match.Eval` calls) and `Unpackable`. To write your own pattern, implement the three methods; `ebnf.Single` helps with patterns that have one candidate. Names go on patterns with `.Named("digit")`, print text with `.Printed("\"+\"")`, and evaluation functions on a `rule.Rule`. `Named` and `Printed` return the pattern, so they chain with the other setters (`repetition.Any(p).Named("ws").SetPossessive(true)`). The generic helpers `ebnf.Name(p, "digit")` and `ebnf.Text(p, ...)` do the same for any type that embeds `ebnf.Label`, such as your own patterns.
 
 ### `Reader[T, P]`
-An interface for a stream that serves objects of type `T` at positions of type `P`. The library provides a `runes` reader for matching against strings or rune slices.
+An interface for a stream that serves objects of type `T` at positions of type `P`. The library provides a `runes` reader for text and a `slice` reader (`slice.New(items)`, positions are indexes) for anything else: tokens from a lexer, bytes, events, records.
 
 ### `Match[T, P]`
 Contains the result of a successful match, including the matched pattern, the range (begin/end positions), and any sub-component matches. `m.ID()` gives the name of the matched pattern, `m.Eval(reader)` evaluates it and `m.Unpack()` looks through unnamed wrappers like an alternation.
@@ -236,9 +236,11 @@ expr.Define(alt(sub, number))
 // "1-2-3" matches as ((1-2)-3), the tree is left associative
 ```
 
-Indirect recursion (`a = b "x"`, `b = a "y"`) works if one rule in the cycle is marked. The price: a marked rule works out *all* its
-matches before it offers the first, and a chain of n terms takes n rounds, so mark only the rules that need it. A rule that is not
-marked and is entered again at the same position returns `rule.ErrLeftRecursion` (naming the rule) and does not overflow the stack.
+Indirect recursion (`a = b "x"`, `b = a "y"`) works if one rule in the cycle is marked. A marked rule works out *all* its matches
+(longest first) before it offers the first, so mark only the rules that need it. The work is linear in the number of matches, and
+what a marked rule found at a position is remembered for the rest of the parse, so an expression inside the parentheses of an
+expression costs no more than parsing the text once. A rule that is not marked and is entered again at the same position returns
+`rule.ErrLeftRecursion` (naming the rule) and does not overflow the stack.
 
 ## EBNF Printing
 
@@ -253,6 +255,7 @@ fmt.Print(rules)
 ## Examples
 
 - `examples/expr`: an expression calculator (precedence, functions, variables, syntax errors) in three modes: backtracking, memoized and committed. Also shows concurrent use of one grammar.
+- `examples/tokens`: a calculator in two stages: a lexer produces a `[]Token` and the grammar parses it through a slice reader, with left recursive rules for left associative operators and syntax errors that point back into the text.
 - `examples/json`, `examples/xml`: parsers with evaluation functions that build values.
 - `examples/golang`: Go literal tokens, scanning and seeded generation.
 - `examples/melody`: seeded melody generation with weights and state.

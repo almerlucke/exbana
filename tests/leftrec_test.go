@@ -3,6 +3,7 @@ package tests
 import (
 	"errors"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -399,5 +400,77 @@ func TestMatchesFindsAmbiguity(t *testing.T) {
 	}
 	if n := count(unambiguous, "aab"); n != 1 {
 		t.Errorf("a* b on aab: %d parses, want 1", n)
+	}
+}
+
+func TestLeftRecursionThatCombinesTwoSeedMatches(t *testing.T) {
+	// e = e e | "a" | x* is nullable (the input has no x, so x* is the empty match) and calls itself twice at the same
+	// position, so a match can be built from two matches of the seed. The language is a*, and every number of a's from
+	// none to all is a way to end.
+	e := rule.Declare[rune, runes.Pos]("e").SetLeftRecursive(true)
+	e.Define(altR(concR(e, e), runeR('a'), repR(runeR('x'), 0, 0)))
+
+	for n := 0; n <= 6; n++ {
+		in := strings.Repeat("a", n)
+
+		var ends []int
+		for m, err := range ebnf.Matches[rune, runes.Pos](e, newRunes(in+"b")) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			ends = append(ends, m.End.Index)
+		}
+
+		// longest first, each end once
+		want := make([]int, n+1)
+		for i := range want {
+			want[i] = n - i
+		}
+		if !slices.Equal(ends, want) {
+			t.Errorf("n=%d: ends %v, want %v", n, ends, want)
+		}
+
+		if ok, _, err := ebnf.Parse[rune, runes.Pos](concR(e, endR()), newRunes(in)); !ok || err != nil {
+			t.Errorf("n=%d: a^n does not match, ok=%v err=%v", n, ok, err)
+		}
+		if ok, _, _ := ebnf.Parse[rune, runes.Pos](concR(e, endR()), newRunes(in+"b")); ok {
+			t.Errorf("n=%d: matched a^n b", n)
+		}
+	}
+}
+
+func TestNestedLeftRecursionIsNotExponential(t *testing.T) {
+	// expr = expr "+" term | term   term = "1" | "(" expr ")"   Every level of parentheses reaches expr at a new position,
+	// and each time a left recursive rule runs at least two rounds. Without remembering what the rule found at a
+	// position, the work multiplied with every level.
+	expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
+	term := rule.Declare[rune, runes.Pos]("term")
+	expr.Define(altR(concR(expr, runeR('+'), term), term))
+	term.Define(altR(runeR('1'), concR(runeR('('), expr, runeR(')'))))
+	full := concR(expr, endR())
+
+	for _, memo := range []bool{false, true} {
+		for _, depth := range []int{1, 5, 40} {
+			in := strings.Repeat("(1+", depth) + "1" + strings.Repeat(")", depth)
+
+			done := make(chan bool, 1)
+			go func() {
+				var rd ebnf.Reader[rune, runes.Pos] = newRunes(in)
+				if memo {
+					rd = ebnf.WithMemo[rune, runes.Pos](rd, func(p runes.Pos) int { return p.Index })
+				}
+				ok, _, err := ebnf.Parse[rune, runes.Pos](full, rd)
+				done <- ok && err == nil
+			}()
+
+			select {
+			case ok := <-done:
+				if !ok {
+					t.Errorf("depth %d memo=%v: no match", depth, memo)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatalf("depth %d memo=%v: did not finish", depth, memo)
+			}
+		}
 	}
 }

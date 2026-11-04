@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"io"
 	"slices"
 	"testing"
 
@@ -14,61 +13,13 @@ import (
 	"github.com/almerlucke/exbana/v3/patterns/repetition"
 	"github.com/almerlucke/exbana/v3/patterns/rule"
 	"github.com/almerlucke/exbana/v3/patterns/vector"
+	"github.com/almerlucke/exbana/v3/readers/slice"
 )
 
 // The library is generic in the element type and the position type. These tests use ints as elements and a plain
-// int as position, which has nothing in common with the runes reader (no lines, no columns).
+// int as position, through the slice reader, which has nothing in common with the runes reader (no lines, no columns).
 
-type intReader struct {
-	data []int
-	pos  int
-}
-
-func newInts(v ...int) *intReader { return &intReader{data: v} }
-
-func (r *intReader) Peek1() (int, error) {
-	if r.pos < len(r.data) {
-		return r.data[r.pos], nil
-	}
-	return 0, io.EOF
-}
-
-func (r *intReader) Read1() (int, error) {
-	v, err := r.Peek1()
-	if err == nil {
-		r.pos++
-	}
-	return v, err
-}
-
-func (r *intReader) Peek(n int, buf []int) (int, error) {
-	i := copy(buf[:n], r.data[min(r.pos, len(r.data)):])
-	if i != n {
-		return i, io.EOF
-	}
-	return i, nil
-}
-
-func (r *intReader) Read(n int, buf []int) (int, error) {
-	i, err := r.Peek(n, buf)
-	r.pos += i
-	return i, err
-}
-
-func (r *intReader) Skip(n int) (int, error) {
-	i := min(n, len(r.data)-r.pos)
-	r.pos += i
-	if i != n {
-		return i, io.EOF
-	}
-	return i, nil
-}
-
-func (r *intReader) Finished() bool                { return r.pos >= len(r.data) }
-func (r *intReader) Position() (int, error)        { return r.pos, nil }
-func (r *intReader) SetPosition(p int) error       { r.pos = p; return nil }
-func (r *intReader) Length(a, b int) int           { return b - a }
-func (r *intReader) Range(a, b int) ([]int, error) { return r.data[a:b], nil }
+func newInts(v ...int) *slice.Reader[int] { return slice.New(v) }
 
 type intWriter struct {
 	out      []int
@@ -85,8 +36,6 @@ type (
 func isOdd(x int) bool    { return x%2 != 0 }
 func isEven(x int) bool   { return x%2 == 0 }
 func eqInt(a, b int) bool { return a == b }
-
-func intIdx(p int) int { return p }
 
 func oddP() *ent.Entity[int, int]  { return ebnf.Name(ent.New[int, int](isOdd), "odd") }
 func evenP() *ent.Entity[int, int] { return ebnf.Name(ent.New[int, int](isEven), "even") }
@@ -152,7 +101,7 @@ func TestGenericReaderBacktrackingAndMemo(t *testing.T) {
 	for _, memo := range []bool{false, true} {
 		var rd ebnf.Reader[int, int] = newInts(4, 5, 9)
 		if memo {
-			rd = ebnf.WithMemo[int, int](rd, intIdx)
+			rd = ebnf.WithMemo[int, int](rd, slice.Index)
 		}
 
 		ok, m, err := ebnf.Parse[int, int](build(), rd)

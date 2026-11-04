@@ -4,6 +4,7 @@
 //
 // # Using the library
 //
+// Readers come from the readers packages: runes for text, slice for a slice of anything (tokens from a lexer, say).
 // Build a grammar from the pattern packages (entity, vector, concatenation, alternation, repetition, except, end and
 // rule), match it with [Parse], and read the result from the [Match]:
 //

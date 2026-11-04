@@ -1,3 +1,3 @@
-module github.com/almerlucke/exbana/v2
+module github.com/almerlucke/exbana/v3
 
 go 1.22.2

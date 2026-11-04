@@ -15,7 +15,7 @@ Exbana is a versatile and generic EBNF-based pattern matching and generation lib
 ## Installation
 
 ```bash
-go get github.com/almerlucke/exbana/v2
+go get github.com/almerlucke/exbana/v3
 ```
 
 ## Core Concepts
@@ -50,12 +50,12 @@ package main
 
 import (
 	"fmt"
-	ebnf "github.com/almerlucke/exbana/v2"
-	"github.com/almerlucke/exbana/v2/patterns/alternation"
-	"github.com/almerlucke/exbana/v2/patterns/concatenation"
-	ent "github.com/almerlucke/exbana/v2/patterns/entity"
-	"github.com/almerlucke/exbana/v2/patterns/repetition"
-	"github.com/almerlucke/exbana/v2/readers/runes"
+	ebnf "github.com/almerlucke/exbana/v3"
+	"github.com/almerlucke/exbana/v3/patterns/alternation"
+	"github.com/almerlucke/exbana/v3/patterns/concatenation"
+	ent "github.com/almerlucke/exbana/v3/patterns/entity"
+	"github.com/almerlucke/exbana/v3/patterns/repetition"
+	"github.com/almerlucke/exbana/v3/readers/runes"
 	"unicode"
 )
 

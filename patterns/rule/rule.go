@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // Rule gives a pattern a name and an evaluation function. It is the unit a grammar is made of:

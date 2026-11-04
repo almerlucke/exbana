@@ -5,7 +5,7 @@ import (
 	"io"
 	"slices"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // Repetition matches a sub-pattern multiple times.

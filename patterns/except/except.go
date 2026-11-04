@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	ebnf "github.com/almerlucke/exbana/v2"
+	ebnf "github.com/almerlucke/exbana/v3"
 )
 
 // Except must not match the except pattern but must match the must pattern

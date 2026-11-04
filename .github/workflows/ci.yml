@@ -52,5 +52,8 @@ jobs:
       - name: Optimized grammars against the originals
         run: go test ./tests -run '^$' -fuzz '^FuzzOptimizedGrammarsMatchLikeTheOriginal$' -fuzztime 30s
 
+      - name: Generated JSON parser against its grammar
+        run: go test ./examples/jsongen -run '^$' -fuzz '^FuzzGeneratedParserAgainstGrammar$' -fuzztime 30s
+
       - name: Slice reader against the runes reader
         run: go test ./readers/slice -run '^$' -fuzz '^FuzzReaderOperations$' -fuzztime 20s

@@ -7,16 +7,19 @@ Exbana is a versatile and generic EBNF-based pattern matching and generation lib
 - **Generic**: Works with any type of stream elements (`T`) and any position type (`P`).
 - **EBNF Constructs**: Supports concatenation, alternation, repetition (optional, any, one-or-more), and exceptions.
 - **Backtracking**: Full backtracking across concatenations, alternations and repetitions, with opt-outs (possessive, orthogonal) and optional failure memoization.
-- **Evaluation**: Easily attach evaluation functions to patterns to process match results.
-- **Generation**: Can generate output based on defined patterns.
+- **Rules**: Named patterns with evaluation functions and forward declarations for recursive grammars.
+- **Syntax errors**: Reports the farthest failure and what was expected there.
+- **Safe to share**: Everything specific to one parse lives in a `ParseContext`, so one grammar can serve many goroutines at once.
+- **Generation**: Seeded, weighted generation from the same patterns.
 - **EBNF Printing**: Can print defined patterns back into EBNF format.
-- **Debugging**: Integrated logging system for tracking matches and troubleshooting mismatches.
 
 ## Installation
 
 ```bash
 go get github.com/almerlucke/exbana/v3
 ```
+
+Requires Go 1.27 or newer.
 
 ## Core Concepts
 
@@ -29,10 +32,20 @@ Everything else is optional and found by asking the pattern: `Named` (an `ID`, w
 An interface for a stream that serves objects of type `T` at positions of type `P`. The library provides a `runes` reader for matching against strings or rune slices.
 
 ### `Match[T, P]`
-Contains the result of a successful match, including the matched pattern, the range (begin/end positions), and any sub-component matches.
+Contains the result of a successful match, including the matched pattern, the range (begin/end positions), and any sub-component matches. `m.ID()` gives the name of the matched pattern, `m.Eval(reader)` evaluates it and `m.Unpack()` looks through unnamed wrappers like an alternation.
+
+### `ParseContext[T, P]`
+Wraps a reader and carries everything that belongs to one parse: the logger and the failure memo. Patterns are never changed while matching, so a grammar can be shared between goroutines as long as each parse has its own context:
+
+```go
+ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log).WithMemo(func(p runes.Pos) int { return p.Index })
+matched, match, err := ebnf.Parse(grammar, ctx)
+```
+
+Both `WithLogger` and `WithMemo` are optional. Any `Reader` works too, you just get no logging and no memo.
 
 ### `Logger[T, P]`
-Allows you to track the matching process, which is especially useful for debugging complex grammars to find why and where a match failed.
+Receives the mismatches of a parse, which is useful for debugging complex grammars to find why and where a match failed. See `StackLog` and `FarthestLog` (below). Mismatches are only built when a logger is listening.
 
 ## Built-in Patterns
 
@@ -42,6 +55,8 @@ Allows you to track the matching process, which is especially useful for debuggi
 - **`alternation`**: Matches one of several sub-patterns (returns the longest match by default).
 - **`repetition`**: Matches a sub-pattern multiple times (supports min/max counts and possessive matching).
 - **`except`**: Matches a pattern only if another "exception" pattern does not match at the same position.
+- **`end`**: Matches the end of the stream.
+- **`rule`**: A named pattern with an evaluation function, see Rules.
 
 ## Quick Example (JSON-like Number)
 
@@ -50,13 +65,15 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"unicode"
+
 	ebnf "github.com/almerlucke/exbana/v3"
 	"github.com/almerlucke/exbana/v3/patterns/alternation"
 	"github.com/almerlucke/exbana/v3/patterns/concatenation"
 	ent "github.com/almerlucke/exbana/v3/patterns/entity"
 	"github.com/almerlucke/exbana/v3/patterns/repetition"
 	"github.com/almerlucke/exbana/v3/readers/runes"
-	"unicode"
 )
 
 func main() {
@@ -65,29 +82,30 @@ func main() {
 	conc := concatenation.New[rune, runes.Pos]
 	rep := repetition.Any[rune, runes.Pos]
 	opt := repetition.Optional[rune, runes.Pos]
-	
-	digit := ent.New[rune, runes.Pos](unicode.IsDigit)
-	digit1to9 := ent.New[rune, runes.Pos](func(r rune) bool {
-		return r >= '1' && r <= '9'
-	})
-	
+
+	char := func(c rune) *ent.Entity[rune, runes.Pos] {
+		return ebnf.Text(ent.New[rune, runes.Pos](func(r rune) bool { return r == c }), `"`+string(c)+`"`)
+	}
+	digit := ebnf.Name(ent.New[rune, runes.Pos](unicode.IsDigit), "digit")
+	digit1to9 := ebnf.Name(ent.New[rune, runes.Pos](func(r rune) bool { return r >= '1' && r <= '9' }), "digit1to9")
+
 	// integer = [ "-" ] ( "0" | digit1to9 { digit } )
-	integer := conc(
-		opt(ent.New[rune, runes.Pos](func(r rune) bool { return r == '-' })),
-		alt(
-			ent.New[rune, runes.Pos](func(r rune) bool { return r == '0' }),
-			conc(digit1to9, rep(digit)),
-		),
-	)
+	integer := ebnf.Name(conc(
+		opt(char('-')),
+		alt(char('0'), conc(digit1to9, rep(digit))),
+	), "integer")
 
 	// Create a reader for a string
-	rd := runes.New([]rune("-123"))
-	
+	rd, err := runes.New(strings.NewReader("-123"))
+	if err != nil {
+		panic(err)
+	}
+
 	matched, match, err := ebnf.Parse[rune, runes.Pos](integer, rd)
 	if err != nil {
 		panic(err)
 	}
-	
+
 	if matched {
 		// Get matched content
 		content, _ := rd.Range(match.Begin, match.End)
@@ -103,7 +121,7 @@ patterns are asked for their next alternative. Matches are offered in order of p
 
 - `alternation`: longest first (ties in pattern order), and each branch's other matches after its first.
 - `repetition`: greedy, giving back one repetition at a time down to `min`.
-- `Match` is simply "the first candidate that fully matches".
+- `ebnf.Parse` is simply "the first candidate that fully matches".
 
 So `(a*), a` matches `aa`, and `(a | ab), "bc"` matches `abc`.
 
@@ -113,7 +131,7 @@ grammar that are unambiguous, opt out:
 - `repetition.SetPossessive(true)`: iterative, never gives matches back.
 - `alternation.SetOrthogonal(true)`: commits to the first branch that matches.
 
-For grammars that do backtrack a lot, wrap the reader to remember dead ends:
+For grammars that do backtrack a lot, ask the parse context to remember dead ends:
 
 ```go
 rd, _ := runes.New(strings.NewReader(input))
@@ -186,15 +204,35 @@ pattern it wraps. Matching a rule that was declared but never defined returns an
 
 ## EBNF Printing
 
-Exbana can output your defined patterns as EBNF strings:
+Exbana can output your defined patterns as EBNF strings. Named patterns print as their name inside other patterns, and leaves print as their `ebnf.Text`:
 
 ```go
-rules, _ := ebnf.PrintRules([]ebnf.Pattern[rune, runes.Pos]{ebnf.Name(integer, "integer")})
-fmt.Println(rules)
-// Output: integer = [ "-" ] ( "0" | digit1to9 { digit } )
+rules, _ := ebnf.PrintRules([]ebnf.Pattern[rune, runes.Pos]{integer})
+fmt.Print(rules)
+// Output: integer = ("-"?, ("0" | (digit1to9, digit*)))
 ```
 
-## Advanced Usage
+## Examples
 
-For more complex examples including full JSON parsing and Go-like grammar, see the `examples/` directory.
+- `examples/expr`: an expression calculator (precedence, functions, variables, syntax errors) in three modes: backtracking, memoized and committed. Also shows concurrent use of one grammar.
+- `examples/json`, `examples/xml`: parsers with evaluation functions that build values.
+- `examples/golang`: Go literal tokens, scanning and seeded generation.
+- `examples/melody`: seeded melody generation with weights and state.
 
+## Upgrading from v2
+
+`Pattern` shrank from 16 methods to three (`MatchCont`, `Generate`, `Print`); the rest became optional interfaces or helpers.
+
+| v2 | v3 |
+|---|---|
+| `p.Match(rd)` on a `Pattern` | `ebnf.Parse(p, rd)` (concrete types still have `Match`) |
+| `p.SetID("x")` | `ebnf.Name(p, "x")` |
+| `p.SetPrintOutput("x")` | `ebnf.Text(p, "x")` |
+| `p.SetEvalFunc(f)` | `rule.New("x", p).WithEval(f)` |
+| `p.SetLogger(l)`, `ebnf.SetLogger` | `ebnf.NewParseContext(rd).WithLogger(l)` |
+| `ebnf.WithMemo(rd, idx)` returning a `MemoReader` | same call, it returns a `*ParseContext`; or `NewParseContext(rd).WithMemo(idx)` |
+| placeholder `conc()` + `SetPatterns` for recursion | `rule.Declare(name)` and `.Define(p)` |
+| `BasePattern`, `Self`, `SetSelf` | gone: embed `ebnf.Label` for a name and print text, implement the three methods |
+| `p.ID()`, `p.Eval(m, rd)` on a `Pattern` | `ebnf.IDOf(p)`, `m.ID()`, `m.Eval(rd)` |
+
+Fluent configuration that returns the concrete type (`SetPossessive`, `SetOrthogonal`, `SetWeights`, `SetMaxGen`, ...) is unchanged. A `Rule`'s `Print` prints only the definition; `ebnf.PrintRules` adds the `name =`.

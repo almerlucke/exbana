@@ -23,7 +23,7 @@ func Scan[T, P any](stream Reader[T, P], pattern Pattern[T, P]) ([]*Match[T, P],
 		if IsStreamError(err) {
 			return nil, err
 		}
-		matched, result, err := pattern.Match(stream)
+		matched, result, err := Parse(pattern, stream)
 		if err != nil {
 			return nil, err
 		}
@@ -60,7 +60,7 @@ func PrintRules[T, P any](patterns []Pattern[T, P]) (string, error) {
 	var buf bytes.Buffer
 
 	for _, pattern := range patterns {
-		_, err := buf.WriteString(fmt.Sprintf("%s = ", pattern.ID()))
+		_, err := buf.WriteString(fmt.Sprintf("%s = ", IDOf(pattern)))
 		if err != nil {
 			return "", err
 		}

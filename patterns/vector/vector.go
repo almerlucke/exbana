@@ -8,7 +8,7 @@ import (
 
 // Vector represents a series of entities to match
 type Vector[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 	eq     func(T, T) bool
 	vector []T
 }
@@ -16,14 +16,16 @@ type Vector[T, P any] struct {
 // New creates a new vector pattern
 func New[T, P any](eq func(T, T) bool, vec ...T) *Vector[T, P] {
 	v := &Vector[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-		eq:          eq,
-		vector:      vec,
+		eq:     eq,
+		vector: vec,
 	}
 
-	v.SetSelf(v)
-
 	return v
+}
+
+// MatchCont offers the one match of the vector
+func (v *Vector[T, P]) MatchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.Single(rd, k, v.Match)
 }
 
 // Match matches the vector pattern against a stream
@@ -85,6 +87,6 @@ func (v *Vector[T, P]) Recognize(values []T) (bool, bool) {
 }
 
 func (v *Vector[T, P]) Print(w io.Writer) error {
-	_, err := w.Write([]byte(v.PrintOutput()))
+	_, err := w.Write([]byte(v.Text()))
 	return err
 }

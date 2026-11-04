@@ -47,17 +47,27 @@ func (m *Match[T, P]) Optional() (*Match[T, P], bool) {
 func (m *Match[T, P]) Unpack() *Match[T, P] {
 	u := m
 
-	for u.Pattern.CanUnpack() && len(u.Components) > 0 && u.Pattern.ID() == NoID {
+	for len(u.Components) > 0 && IDOf(u.Pattern) == NoID {
+		if up, ok := u.Pattern.(Unpackable); !ok || !up.CanUnpack() {
+			break
+		}
+
 		u = u.Components[0]
 	}
 
 	return u
 }
 
+// ID returns the identifier of the matched pattern, empty if it has none.
 func (m *Match[T, P]) ID() string {
-	return m.Pattern.ID()
+	return IDOf(m.Pattern)
 }
 
+// Eval evaluates the match with the pattern that matched, if it is an Evaluator, and otherwise returns the matched value.
 func (m *Match[T, P]) Eval(r Reader[T, P]) (any, error) {
-	return m.Pattern.Eval(m, r)
+	if e, ok := m.Pattern.(Evaluator[T, P]); ok {
+		return e.Eval(m, r)
+	}
+
+	return m.Value, nil
 }

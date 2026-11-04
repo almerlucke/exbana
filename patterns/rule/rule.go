@@ -24,19 +24,16 @@ import (
 //
 // Define must be called before the rule is used to match or generate, matching an undefined rule is an error.
 type Rule[T, P any] struct {
-	*ebnf.BasePattern[T, P]
-	inner   ebnf.Pattern[T, P]
-	atomic  bool
-	evalSet bool
+	ebnf.Label
+	inner    ebnf.Pattern[T, P]
+	atomic   bool
+	evalFunc func(*ebnf.Match[T, P], ebnf.Reader[T, P]) (any, error)
 }
-
-func (r *Rule[T, P]) hasEval() bool { return r.evalSet }
 
 // New creates a rule with a name and a definition.
 func New[T, P any](name string, inner ebnf.Pattern[T, P]) *Rule[T, P] {
-	r := &Rule[T, P]{BasePattern: ebnf.NewBasePattern[T, P](), inner: inner}
-	r.SetSelf(r)
-	r.BasePattern.SetID(name)
+	r := &Rule[T, P]{inner: inner}
+	r.SetID(name)
 	return r
 }
 
@@ -56,10 +53,9 @@ func (r *Rule[T, P]) Defined() bool {
 	return r.inner != nil
 }
 
-// WithEval sets the function that evaluates a match of this rule. It is the typed form of SetEvalFunc.
+// WithEval sets the function that evaluates a match of this rule.
 func (r *Rule[T, P]) WithEval(f func(*ebnf.Match[T, P], ebnf.Reader[T, P]) (any, error)) *Rule[T, P] {
-	r.BasePattern.SetEvalFunc(f)
-	r.evalSet = f != nil
+	r.evalFunc = f
 	return r
 }
 
@@ -70,18 +66,18 @@ func (r *Rule[T, P]) SetAtomic(atomic bool) *Rule[T, P] {
 	return r
 }
 
-// SetEvalFunc sets the evaluation function, returning the rule.
-func (r *Rule[T, P]) SetEvalFunc(f func(*ebnf.Match[T, P], ebnf.Reader[T, P]) (any, error)) ebnf.Pattern[T, P] {
-	return r.WithEval(f)
-}
-
-// Eval evaluates a match of this rule: with the eval function if there is one, otherwise with the wrapped pattern.
+// Eval evaluates a match of this rule: with the eval function if there is one, otherwise with the wrapped pattern
+// if that can evaluate, otherwise it returns the matched value.
 func (r *Rule[T, P]) Eval(m *ebnf.Match[T, P], rd ebnf.Reader[T, P]) (any, error) {
-	if r.inner != nil && !r.hasEval() {
-		return r.inner.Eval(m, rd)
+	if r.evalFunc != nil {
+		return r.evalFunc(m, rd)
 	}
 
-	return r.BasePattern.Eval(m, rd)
+	if e, ok := r.inner.(ebnf.Evaluator[T, P]); ok {
+		return e.Eval(m, rd)
+	}
+
+	return m.Value, nil
 }
 
 func (r *Rule[T, P]) undefined() error {
@@ -139,12 +135,9 @@ func (r *Rule[T, P]) Generate(ctx *ebnf.GenContext, w ebnf.Writer[T]) error {
 	return r.inner.Generate(ctx, w)
 }
 
-// Print prints the rule as a production: name = definition
+// Print prints the definition of the rule. Inside other patterns a rule prints as its name, and ebnf.PrintRules
+// prints "name = definition".
 func (r *Rule[T, P]) Print(w io.Writer) error {
-	if _, err := fmt.Fprintf(w, "%s = ", r.ID()); err != nil {
-		return err
-	}
-
 	if r.inner == nil {
 		_, err := io.WriteString(w, "?")
 		return err

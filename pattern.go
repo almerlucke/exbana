@@ -1,51 +1,24 @@
 package exbana
 
-import "io"
+import (
+	"io"
+)
 
 const (
 	NoID = ""
 )
 
-// Pattern can match objects from a stream, generate objects to write to a stream, print and has an identifier
+// Pattern is what a grammar is built from. It can match objects from a stream, generate objects to a stream and print
+// itself in EBNF. That is all the library needs to know of a pattern; everything else is optional and found by
+// asking the pattern whether it implements one of Named, Evaluator or Unpackable.
 type Pattern[T, P any] interface {
-	// Match matches a sub-pattern against the reader.
-	// It returns true if matched, along with the match result.
-	Match(Reader[T, P]) (bool, *Match[T, P], error)
-
-	// MatchCont is like Match, but instead of returning a single result it offers every possible match to the
-	// continuation, in order of preference, until the continuation accepts one. This is what makes backtracking
-	// possible: if what follows a pattern fails, the continuation rejects the candidate and the pattern offers
-	// its next alternative. Returns true if a candidate was accepted.
+	// MatchCont offers every possible match to the continuation, in order of preference, until the continuation
+	// accepts one. This is what makes backtracking possible: if what follows a pattern fails, the continuation
+	// rejects the candidate and the pattern offers its next alternative. Returns true if a candidate was accepted.
 	// The reader is positioned at the end of the offered match when the continuation is called. If MatchCont
 	// returns false the reader position is undefined, callers must reset it.
+	// The reader may be a ParseContext, which carries the logger and the failure memo of the parse.
 	MatchCont(Reader[T, P], Continuation[T, P]) (bool, error)
-
-	// CanUnpack returns true if the match result for this pattern can be unpacked.
-	CanUnpack() bool
-
-	// ID returns the identifier of the pattern.
-	ID() string
-
-	// SetID sets the identifier for the pattern.
-	SetID(string) Pattern[T, P]
-
-	// Logger returns the logger associated with the pattern.
-	Logger() Logger[T, P]
-
-	// SetLogger sets the logger for the pattern.
-	SetLogger(Logger[T, P]) Pattern[T, P]
-
-	// Self returns the actual pattern implementation.
-	Self() Pattern[T, P]
-
-	// SetSelf sets the actual pattern implementation.
-	SetSelf(Pattern[T, P]) Pattern[T, P]
-
-	// SetEvalFunc sets the evaluation function for the pattern.
-	SetEvalFunc(func(*Match[T, P], Reader[T, P]) (any, error)) Pattern[T, P]
-
-	// Eval executes the evaluation function for the pattern's match result.
-	Eval(*Match[T, P], Reader[T, P]) (any, error)
 
 	// Generate generates output to a writer based on the pattern. The context carries the random source,
 	// the depth limit and user state, and must not be nil.
@@ -53,124 +26,91 @@ type Pattern[T, P any] interface {
 
 	// Print prints the pattern to a writer in EBNF format.
 	Print(io.Writer) error
+}
 
-	// PrintAsChild prints the pattern as a sub-pattern of another pattern.
-	PrintAsChild(io.Writer) error
+// Named is implemented by patterns that have an identifier, like a Rule. Named patterns are what Unpack stops at,
+// what syntax errors call the pattern, and how the pattern prints as part of another pattern.
+type Named interface {
+	ID() string
+}
 
-	// PrintOutput returns the string to use for EBNF printing.
-	PrintOutput() string
+// Evaluator is implemented by patterns that can turn their match into a value, like a Rule with an evaluation function.
+type Evaluator[T, P any] interface {
+	Eval(*Match[T, P], Reader[T, P]) (any, error)
+}
 
-	// SetPrintOutput sets the string to use for EBNF printing.
-	SetPrintOutput(string) Pattern[T, P]
+// Unpackable is implemented by patterns whose match is only a wrapper around the match of one of their components,
+// like an alternation. Unpack looks through such wrappers.
+type Unpackable interface {
+	CanUnpack() bool
 }
 
 // Patterns is a convenience type for a slice of pattern interfaces
 type Patterns[T, P any] []Pattern[T, P]
 
-// BasePattern implements the Pattern interface and can be used to provide all basic functionality
-// (i.e. self, id) for other pattern implementers
-type BasePattern[T, P any] struct {
-	id          string
-	self        Pattern[T, P]
-	logger      Logger[T, P]
-	printOutput string
-	evalFunc    func(*Match[T, P], Reader[T, P]) (any, error)
-}
-
-func NewBasePattern[T, P any]() *BasePattern[T, P] {
-	return &BasePattern[T, P]{
-		logger: NewVoidLog[T, P](),
-	}
-}
-
-func (p *BasePattern[T, P]) Self() Pattern[T, P] {
-	return p.self
-}
-
-func (p *BasePattern[T, P]) SetSelf(self Pattern[T, P]) Pattern[T, P] {
-	p.self = self
-	return self
-}
-
-func (p *BasePattern[T, P]) ID() string {
-	return p.id
-}
-
-func (p *BasePattern[T, P]) SetID(id string) Pattern[T, P] {
-	p.id = id
-	return p.self
-}
-
-func (p *BasePattern[T, P]) Logger() Logger[T, P] {
-	return p.logger
-}
-
-func (p *BasePattern[T, P]) SetLogger(logger Logger[T, P]) Pattern[T, P] {
-	p.logger = logger
-	return p.self
-}
-
-func (p *BasePattern[T, P]) Print(w io.Writer) error {
-	_, err := w.Write([]byte(p.self.PrintOutput()))
-	return err
-}
-
-func (p *BasePattern[T, P]) PrintAsChild(w io.Writer) error {
-	if id := p.self.ID(); id != "" {
-		_, err := w.Write([]byte(id))
-		if err != nil {
-			return err
-		}
-	} else {
-		err := p.self.Print(w)
-		if err != nil {
-			return err
-		}
+// IDOf returns the identifier of a pattern, or NoID if the pattern is not Named.
+func IDOf[T, P any](p Pattern[T, P]) string {
+	if n, ok := p.(Named); ok {
+		return n.ID()
 	}
 
-	return nil
+	return NoID
 }
 
-func (p *BasePattern[T, P]) Generate(_ *GenContext, _ Writer[T]) error {
-	return nil
+// Parse matches a pattern against a reader and returns the first (most preferred) match. If it matches, the reader
+// is positioned at the end of the match. Pass a ParseContext as reader to log mismatches or to memoize.
+func Parse[T, P any](p Pattern[T, P], r Reader[T, P]) (bool, *Match[T, P], error) {
+	return FirstMatch(r, p.MatchCont)
 }
 
-func (p *BasePattern[T, P]) CanUnpack() bool {
-	return false
-}
-
-func (p *BasePattern[T, P]) Match(_ Reader[T, P]) (bool, *Match[T, P], error) {
-	return false, nil, nil
-}
-
-// MatchCont is the default for deterministic patterns: they have exactly one candidate, the result of Match.
-func (p *BasePattern[T, P]) MatchCont(r Reader[T, P], k Continuation[T, P]) (bool, error) {
-	matched, result, err := p.self.Match(r)
+// Single offers the one result of a deterministic match function to the continuation. It is how patterns that have
+// exactly one candidate, like an entity, implement MatchCont.
+func Single[T, P any](r Reader[T, P], k Continuation[T, P], match func(Reader[T, P]) (bool, *Match[T, P], error)) (bool, error) {
+	matched, m, err := match(r)
 	if err != nil || !matched {
 		return false, err
 	}
 
-	return k(result)
+	return k(m)
 }
 
-func (p *BasePattern[T, P]) SetEvalFunc(f func(*Match[T, P], Reader[T, P]) (any, error)) Pattern[T, P] {
-	p.evalFunc = f
-	return p.self
-}
-
-func (p *BasePattern[T, P]) Eval(m *Match[T, P], r Reader[T, P]) (any, error) {
-	if p.evalFunc != nil {
-		return p.evalFunc(m, r)
+// PrintChild prints a pattern as part of another pattern: by its name if it has one, in full otherwise.
+func PrintChild[T, P any](w io.Writer, p Pattern[T, P]) error {
+	if id := IDOf(p); id != NoID {
+		_, err := io.WriteString(w, id)
+		return err
 	}
 
-	return m.Value, nil
+	return p.Print(w)
 }
 
-func (p *BasePattern[T, P]) PrintOutput() string {
-	return p.printOutput
+// Label holds the optional name and print text of a pattern. Patterns embed it to be Named and to print leaves;
+// set the fields with the Name and Text functions.
+type Label struct {
+	id   string
+	text string
 }
 
-func (p *BasePattern[T, P]) SetPrintOutput(output string) Pattern[T, P] {
-	p.printOutput = output
-	return p.self
+// ID returns the identifier of the pattern
+func (l *Label) ID() string { return l.id }
+
+// Text returns the text the pattern prints as, used by patterns that have no components (entity, vector, end)
+func (l *Label) Text() string { return l.text }
+
+// SetID sets the identifier of the pattern, see Name
+func (l *Label) SetID(id string) { l.id = id }
+
+// SetText sets the print text of the pattern, see Text
+func (l *Label) SetText(text string) { l.text = text }
+
+// Name sets the identifier of a pattern and returns the pattern: ebnf.Name(entity.New(isDigit), "digit")
+func Name[L interface{ SetID(string) }](p L, id string) L {
+	p.SetID(id)
+	return p
+}
+
+// Text sets the text a pattern prints as and returns the pattern: ebnf.Text(entity.New(isPlus), `"+"`).
+func Text[L interface{ SetText(string) }](p L, text string) L {
+	p.SetText(text)
+	return p
 }

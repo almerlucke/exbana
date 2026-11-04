@@ -21,7 +21,9 @@ go get github.com/almerlucke/exbana/v2
 ## Core Concepts
 
 ### `Pattern[T, P]`
-The fundamental interface representing an EBNF pattern. It can match against a `Reader`, generate output to a `Writer`, and print itself in EBNF format.
+The fundamental interface representing an EBNF pattern. It has three methods: `MatchCont` (match against a `Reader`, offering every candidate to a continuation so patterns can backtrack), `Generate` (write to a `Writer`) and `Print` (EBNF format). Use `ebnf.Parse(pattern, reader)` to get the first match.
+
+Everything else is optional and found by asking the pattern: `Named` (an `ID`, which `Match.Unpack`, syntax errors and printing use), `Evaluator` (turns a match into a value, which `Match.Eval` calls) and `Unpackable`. To write your own pattern, implement the three methods; `ebnf.Single` helps with patterns that have one candidate. Names go on patterns with `ebnf.Name(pattern, "digit")`, print text with `ebnf.Text(pattern, "\"+\"")`, and evaluation functions on a `rule.Rule`.
 
 ### `Reader[T, P]`
 An interface for a stream that serves objects of type `T` at positions of type `P`. The library provides a `runes` reader for matching against strings or rune slices.
@@ -81,7 +83,7 @@ func main() {
 	// Create a reader for a string
 	rd := runes.New([]rune("-123"))
 	
-	matched, match, err := integer.Match(rd)
+	matched, match, err := ebnf.Parse[rune, runes.Pos](integer, rd)
 	if err != nil {
 		panic(err)
 	}
@@ -116,7 +118,7 @@ For grammars that do backtrack a lot, wrap the reader to remember dead ends:
 ```go
 rd, _ := runes.New(strings.NewReader(input))
 ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithMemo(func(p runes.Pos) int { return p.Index })
-matched, result, err := pattern.Match(ctx)
+matched, result, err := ebnf.Parse(pattern, ctx)
 ```
 
 This remembers failures only (a pattern with no match at a position; a concatenation or repetition whose remainder
@@ -158,12 +160,12 @@ rd, _ := runes.New(strings.NewReader("(12x)"))
 log := runes.NewFarthestLog(rd)
 ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log)
 
-if matched, _, _ := grammar.Match(ctx); !matched {
+if matched, _, _ := ebnf.Parse(grammar, ctx); !matched {
 	fmt.Println(log.Err()) // syntax error at 1:4: unexpected 'x', expected digit or ")"
 }
 ```
 
-Give the leaf patterns of your grammar an ID (`SetID("digit")`) or print output (`SetPrintOutput("\")\"")`), they are used
+Give the leaf patterns of your grammar an ID (`ebnf.Name(p, "digit")`) or print text (`ebnf.Text(p, "\")\"")`), they are used
 as the "expected" descriptions; leaves without either are left out. `Last()` returns the `*SyntaxError` with the
 position, the expected list and the unexpected element for your own formatting. The exception of an `except` is lookahead: it is supposed to fail on every successful match, so it is matched silently and never reaches the logger.
 
@@ -187,7 +189,7 @@ pattern it wraps. Matching a rule that was declared but never defined returns an
 Exbana can output your defined patterns as EBNF strings:
 
 ```go
-rules, _ := ebnf.PrintRules([]ebnf.Pattern[rune, runes.Pos]{integer.SetID("integer")})
+rules, _ := ebnf.PrintRules([]ebnf.Pattern[rune, runes.Pos]{ebnf.Name(integer, "integer")})
 fmt.Println(rules)
 // Output: integer = [ "-" ] ( "0" | digit1to9 { digit } )
 ```

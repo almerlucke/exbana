@@ -12,7 +12,11 @@
 // vector.Text and the like) say which elements they accept; a leaf made from a function does not, so it counts as
 // "could be anything" and keeps the places around it as they are. The report says where that happens.
 //
-// The element type has to be an integer (runes, bytes, integer tokens).
+// A left recursive rule (expr = expr "+" term | term, marked with SetLeftRecursive) gets a decision of its own, of the kind Loop: can it
+// be evaluated as a loop, the base and then the tails for as long as they match? That is what the code generator does with it.
+//
+// The element type has to be an integer (runes, bytes, integer tokens), or AnalyzeFunc is given a way to map the elements to
+// integers; without one little can be proven.
 package optimize
 
 import (
@@ -41,14 +45,14 @@ const (
 
 	// Orthogonal: an alternation that commits to the first branch that matches.
 	Orthogonal
+
+	// Loop: a left recursive rule that is evaluated as a loop, a base branch and then tails for as long as they match. The
+	// patterns are not changed for this, it is what the code generator does with such a rule when this is safe.
+	Loop
 )
 
 func (k Kind) String() string {
-	if k == Possessive {
-		return "possessive"
-	}
-
-	return "orthogonal"
+	return [...]string{"possessive", "orthogonal", "loop"}[k]
 }
 
 // Decision is what the analysis found about one repetition or alternation.
@@ -75,14 +79,23 @@ type Result[T, P any] struct {
 }
 
 // Analyze finds the repetitions and alternations of the pattern that can be made possessive or orthogonal without changing
-// what it matches, and why the others can not. It does not change anything, see Apply.
+// what it matches, and why the others can not. For a left recursive rule it says whether it can be evaluated as a loop. It
+// does not change anything, see Apply.
 func Analyze[T Integer, P any](p ebnf.Pattern[T, P], opts Options) (*Result[T, P], error) {
+	return AnalyzeFunc(p, opts, func(v T) int64 { return int64(v) })
+}
+
+// AnalyzeFunc is Analyze for any element type: conv gives the integer an element stands for, and the order of the elements
+// is the order of those integers. With a nil conv nothing is known about the elements, every leaf can accept anything, and
+// little can be proven; what is left are the places that do not depend on it, like a repetition of something that can not
+// match nothing followed by the end of the input.
+func AnalyzeFunc[T, P any](p ebnf.Pattern[T, P], opts Options, conv func(T) int64) (*Result[T, P], error) {
 	g, err := ebnf.Analyze(p)
 	if err != nil {
 		return nil, err
 	}
 
-	a := newAnalysis(g, opts)
+	a := newAnalysis(g, opts, conv)
 	res := &Result[T, P]{}
 
 	var visit func(n *ebnf.Node[T, P], rule string)
@@ -105,7 +118,32 @@ func Analyze[T Integer, P any](p ebnf.Pattern[T, P], opts Options) (*Result[T, P
 	visit(g.Root, "")
 
 	for _, name := range g.Order {
-		visit(g.Rules[name].Children[0], name)
+		def := g.Rules[name]
+		sp, left := a.lr[name]
+
+		// a left recursive rule is a loop: its branches are the base and the tails, not an alternation to commit to
+		if left && sp.err == nil && len(sp.tails) > 0 {
+			safe, why := a.lrLoopSafe(name)
+			res.Decisions = append(res.Decisions, Decision[T, P]{Loop, name, name, safe, why, def.Pattern})
+
+			for _, b := range sp.bases {
+				visit(b, name)
+			}
+
+			for _, t := range sp.tails {
+				for _, c := range t.Children[1:] {
+					visit(c, name)
+				}
+			}
+
+			continue
+		}
+
+		if left && sp.err != nil {
+			res.Decisions = append(res.Decisions, Decision[T, P]{Loop, name, name, false, sp.err.Error(), def.Pattern})
+		}
+
+		visit(def.Children[0], name)
 	}
 
 	return res, nil

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	ebnf "github.com/almerlucke/exbana/v3"
 	"github.com/almerlucke/exbana/v3/examples/jsongen/grammar"
@@ -32,7 +33,7 @@ func TestGeneratedCodeIsUpToDate(t *testing.T) {
 }
 
 func TestSummary(t *testing.T) {
-	tree, err := parser.NewJSONParser().ParseString(`{"a": [1, 2, {"b": null}], "c": "x"}`)
+	tree, err := parser.NewJSONParser().Parse(`{"a": [1, 2, {"b": null}], "c": "x"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +66,12 @@ func flatten(m *ebnf.Match[rune, runes.Pos]) string {
 	return sb.String()
 }
 
+// flattenTree lists the nodes of the generated parser's tree like flatten does. The parser counts bytes and the grammar
+// characters, so the offsets are converted.
 func flattenTree(tree *parser.JSONTree) string {
 	var sb strings.Builder
+
+	chars := func(offset int32) int { return utf8.RuneCountInString(tree.Input[:offset]) }
 
 	var ends []int
 
@@ -75,7 +80,7 @@ func flattenTree(tree *parser.JSONTree) string {
 			ends = ends[:len(ends)-1]
 		}
 
-		fmt.Fprintf(&sb, "%s %d-%d %d\n", n.Rule, n.Begin, n.End, len(ends))
+		fmt.Fprintf(&sb, "%s %d-%d %d\n", n.Rule, chars(n.Begin), chars(n.End), len(ends))
 		ends = append(ends, i+int(n.Size))
 	}
 
@@ -112,14 +117,14 @@ func agree(t testing.TB, p *parser.JSONParser, input string) {
 		t.Fatal(perr)
 	}
 
-	tree, err := p.ParseString(input)
+	tree, err := p.Parse(input)
 
 	if (err == nil) != ok {
 		t.Fatalf("%.60q: the generated parser matched=%v (%v), the grammar %v", input, err == nil, err, ok)
 	}
 
 	if ok {
-		if tree.End != m.End.Index || flattenTree(tree) != flatten(m) {
+		if utf8.RuneCountInString(input[:tree.End]) != m.End.Index || flattenTree(tree) != flatten(m) {
 			t.Fatalf("%.60q: the trees differ\ngenerated:\n%s\ngrammar:\n%s", input, flattenTree(tree), flatten(m))
 		}
 
@@ -137,7 +142,7 @@ func TestAgreesWithTheGrammarOnDocuments(t *testing.T) {
 	for _, doc := range []string{
 		`{}`, `[]`, `[1, 2, 3]`, ` { "a" : [ true , false , null ] } `, `"x\ny\u00e9"`, `-0.5e+10`, `[[[[[[]]]]]]`,
 		`{"a": {"b": {"c": [1, {"d": "e"}]}}}`,
-		``, `[`, `[1,]`, `{"a" 1}`, `{"a":}`, `tru`, `"open`, `01`, `[1 2]`, `{"a": 1,`, `[1] x`, "[1,\n2,\n x]", "\n\n{",
+		`{"é€": ["λ", "🙂"]}`, "[\"\xff\"]", ``, `[`, `[1,]`, `{"a" 1}`, `{"a":}`, `tru`, `"open`, `01`, `[1 2]`, `{"a": 1,`, `[1] x`, "[1,\n2,\n x]", "\n\n{",
 	} {
 		agree(t, p, doc)
 	}
@@ -146,7 +151,7 @@ func TestAgreesWithTheGrammarOnDocuments(t *testing.T) {
 // FuzzGeneratedParserAgainstGrammar: on any input the generated parser and the grammar it was generated from must give the
 // same answer, the same tree and the same syntax error.
 func FuzzGeneratedParserAgainstGrammar(f *testing.F) {
-	for _, seed := range []string{`{"a": [1, 2.5e3, null, true, "x"]}`, `[1,]`, ``, `{`, `"\u00zz"`, "[\n1,\n2\n", `-`, `[0123]`, `{"k": {"k": {}}}`} {
+	for _, seed := range []string{`{"a": [1, 2.5e3, null, true, "x"]}`, `[1,]`, ``, `{`, `"\u00zz"`, "[\n1,\n2\n", `-`, `[0123]`, `{"k": {"k": {}}}`, `{"é": "λ🙂", "k": [1, "\u00e9"]}`, "\"\xff\"", `["日本語", "x"]`} {
 		f.Add(seed)
 	}
 

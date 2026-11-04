@@ -82,5 +82,5 @@ func Source() ([]byte, error) {
 		return nil, fmt.Errorf("the grammar backtracks in %d places:\n%v", len(blocked), res)
 	}
 
-	return codegen.Generate[rune, runes.Pos](g, codegen.Config[rune, runes.Pos]{Package: "parser", Name: "JSON"})
+	return codegen.Generate[rune, runes.Pos](g, codegen.Config[rune, runes.Pos]{Package: "parser", Name: "JSON", UTF8: true})
 }

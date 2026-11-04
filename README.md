@@ -326,31 +326,52 @@ does not use this library at all.
 // gen/main.go, run by //go:generate
 g := grammar.JSON()
 optimize.Optimize(g, optimize.Options{})          // take out the backtracking wherever it is provably safe
-src, err := codegen.Generate(g, codegen.Config[rune, runes.Pos]{Package: "parser", Name: "JSON"})
+src, err := codegen.Generate(g, codegen.Config[rune, runes.Pos]{Package: "parser", Name: "JSON", UTF8: true})
 os.WriteFile("parser/parser.go", src, 0o644)
 ```
 
 ```go
-tree, err := parser.NewJSONParser().ParseString(input)   // err is a *parser.JSONSyntaxError
-for child := range tree.Children(0) {                      // the nodes below a rule node
-	fmt.Println(tree.Nodes[child].Rule, tree.Text(child))
+tree, err := parser.NewJSONParser().Parse(input)           // a string; err is a *parser.JSONSyntaxError
+object, _ := tree.FirstObject(0)                           // the first node of a rule below a node
+for member := range tree.FindMember(object) {              // the nodes of a rule below a node
+	key, _ := tree.FirstString(member)
+	begin, _ := tree.Span(key)
+	line, col := tree.Position(begin)                      // counted in characters
+	fmt.Println(tree.Text(key), line, col)                 // "name" 1 2
 }
+fmt.Print(tree.Dump())                                      // the whole tree, indented, for looking at
 ```
 
-`examples/jsongen` is the whole thing: the grammar, the generator, the generated parser, and tests that fail if the generated file is
-out of date and that fuzz the generated parser against the grammar it came from.
+`examples/jsongen` and `examples/calcgen` are the whole thing: the grammar, the generator, the generated parser, and tests that fail if the
+generated file is out of date and that fuzz the generated parser against the grammar it was made from.
 
-**What you get.** A `Parser` that reuses its buffers, a flat tree of the rules that matched (a node is followed by its children, so
-walking it needs no pointers), and a `SyntaxError` with the same message as `FarthestLog`: `syntax error at 1:4: unexpected '2',
-expected "," or "]"` (a leaf without a name or print text is left out of the expected list, as it is with `FarthestLog`: give it one with `.Printed`). Evaluation is yours: walk the tree and build what you need. On a 200 KB JSON document the generated parser takes 1.5 ms
-(130 MB/s, two allocations), against 122 ms for the optimized grammar and 208 ms for the grammar as written; the standard library needs
-4.4 ms to unmarshal the same document.
+**What you get.** A `Parser` that reuses its buffers, and a flat tree of the rules that matched: a node is followed by its children, so
+walking it needs no pointers. The tree has `Walk`, `Children`, `Find` and `First` (and a `Find` and `First` for each rule by name),
+`Span`, `Text`, `Position` (line and column, counted in characters) and `Dump`. Errors are a `SyntaxError` with the same message as
+`FarthestLog`: `syntax error at 1:4: unexpected '2', expected "," or "]"` (a leaf without a name or print text is left out of the expected
+list, as it is with `FarthestLog`: give it one with `.Printed`). Evaluation is yours: walk the tree and build what you need.
+
+**Fast.** On a 200 KB JSON document the generated parser takes about 2 ms (95 MB/s, two allocations); the grammar as written takes 208 ms and
+the optimized grammar 122 ms. For scale, the standard library needs 4.5 ms to unmarshal the same document.
+
+**Text without a conversion.** With `UTF8: true` the parser reads a string (`ParseBytes` takes bytes), decodes characters as it goes, and
+`Text` is a slice of the input. Starting from a string that is 1.6 times faster than converting it to runes first, and it takes 185 KB instead of
+6.4 MB for this document. Positions are byte offsets in the tree; lines and columns in errors count characters.
+
+**Left recursion.** A rule written the way it reads, `expr = expr addop term | term` (mark it with `SetLeftRecursive`), is generated as a loop: the
+base, then the tails for as long as they match. It is one node with the terms and the operators as its children, in order, which is the
+order to evaluate them in, and a chain of ten thousand terms is a loop and not ten thousand calls. The optimizer proves that this is what the rule
+matches when asked for its longest match: one base branch and one tail can match at each step, and what a tail starts with cannot also start
+what follows the rule. Anything else, left recursion through other rules included, is refused with the reason.
+
+**Error recovery.** `Config.Recover` makes a rule survive a syntax error: `ParseAll` notes the error, skips to where the grammar says to go on
+(a `;`, a `}`), and carries on, returning the tree and every error in the document. A rule recovers when it fails after it has matched
+something; failing at the first element is how a repetition of it ends, not an error in it. `Parse` is unchanged and stops at the first error.
 
 **What it needs from the grammar.** The generated parser never backtracks, so every repetition has to be possessive and every alternation
 orthogonal, because you said so or because `optimize` proved it. A grammar that still backtracks is refused, and the error lists the
-places (a place that needs it can be rewritten, or accepted with `Config.Commit`, which means "first match wins"). Left recursive rules
-are refused, write them as a loop. Leaves have to be declarative (`entity.Between`, `In`, `Equals`, `vector.Text` and the like) so the generator
-can see what they accept. Every problem is reported at once.
+places (a place that needs it can be rewritten, or accepted with `Config.Commit`, which means "first match wins"). Leaves have to be
+declarative (`entity.Between`, `In`, `Equals`, `vector.Text` and the like) so the generator can see what they accept. Every problem is reported at once.
 
 **Other element types.** The generated parser reads a slice of any element type, with an int as the position; the position type of the grammar does
 not matter, and nothing of the library is needed at run time. Runes, bytes, integers, strings and floats work out of the box. For another type, like a
@@ -371,7 +392,8 @@ fmt.Print(rules)
 
 - `examples/expr`: an expression calculator (precedence, functions, variables, syntax errors) in three modes: backtracking, memoized and committed. Also shows concurrent use of one grammar.
 - `examples/tokens`: a calculator in two stages: a lexer produces a `[]Token` and the grammar parses it through a slice reader, with left recursive rules for left associative operators and syntax errors that point back into the text.
-- `examples/jsongen`: JSON as a grammar, optimized and turned into a generated parser, with the generated file checked in and kept honest by tests and a fuzz target.
+- `examples/jsongen`: JSON as a grammar, optimized and turned into a generated parser that reads UTF-8 text, with the generated file checked in and kept honest by tests and a fuzz target.
+- `examples/calcgen`: arithmetic with left recursive rules, generated as loops, evaluated by walking the tree, and fuzzed against the grammar as it was written.
 - `examples/json`, `examples/xml`: parsers with evaluation functions that build values.
 - `examples/golang`: Go literal tokens, scanning and seeded generation.
 - `examples/melody`: seeded melody generation with weights and state.

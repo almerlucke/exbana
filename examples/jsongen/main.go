@@ -22,7 +22,7 @@ func main() {
 		input = os.Args[1]
 	}
 
-	tree, err := parser.NewJSONParser().ParseString(input)
+	tree, err := parser.NewJSONParser().Parse(input)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)

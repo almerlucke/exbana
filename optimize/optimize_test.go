@@ -225,13 +225,8 @@ func TestAPatternUsedInTwoPlacesIsOnlyChangedIfItIsSafeInBoth(t *testing.T) {
 	}
 }
 
-func TestLeftRecursiveRulesAreNeverAssumedToHaveOneMatch(t *testing.T) {
-	// expr = expr "-" digit | digit : in the loop version the repetition is safe, here the rule offers all its matches
-	expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
-	expr.Define(alt(conc(expr, text("-"), between('0', '9')), between('0', '9')))
-
-	// something after the rule makes the question matter
-	g := conc(some(expr), text(";"))
+func loopDecision(t *testing.T, g pat) optimize.Decision[rune, runes.Pos] {
+	t.Helper()
 
 	res, err := optimize.Analyze[rune, runes.Pos](g, optimize.Options{})
 	if err != nil {
@@ -239,9 +234,121 @@ func TestLeftRecursiveRulesAreNeverAssumedToHaveOneMatch(t *testing.T) {
 	}
 
 	for _, d := range res.Decisions {
-		if d.Kind == optimize.Possessive && d.Safe {
-			t.Errorf("a repetition of a left recursive rule was called safe: %+v", d)
+		if d.Kind == optimize.Loop {
+			return d
 		}
+	}
+
+	t.Fatalf("no decision about a loop in:\n%v", res)
+
+	return optimize.Decision[rune, runes.Pos]{}
+}
+
+func leftRecursive(tail string) *rule.Rule[rune, runes.Pos] {
+	// expr = expr tail digit | digit
+	expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
+	expr.Define(alt(conc(expr, text(tail), between('0', '9')), between('0', '9')))
+
+	return expr
+}
+
+func TestALeftRecursiveRuleCanBeALoopWhenWhatItAddsCanNotBeWhatFollowsIt(t *testing.T) {
+	// expr = expr "-" digit | digit, then ";": the tails start with "-", and a ";" follows
+	d := loopDecision(t, conc(leftRecursive("-"), text(";")))
+	if d.Kind != optimize.Loop || !d.Safe || d.Rule != "expr" {
+		t.Errorf("decision = %+v", d)
+	}
+
+	// the same rule, but a "-" can follow it: giving back a tail could let the "-" that follows take it
+	d = loopDecision(t, conc(leftRecursive("-"), text("-x")))
+	if d.Safe || !strings.Contains(d.Reason, "what a tail starts with and what follows the rule") || !strings.Contains(d.Reason, "'-'") {
+		t.Errorf("decision = %+v", d)
+	}
+
+	// and when it is the whole grammar, nothing follows
+	if d := loopDecision(t, leftRecursive("-")); d.Safe {
+		t.Errorf("an open grammar may be followed by anything: %+v", d)
+	}
+
+	res, _ := optimize.Analyze[rune, runes.Pos](leftRecursive("-"), optimize.Options{Closed: true})
+	if len(res.Blocked()) != 0 {
+		t.Errorf("a closed grammar:\n%v", res)
+	}
+}
+
+func TestALeftRecursiveRuleThatIsNotALoop(t *testing.T) {
+	x, y := text("x"), text("y")
+
+	for name, c := range map[string]struct {
+		define func(r *rule.Rule[rune, runes.Pos]) pat
+		reason string
+	}{
+		"a tail that can match nothing": {func(r *rule.Rule[rune, runes.Pos]) pat { return alt(conc(r, many(x)), y) }, "can match nothing"},
+		"tails that start the same":     {func(r *rule.Rule[rune, runes.Pos]) pat { return alt(conc(r, x, y), conc(r, x), y) }, "tails 1 and 2"},
+		"bases that start the same":     {func(r *rule.Rule[rune, runes.Pos]) pat { return alt(text("ab"), text("ac"), conc(r, x)) }, "base branches 1 and 2"},
+		"no base":                       {func(r *rule.Rule[rune, runes.Pos]) pat { return conc(r, x) }, "nothing for it to start from"},
+		"a base that matches nothing":   {func(r *rule.Rule[rune, runes.Pos]) pat { return alt(many(y), conc(r, x)) }, "base branch 1 can match nothing"},
+		// a and ab both match "ab": which one is used depends on what follows, so the loop would have to try them
+		"a tail that matches in more than one way": {func(r *rule.Rule[rune, runes.Pos]) pat {
+			return alt(conc(r, alt(text("a"), text("ab"))), y)
+		}, "tail 1 can match in more than one way"},
+		"a base that matches in more than one way": {func(r *rule.Rule[rune, runes.Pos]) pat {
+			return alt(alt(text("a"), text("ab")), conc(r, x))
+		}, "base branch 1 can match in more than one way"},
+	} {
+		r := rule.Declare[rune, runes.Pos]("r").SetLeftRecursive(true)
+		r.Define(c.define(r))
+
+		d := loopDecision(t, conc(r, text(";")))
+		if d.Safe || !strings.Contains(d.Reason, c.reason) {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}
+
+func TestInsideALeftRecursiveRuleOnlyItsBasesAndTailsAreLookedAt(t *testing.T) {
+	// the top alternation of a left recursive rule is not an alternation to commit to, it is the loop: there is no decision for
+	// it, but the constructs inside the bases and the tails have theirs
+	expr := rule.Declare[rune, runes.Pos]("expr").SetLeftRecursive(true)
+	expr.Define(alt(conc(expr, text("-"), some(between('0', '9'))), some(between('0', '9'))))
+
+	res, err := optimize.Analyze[rune, runes.Pos](conc(expr, text(";")), optimize.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kinds := map[optimize.Kind]int{}
+	for _, d := range res.Decisions {
+		kinds[d.Kind]++
+	}
+
+	if kinds[optimize.Loop] != 1 || kinds[optimize.Orthogonal] != 0 || kinds[optimize.Possessive] != 2 {
+		t.Errorf("decisions by kind %v:\n%v", kinds, res)
+	}
+
+	// applying changes the repetitions and leaves the rule as it is
+	if changed := res.Apply(); changed != 2 {
+		t.Errorf("%d patterns changed", changed)
+	}
+}
+
+func TestWithoutKnowingTheElementsLittleCanBeProven(t *testing.T) {
+	// elements that can not be mapped to integers: every leaf could accept anything
+	g := conc(some(between('0', '9')), text(";"))
+
+	res, err := optimize.AnalyzeFunc[rune, runes.Pos](g, optimize.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.Safe()) != 0 || len(res.Blocked()) != 1 || !strings.Contains(res.Blocked()[0].Reason, "can not look into") {
+		t.Errorf("result:\n%v", res)
+	}
+
+	// with the mapping it is provable
+	res, _ = optimize.AnalyzeFunc[rune, runes.Pos](g, optimize.Options{}, func(r rune) int64 { return int64(r) })
+	if len(res.Safe()) != 1 {
+		t.Errorf("result:\n%v", res)
 	}
 }
 

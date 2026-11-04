@@ -3,6 +3,7 @@ package tests
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -229,10 +230,10 @@ func TestBacktracking(t *testing.T) {
 
 func TestPrint(t *testing.T) {
 	// Test Print for various patterns
-	a := altR(vecR("abc").SetPrintOutput("abc"), vecR("def").SetPrintOutput("def")).SetID("Alt")
-	c := concR(runeR('x').SetPrintOutput("x"), a).SetID("Conc")
-	r := repetition.Any[rune, runes.Pos](c).SetID("Rep")
-	ex := exceptR(runeR('a').SetPrintOutput("a"), runeR('b').SetPrintOutput("b")).SetID("Ex")
+	a := ebnf.Name(altR(ebnf.Text(vecR("abc"), "abc"), ebnf.Text(vecR("def"), "def")), "Alt")
+	c := ebnf.Name(concR(ebnf.Text(runeR('x'), "x"), a), "Conc")
+	r := ebnf.Name(repetition.Any[rune, runes.Pos](c), "Rep")
+	ex := ebnf.Name(exceptR(ebnf.Text(runeR('a'), "a"), ebnf.Text(runeR('b'), "b")), "Ex")
 
 	var buf strings.Builder
 	_ = a.Print(&buf)
@@ -324,7 +325,7 @@ func TestScanEmptyMatchTerminates(t *testing.T) {
 
 func TestPrintRepetitionUnbounded(t *testing.T) {
 	x := runeR('x')
-	x.SetPrintOutput(`"x"`)
+	ebnf.Text(x, `"x"`)
 
 	var buf bytes.Buffer
 	if err := repR(x, 2, 0).Print(&buf); err != nil {
@@ -335,7 +336,7 @@ func TestPrintRepetitionUnbounded(t *testing.T) {
 	}
 
 	// children with an ID are printed by reference
-	x.SetID("ex")
+	ebnf.Name(x, "ex")
 	buf.Reset()
 	if err := repR(x, 1, 3).Print(&buf); err != nil {
 		t.Fatal(err)
@@ -368,7 +369,7 @@ func TestBacktrackingDeep(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		matched, result, err := c.pattern.Match(newRunes(c.input))
+		matched, result, err := ebnf.Parse(c.pattern, newRunes(c.input))
 		if err != nil || matched != c.want {
 			t.Errorf("%s: got %v, %v, want %v", c.name, matched, err, c.want)
 			continue
@@ -408,8 +409,8 @@ func TestMemoGivesSameResult(t *testing.T) {
 		return concR(anyR(altR(vecR("a"), vecR("ab"), vecR("b"))), vecR("c"), endR())
 	}
 	for _, in := range []string{"abababc", "aabbc", "abx", "", "c"} {
-		m1, r1, _ := build().Match(newRunes(in))
-		m2, r2, _ := build().Match(ebnf.WithMemo[rune, runes.Pos](newRunes(in), func(p runes.Pos) int { return p.Index }))
+		m1, r1, _ := ebnf.Parse(build(), newRunes(in))
+		m2, r2, _ := ebnf.Parse(build(), ebnf.WithMemo[rune, runes.Pos](newRunes(in), func(p runes.Pos) int { return p.Index }))
 		if m1 != m2 || (m1 && r1.End.Index != r2.End.Index) {
 			t.Errorf("%q: plain %v, memo %v", in, m1, m2)
 		}
@@ -426,7 +427,7 @@ func TestMemoAvoidsExponentialBlowup(t *testing.T) {
 	rd := ebnf.WithMemo[rune, runes.Pos](newRunes(in), func(p runes.Pos) int { return p.Index })
 	done := make(chan bool)
 	go func() {
-		matched, _, _ := build().Match(rd)
+		matched, _, _ := ebnf.Parse(build(), rd)
 		done <- matched
 	}()
 	select {
@@ -447,21 +448,20 @@ func TestLongNonPossessiveRepetition(t *testing.T) {
 	}
 }
 
-func lit(r rune) ebnf.Pattern[rune, runes.Pos] {
-	return runeR(r).SetPrintOutput(`"` + string(r) + `"`)
+func lit(r rune) *ent.Entity[rune, runes.Pos] {
+	return ebnf.Text(runeR(r), `"`+string(r)+`"`)
 }
 
 // call = "(", digit+, ")"
 func callGrammar() ebnf.Pattern[rune, runes.Pos] {
-	digit := entR(unicode.IsDigit).SetID("digit")
+	digit := ebnf.Name(entR(unicode.IsDigit), "digit")
 	return concR(lit('('), repetition.OneOrMore[rune, runes.Pos](digit), lit(')'))
 }
 
 func parseWithLog(g ebnf.Pattern[rune, runes.Pos], input string) (bool, *ebnf.FarthestLog[rune, runes.Pos]) {
 	rd := newRunes(input)
 	log := runes.NewFarthestLog(rd)
-	ebnf.SetLogger[rune, runes.Pos](g, log)
-	matched, _, _ := g.Match(rd)
+	matched, _, _ := ebnf.Parse(g, ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log))
 	return matched, log
 }
 
@@ -489,8 +489,7 @@ func TestFarthestLogSyntaxError(t *testing.T) {
 	rd := newRunes("(12x)")
 	l := runes.NewFarthestLog(rd)
 	g := callGrammar()
-	ebnf.SetLogger[rune, runes.Pos](g, l)
-	g.Match(rd)
+	ebnf.Parse(g, ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(l))
 	before, _ := rd.Position()
 	l.Last()
 	if after, _ := rd.Position(); after != before {
@@ -544,7 +543,7 @@ func TestFarthestLogKeepsFarthestAcrossAlternatives(t *testing.T) {
 func TestFarthestLogIgnoresException(t *testing.T) {
 	// string = '"', (char - '"')*, '"' : the exception '"' fails on every normal character and must not show up
 	quote := lit('"')
-	char := exceptR(entR(func(r rune) bool { return true }).SetID("char"), quote)
+	char := exceptR(ebnf.Name(entR(func(r rune) bool { return true }), "char"), quote)
 	g := concR(quote, anyR(char), quote)
 	matched, log := parseWithLog(g, `"abc`)
 	if matched {
@@ -564,12 +563,12 @@ func TestFarthestLogIgnoresException(t *testing.T) {
 	}
 }
 
-func TestSetLoggerRecursiveGrammar(t *testing.T) {
+func TestContextLoggerRecursiveGrammar(t *testing.T) {
 	// list = "[" , (list | "x")* , "]"
 	list := concR()
 	inner := anyR(altR(list, lit('x')))
 	list.SetPatterns(ebnf.Patterns[rune, runes.Pos]{lit('['), inner, lit(']')})
-	list.SetID("list")
+	ebnf.Name(list, "list")
 
 	matched, log := parseWithLog(list, "[x[xy]]")
 	if matched {
@@ -782,7 +781,7 @@ func TestGenerateRepetitionCountFunc(t *testing.T) {
 }
 
 func TestGenerateEntityWithoutGenerator(t *testing.T) {
-	_, err := gen(t, entR(unicode.IsDigit).SetID("digit"), ebnf.NewGenContext(1))
+	_, err := gen(t, ebnf.Name(entR(unicode.IsDigit), "digit"), ebnf.NewGenContext(1))
 	if !errors.Is(err, ebnf.ErrNoGenerator) || !strings.Contains(err.Error(), "digit") {
 		t.Errorf("got %v", err)
 	}
@@ -842,39 +841,6 @@ func TestGenerateExceptCannotCheck(t *testing.T) {
 	}
 }
 
-func TestParseContextLoggerPrecedence(t *testing.T) {
-	patternLog := ebnf.NewStackLog[rune, runes.Pos]()
-	g := concR(runeR('a'), runeR('b'))
-	g.SetLogger(patternLog)
-	for _, child := range g.Children() {
-		child.SetLogger(patternLog)
-	}
-
-	// without a context the logger of the pattern is used
-	g.Match(newRunes("ax"))
-	if len(patternLog.Stack) == 0 {
-		t.Fatal("pattern logger got nothing")
-	}
-	before := len(patternLog.Stack)
-
-	// with a context its logger takes over, the pattern logger is left alone
-	ctxLog := ebnf.NewStackLog[rune, runes.Pos]()
-	ctx := ebnf.NewParseContext[rune, runes.Pos](newRunes("ax")).WithLogger(ctxLog)
-	g.Match(ctx)
-	if len(ctxLog.Stack) == 0 {
-		t.Error("context logger got nothing")
-	}
-	if len(patternLog.Stack) != before {
-		t.Error("pattern logger was used although the context has a logger")
-	}
-
-	// a context without a logger falls back to the pattern
-	g.Match(ebnf.NewParseContext[rune, runes.Pos](newRunes("ax")))
-	if len(patternLog.Stack) == before {
-		t.Error("pattern logger not used by a context without a logger")
-	}
-}
-
 func TestLogMismatchOnlyBuildsWhenListening(t *testing.T) {
 	p := runeR('a')
 	built := 0
@@ -901,7 +867,7 @@ func TestLogMismatchOnlyBuildsWhenListening(t *testing.T) {
 
 // one grammar, many parses at the same time, each logging to its own logger (run with -race)
 func TestParseContextSharedGrammar(t *testing.T) {
-	g := concR(runeR('('), repetition.OneOrMore[rune, runes.Pos](entR(unicode.IsDigit).SetID("digit")), runeR(')'))
+	g := concR(runeR('('), repetition.OneOrMore[rune, runes.Pos](ebnf.Name(entR(unicode.IsDigit), "digit")), runeR(')'))
 
 	count := func() int {
 		log := ebnf.NewStackLog[rune, runes.Pos]()
@@ -944,7 +910,7 @@ func TestParseContextWithoutMemoBehavesPlain(t *testing.T) {
 // the exception of an except is lookahead: it fails on every normal match, and must not show up in syntax errors
 func TestParseContextLoggerIgnoresException(t *testing.T) {
 	quote := lit('"')
-	char := exceptR(entR(func(r rune) bool { return true }).SetID("char"), altR(quote, lit('\\').SetID("backslash")))
+	char := exceptR(ebnf.Name(entR(func(r rune) bool { return true }), "char"), altR(quote, ebnf.Name(lit('\\'), "backslash")))
 	g := concR(quote, anyR(char), quote)
 
 	rd := newRunes(`"ab`)
@@ -967,7 +933,7 @@ func TestParseContextLoggerIgnoresException(t *testing.T) {
 }
 
 func TestRuleMatchEvalAndRecursion(t *testing.T) {
-	digit := entR(func(r rune) bool { return r >= '0' && r <= '9' }).SetID("digit")
+	digit := ebnf.Name(entR(func(r rune) bool { return r >= '0' && r <= '9' }), "digit")
 	number := rule.New[rune, runes.Pos]("number", concR(digit, repetition.New[rune, runes.Pos](digit, 0, 0))).
 		WithEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
 			rs, err := rd.Range(m.Begin, m.End)
@@ -1008,10 +974,13 @@ func TestRuleUndefinedIsAnError(t *testing.T) {
 }
 
 func TestRulePrintAndGenerate(t *testing.T) {
-	r := rule.New[rune, runes.Pos]("ab", concR(runeR('a').SetPrintOutput("a"), runeR('b').SetPrintOutput("b")))
+	r := rule.New[rune, runes.Pos]("ab", concR(ebnf.Text(runeR('a'), "a"), ebnf.Text(runeR('b'), "b")))
 	var buf bytes.Buffer
-	if err := r.Print(&buf); err != nil || buf.String() != "ab = (a, b)" {
+	if err := r.Print(&buf); err != nil || buf.String() != "(a, b)" {
 		t.Fatalf("print = %q, %v", buf.String(), err)
+	}
+	if rules, err := ebnf.PrintRules([]ebnf.Pattern[rune, runes.Pos]{r}); err != nil || rules != "ab = (a, b)\n" {
+		t.Fatalf("rules = %q, %v", rules, err)
 	}
 	buf.Reset()
 	if err := concR(r, r).Print(&buf); err != nil || buf.String() != "(ab, ab)" {
@@ -1020,8 +989,8 @@ func TestRulePrintAndGenerate(t *testing.T) {
 }
 
 func TestRuleAtomicNamesTheRuleInSyntaxErrors(t *testing.T) {
-	digit := entR(func(r rune) bool { return r >= '0' && r <= '9' }).SetID("digit")
-	sign := entR(func(r rune) bool { return r == '-' }).SetID("minus")
+	digit := ebnf.Name(entR(func(r rune) bool { return r >= '0' && r <= '9' }), "digit")
+	sign := ebnf.Name(entR(func(r rune) bool { return r == '-' }), "minus")
 	for _, atomic := range []bool{false, true} {
 		number := rule.New[rune, runes.Pos]("number", concR(repetition.New[rune, runes.Pos](sign, 0, 1), digit)).SetAtomic(atomic)
 
@@ -1039,5 +1008,68 @@ func TestRuleAtomicNamesTheRuleInSyntaxErrors(t *testing.T) {
 		if !atomic && !strings.Contains(msg, "digit") {
 			t.Fatalf("non atomic: %s", msg)
 		}
+	}
+}
+
+// anyOne is a pattern written against the three method core: it matches any single rune
+type anyOne struct{}
+
+func (anyOne) MatchCont(r ebnf.Reader[rune, runes.Pos], k ebnf.Continuation[rune, runes.Pos]) (bool, error) {
+	return ebnf.Single(r, k, func(r ebnf.Reader[rune, runes.Pos]) (bool, *ebnf.Match[rune, runes.Pos], error) {
+		begin, _ := r.Position()
+		if _, err := r.Read1(); err != nil {
+			return false, nil, nil
+		}
+		end, _ := r.Position()
+		return true, ebnf.NewMatch[rune, runes.Pos](anyOne{}, begin, end, nil, nil), nil
+	})
+}
+
+func (anyOne) Generate(_ *ebnf.GenContext, w ebnf.Writer[rune]) error { return w.Write('?') }
+
+func (anyOne) Print(w io.Writer) error {
+	_, err := io.WriteString(w, "any")
+	return err
+}
+
+func TestCustomPatternNeedsOnlyThreeMethods(t *testing.T) {
+	g := concR(anyOne{}, runeR('b'), anyOne{})
+
+	ok, m, err := ebnf.Parse[rune, runes.Pos](g, newRunes("abc"))
+	if err != nil || !ok || len(m.Components) != 3 {
+		t.Fatalf("ok=%v m=%v err=%v", ok, m, err)
+	}
+
+	// no name, no evaluator: ID is empty and Eval gives the value
+	if m.Components[0].ID() != "" {
+		t.Error("unnamed pattern has an ID")
+	}
+	if v, err := m.Components[0].Eval(newRunes("abc")); err != nil || v == nil {
+		t.Errorf("eval should give the (empty) value, got %v, %v", v, err)
+	}
+
+	var buf bytes.Buffer
+	if err := g.Print(&buf); err != nil || buf.String() != "(any, , any)" {
+		t.Errorf("print = %q, %v", buf.String(), err)
+	}
+
+	if ok, _, _ := ebnf.Parse[rune, runes.Pos](g, newRunes("abx")); !ok {
+		t.Error("abx should match, the last pattern takes any rune")
+	}
+	if ok, _, _ := ebnf.Parse[rune, runes.Pos](g, newRunes("axc")); ok {
+		t.Error("axc should not match")
+	}
+}
+
+func TestNameAndTextHelpers(t *testing.T) {
+	d := ebnf.Name(entR(unicode.IsDigit), "digit")
+	if d.ID() != "digit" || ebnf.IDOf[rune, runes.Pos](d) != "digit" {
+		t.Error("name not set")
+	}
+
+	plus := ebnf.Text(runeR('+'), `"+"`)
+	var buf bytes.Buffer
+	if err := concR(plus, d).Print(&buf); err != nil || buf.String() != `("+", digit)` {
+		t.Errorf("print = %q, %v", buf.String(), err)
 	}
 }

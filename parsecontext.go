@@ -26,8 +26,7 @@ func NewParseContext[T, P any](r Reader[T, P]) *ParseContext[T, P] {
 	return &ParseContext[T, P]{Reader: r}
 }
 
-// WithLogger sets the logger that receives the mismatches of this parse. It takes precedence over the loggers of
-// the patterns (see Pattern.SetLogger), which are only used when the context has no logger.
+// WithLogger sets the logger that receives the mismatches of this parse.
 func (c *ParseContext[T, P]) WithLogger(logger Logger[T, P]) *ParseContext[T, P] {
 	c.logger = logger
 	return c
@@ -73,20 +72,16 @@ func (c *ParseContext[T, P]) RecordFail(p Pattern[T, P], pos P) {
 	c.fails[failKey[T, P]{p, c.index(pos)}] = struct{}{}
 }
 
-// LogMismatch reports a mismatch of pattern p to the logger of the reader if it is a ParseContext with a logger, and
-// otherwise to the logger of the pattern. The mismatch is only built if somebody is listening, which saves an
-// allocation for every failed alternative when nothing is logged.
+// LogMismatch reports a mismatch of pattern p to the logger of the reader, if it is a ParseContext with a logger. The
+// mismatch is only built if somebody is listening, which saves an allocation for every failed alternative when
+// nothing is logged.
 func LogMismatch[T, P any](r Reader[T, P], p Pattern[T, P], build func() *Mismatch[T, P]) {
-	var logger Logger[T, P]
-
-	if c, ok := r.(interface{ Logger() Logger[T, P] }); ok {
-		logger = c.Logger()
+	c, ok := r.(interface{ Logger() Logger[T, P] })
+	if !ok {
+		return
 	}
 
-	if logger == nil {
-		logger = p.Logger()
-	}
-
+	logger := c.Logger()
 	if logger == nil {
 		return
 	}

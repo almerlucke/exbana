@@ -11,7 +11,7 @@ import (
 
 // Alternation matches a series of patterns OR style in order (alternation)
 type Alternation[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 	patterns     ebnf.Patterns[T, P]
 	isOrthogonal bool // if orthogonal we stop at first match as we know input is not related
 	weights      []float64
@@ -21,11 +21,8 @@ type Alternation[T, P any] struct {
 // New creates a new Alternation pattern
 func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Alternation[T, P] {
 	a := &Alternation[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-		patterns:    patterns,
+		patterns: patterns,
 	}
-
-	a.SetSelf(a)
 
 	return a
 }
@@ -75,7 +72,7 @@ func (a *Alternation[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T
 			return false, err
 		}
 
-		matched, result, err := pm.Match(r)
+		matched, result, err := ebnf.Parse(pm, r)
 		if err != nil {
 			return false, err
 		}
@@ -217,7 +214,7 @@ func (a *Alternation[T, P]) Print(w io.Writer) error {
 			}
 		}
 
-		err = child.PrintAsChild(w)
+		err = ebnf.PrintChild(w, child)
 		if err != nil {
 			return err
 		}

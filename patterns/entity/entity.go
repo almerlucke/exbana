@@ -9,7 +9,7 @@ import (
 
 // Entity represents a single entity pattern
 type Entity[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 	matchFunc func(T) bool
 	genFunc   func(*ebnf.GenContext) T
 }
@@ -17,12 +17,9 @@ type Entity[T, P any] struct {
 // New creates a new entity pattern
 func New[T, P any](matchFunc func(T) bool) *Entity[T, P] {
 	e := &Entity[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-		matchFunc:   matchFunc,
-		genFunc:     nil,
+		matchFunc: matchFunc,
+		genFunc:   nil,
 	}
-
-	e.SetSelf(e)
 
 	return e
 }
@@ -38,6 +35,11 @@ func (e *Entity[T, P]) SetGenerateFunc(f func() T) *Entity[T, P] {
 func (e *Entity[T, P]) SetGenerateFuncCtx(f func(*ebnf.GenContext) T) *Entity[T, P] {
 	e.genFunc = f
 	return e
+}
+
+// MatchCont offers the one match of the entity
+func (e *Entity[T, P]) MatchCont(rd ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.Single(rd, k, e.Match)
 }
 
 // Match matches the entity to a stream
@@ -105,6 +107,6 @@ func describe[T, P any](p ebnf.Pattern[T, P]) string {
 }
 
 func (e *Entity[T, P]) Print(w io.Writer) error {
-	_, err := w.Write([]byte(e.PrintOutput()))
+	_, err := w.Write([]byte(e.Text()))
 	return err
 }

@@ -89,7 +89,7 @@ func (l *FarthestLog[T, P]) LogMismatch(m *Mismatch[T, P]) {
 
 	// an unnamed composite (like digit+) would only print as a grammar fragment, and the leaf patterns it is
 	// built from fail at the same position or further, and are logged themselves
-	if _, composite := m.Pattern.(Parent[T, P]); composite && m.Pattern.ID() == NoID {
+	if _, composite := m.Pattern.(Parent[T, P]); composite && IDOf(m.Pattern) == NoID {
 		return
 	}
 
@@ -171,7 +171,7 @@ func (l *FarthestLog[T, P]) Err() error {
 
 // Describe returns the ID of a pattern, or else its EBNF print output, or an empty string if it has neither.
 func Describe[T, P any](p Pattern[T, P]) string {
-	if id := p.ID(); id != NoID {
+	if id := IDOf(p); id != NoID {
 		return id
 	}
 
@@ -188,30 +188,4 @@ type Parent[T, P any] interface {
 	// Children returns the patterns this pattern is built from. Patterns that are only used for lookahead
 	// (the exception of an except pattern) are not included.
 	Children() Patterns[T, P]
-}
-
-// SetLogger sets the logger on a pattern and on all patterns it is built from, recursively. Recursive
-// grammars are fine, every pattern is visited once. This changes the grammar, so it is not safe while the grammar
-// is in use by other parses: prefer ParseContext.WithLogger, which leaves the grammar alone.
-func SetLogger[T, P any](root Pattern[T, P], logger Logger[T, P]) {
-	visited := make(map[Pattern[T, P]]struct{})
-
-	var walk func(p Pattern[T, P])
-
-	walk = func(p Pattern[T, P]) {
-		if _, ok := visited[p]; ok {
-			return
-		}
-
-		visited[p] = struct{}{}
-		p.SetLogger(logger)
-
-		if parent, ok := p.(Parent[T, P]); ok {
-			for _, child := range parent.Children() {
-				walk(child)
-			}
-		}
-	}
-
-	walk(root)
 }

@@ -9,18 +9,15 @@ import (
 
 // Concatenation matches a series of patterns AND style in order (concatenation)
 type Concatenation[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 	patterns ebnf.Patterns[T, P]
 }
 
 // New creates a new concatenation pattern
 func New[T, P any](patterns ...ebnf.Pattern[T, P]) *Concatenation[T, P] {
 	c := &Concatenation[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-		patterns:    patterns,
+		patterns: patterns,
 	}
-
-	c.SetSelf(c)
 
 	return c
 }
@@ -129,7 +126,7 @@ func (c *Concatenation[T, P]) Print(w io.Writer) error {
 			}
 		}
 
-		err = child.PrintAsChild(w)
+		err = ebnf.PrintChild(w, child)
 		if err != nil {
 			return err
 		}

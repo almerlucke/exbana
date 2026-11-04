@@ -88,7 +88,7 @@ func runeVector(v []rune) *vec.Vector[rune, runes.Pos] {
 	return vec.New[rune, runes.Pos](runeEq, v...)
 }
 
-func conc(patterns ...ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+func conc(patterns ...ebnf.Pattern[rune, runes.Pos]) *concatenation.Concatenation[rune, runes.Pos] {
 	return concatenation.New[rune, runes.Pos](patterns...)
 }
 
@@ -96,15 +96,15 @@ func rep(pattern ebnf.Pattern[rune, runes.Pos]) *repetition.Repetition[rune, run
 	return repetition.New[rune, runes.Pos](pattern, 0, 0)
 }
 
-func repg(pattern ebnf.Pattern[rune, runes.Pos], maxGen int) ebnf.Pattern[rune, runes.Pos] {
+func repg(pattern ebnf.Pattern[rune, runes.Pos], maxGen int) *repetition.Repetition[rune, runes.Pos] {
 	return repetition.New[rune, runes.Pos](pattern, 0, 0).SetMaxGen(maxGen)
 }
 
-func alt(patterns ...ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+func alt(patterns ...ebnf.Pattern[rune, runes.Pos]) *alternation.Alternation[rune, runes.Pos] {
 	return alternation.New[rune, runes.Pos](patterns...)
 }
 
-func opt(pattern ebnf.Pattern[rune, runes.Pos]) ebnf.Pattern[rune, runes.Pos] {
+func opt(pattern ebnf.Pattern[rune, runes.Pos]) *repetition.Repetition[rune, runes.Pos] {
 	return repetition.New[rune, runes.Pos](pattern, 0, 1)
 }
 
@@ -173,30 +173,30 @@ func main() {
 		return (r >= '0' && r <= '9') || (r >= 'A' && r <= 'F') || (r >= 'a' && r <= 'f')
 	}).SetGenerateFuncCtx(randomHexDigit)
 
-	identifier := conc(letter, repg(alt(letter, unicodeDigit), 12)).SetID("identifier")
+	identifier := ebnf.Name(conc(letter, repg(alt(letter, unicodeDigit), 12)), "identifier")
 
 	hexDigits := conc(hexDigit, rep(conc(opt(underscore), hexDigit)))
-	hexLit := conc(zero, runeMatch2('x', 'X'), opt(underscore), hexDigits).SetID("hexLit")
+	hexLit := ebnf.Name(conc(zero, runeMatch2('x', 'X'), opt(underscore), hexDigits), "hexLit")
 
 	octalDigits := conc(octalDigit, rep(conc(opt(underscore), octalDigit)))
-	octalLit := conc(zero, opt(runeMatch2('o', 'O')), opt(underscore), octalDigits).SetID("octalLit")
+	octalLit := ebnf.Name(conc(zero, opt(runeMatch2('o', 'O')), opt(underscore), octalDigits), "octalLit")
 
 	binaryDigits := conc(binaryDigit, rep(conc(opt(underscore), binaryDigit)))
-	binaryLit := conc(zero, runeMatch2('b', 'B'), opt(underscore), binaryDigits).SetID("binaryLit")
+	binaryLit := ebnf.Name(conc(zero, runeMatch2('b', 'B'), opt(underscore), binaryDigits), "binaryLit")
 
 	decimalDigits := conc(decimalDigit, rep(conc(opt(underscore), decimalDigit)))
-	decimalLit := alt(zero, conc(runeBetween('1', '9'), opt(conc(opt(underscore), decimalDigits)))).SetID("decimalLit")
+	decimalLit := ebnf.Name(alt(zero, conc(runeBetween('1', '9'), opt(conc(opt(underscore), decimalDigits)))), "decimalLit")
 
-	intLit := alt(decimalLit, binaryLit, octalLit, hexLit).SetID("intLit")
+	intLit := ebnf.Name(alt(decimalLit, binaryLit, octalLit, hexLit), "intLit")
 
 	decimalExponent := conc(runeMatch2('e', 'E'), opt(runeMatch2('+', '-')), decimalDigits)
-	decimalFloatLit := alt(conc(decimalDigits, dot, opt(decimalDigits), opt(decimalExponent)), conc(decimalDigits, decimalExponent), conc(dot, decimalDigits, opt(decimalExponent))).SetID("decimalFloatLit")
+	decimalFloatLit := ebnf.Name(alt(conc(decimalDigits, dot, opt(decimalDigits), opt(decimalExponent)), conc(decimalDigits, decimalExponent), conc(dot, decimalDigits, opt(decimalExponent))), "decimalFloatLit")
 
 	hexMantissa := alt(conc(opt(underscore), hexDigits, dot, opt(hexDigits)), conc(opt(underscore), hexDigits), conc(dot, hexDigits))
 	hexExponent := conc(runeMatch2('p', 'P'), opt(runeMatch2('+', '-')), decimalDigits)
-	hexFloatLit := conc(zero, runeMatch2('x', 'X'), hexMantissa, hexExponent).SetID("hexFloatLit")
+	hexFloatLit := ebnf.Name(conc(zero, runeMatch2('x', 'X'), hexMantissa, hexExponent), "hexFloatLit")
 
-	floatLit := alt(decimalFloatLit, hexFloatLit).SetID("floatLit")
+	floatLit := ebnf.Name(alt(decimalFloatLit, hexFloatLit), "floatLit")
 
 	token := alt(identifier, intLit, floatLit)
 
@@ -208,7 +208,7 @@ func main() {
 	for _, result := range results {
 		result = result.Unpack()
 		s, _ := rd.Range(result.Begin, result.End)
-		log.Printf("result %v: %v - pos %d", result.Pattern.ID(), string(s), result.Begin)
+		log.Printf("result %v: %v - pos %d", result.ID(), string(s), result.Begin)
 	}
 
 	// a fixed seed makes the generated output reproducible

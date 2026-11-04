@@ -12,7 +12,7 @@ import (
 // By default, it's greedy and allows backtracking in concatenation patterns.
 // If Possessive is set to true, it will not give back matches during backtracking.
 type Repetition[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 	pattern      ebnf.Pattern[T, P]
 	min          int
 	max          int
@@ -25,14 +25,11 @@ type Repetition[T, P any] struct {
 // New creates a new repetition pattern
 func New[T, P any](pattern ebnf.Pattern[T, P], min int, max int) *Repetition[T, P] {
 	rep := &Repetition[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-		pattern:     pattern,
-		min:         min,
-		max:         max,
-		maxGen:      1,
+		pattern: pattern,
+		min:     min,
+		max:     max,
+		maxGen:  1,
 	}
-
-	rep.SetSelf(rep)
 
 	return rep
 }
@@ -168,7 +165,7 @@ func (rep *Repetition[T, P]) matchPossessive(r ebnf.Reader[T, P], beginPos P, k 
 			return false, err
 		}
 
-		matched, result, err := rep.pattern.Match(r)
+		matched, result, err := ebnf.Parse(rep.pattern, r)
 		if err != nil {
 			return false, err
 		}
@@ -277,7 +274,7 @@ func (rep *Repetition[T, P]) generateCount(ctx *ebnf.GenContext) (int, error) {
 
 // printAny prints EBNF zero or more
 func (rep *Repetition[T, P]) printAny(w io.Writer) error {
-	err := rep.pattern.PrintAsChild(w)
+	err := ebnf.PrintChild(w, rep.pattern)
 	if err != nil {
 		return err
 	}
@@ -289,7 +286,7 @@ func (rep *Repetition[T, P]) printAny(w io.Writer) error {
 
 // printAny prints EBNF optional
 func (rep *Repetition[T, P]) printOptional(w io.Writer) error {
-	err := rep.pattern.PrintAsChild(w)
+	err := ebnf.PrintChild(w, rep.pattern)
 	if err != nil {
 		return err
 	}
@@ -301,7 +298,7 @@ func (rep *Repetition[T, P]) printOptional(w io.Writer) error {
 
 // printAny prints EBNF at least one
 func (rep *Repetition[T, P]) printAtLeastOne(w io.Writer) error {
-	err := rep.pattern.PrintAsChild(w)
+	err := ebnf.PrintChild(w, rep.pattern)
 	if err != nil {
 		return err
 	}
@@ -330,7 +327,7 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 			return err
 		}
 
-		err = rep.pattern.PrintAsChild(w)
+		err = ebnf.PrintChild(w, rep.pattern)
 		if err != nil {
 			return err
 		}
@@ -364,7 +361,7 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 		return err
 	}
 
-	err = rep.pattern.PrintAsChild(w)
+	err = ebnf.PrintChild(w, rep.pattern)
 	if err != nil {
 		return err
 	}
@@ -375,7 +372,7 @@ func (rep *Repetition[T, P]) Print(w io.Writer) error {
 			return err
 		}
 
-		err = rep.pattern.PrintAsChild(w)
+		err = ebnf.PrintChild(w, rep.pattern)
 		if err != nil {
 			return err
 		}

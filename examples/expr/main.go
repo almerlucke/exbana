@@ -124,7 +124,7 @@ func (c *Calculator) Eval(input string) (float64, error) {
 	}
 	var r reader = ctx
 
-	matched, m, err := c.root.Match(r)
+	matched, m, err := ebnf.Parse(c.root, r)
 	if err != nil {
 		return 0, err
 	}
@@ -144,62 +144,62 @@ func (c *Calculator) grammar() pattern {
 	rep := func(p pattern, min, max int) *repetition.Repetition[rune, runes.Pos] {
 		return repetition.New(p, min, max).SetPossessive(fast)
 	}
-	any0 := func(p pattern) pattern { return rep(p, 0, 0) }
-	opt := func(p pattern) pattern { return rep(p, 0, 1) }
-	more1 := func(p pattern) pattern { return rep(p, 1, 0) }
-	conc := func(ps ...pattern) pattern { return concatenation.New(ps...) }
+	any0 := func(p pattern) *repetition.Repetition[rune, runes.Pos] { return rep(p, 0, 0) }
+	opt := func(p pattern) *repetition.Repetition[rune, runes.Pos] { return rep(p, 0, 1) }
+	more1 := func(p pattern) *repetition.Repetition[rune, runes.Pos] { return rep(p, 1, 0) }
+	conc := func(ps ...pattern) *concatenation.Concatenation[rune, runes.Pos] { return concatenation.New(ps...) }
 	alt := func(ps ...pattern) *alternation.Alternation[rune, runes.Pos] {
 		return alternation.New(ps...).SetOrthogonal(fast)
 	}
 	char := func(r rune) pattern {
-		return ent.New[rune, runes.Pos](func(x rune) bool { return x == r }).SetPrintOutput(strconv.Quote(string(r)))
+		return ebnf.Text(ent.New[rune, runes.Pos](func(x rune) bool { return x == r }), strconv.Quote(string(r)))
 	}
 	oneOf := func(chars string, name string) pattern {
-		return ent.New[rune, runes.Pos](func(x rune) bool { return strings.ContainsRune(chars, x) }).SetID(name)
+		return ebnf.Name(ent.New[rune, runes.Pos](func(x rune) bool { return strings.ContainsRune(chars, x) }), name)
 	}
 	class := func(f func(rune) bool, name string) pattern {
-		return ent.New[rune, runes.Pos](f).SetID(name)
+		return ebnf.Name(ent.New[rune, runes.Pos](f), name)
 	}
 
-	ws := any0(ent.New[rune, runes.Pos](unicode.IsSpace)).SetID("ws")
+	ws := ebnf.Name(any0(ent.New[rune, runes.Pos](unicode.IsSpace)), "ws")
 	digit := func() pattern { return class(func(r rune) bool { return r >= '0' && r <= '9' }, "digit") }
 	letter := func() pattern { return class(func(r rune) bool { return unicode.IsLetter(r) || r == '_' }, "letter") }
 
-	number := conc(
+	number := rule.New("number", conc(
 		more1(digit()),
 		opt(conc(char('.'), more1(digit()))),
 		opt(conc(oneOf("eE", "exponent"), opt(oneOf("+-", "sign")), more1(digit()))),
-	).SetID("number").SetEvalFunc(evalNumber)
+	)).WithEval(evalNumber)
 
 	identifier := func() pattern {
-		return conc(letter(), any0(alt(letter(), digit()))).SetID("identifier")
+		return ebnf.Name(conc(letter(), any0(alt(letter(), digit()))), "identifier")
 	}
 
-	variable := identifier().SetID("variable").SetEvalFunc(c.evalVariable)
+	variable := rule.New("variable", identifier()).WithEval(c.evalVariable)
 
 	// forward declarations for the recursive rules
 	expr := rule.Declare[rune, runes.Pos]("expression").WithEval(evalBinary)
 	unary := rule.Declare[rune, runes.Pos]("unary").WithEval(delegate)
 
 	args := opt(conc(expr, any0(conc(ws, char(','), ws, expr))))
-	call := conc(identifier(), ws, char('('), ws, args, ws, char(')')).SetID("call").SetEvalFunc(evalCall)
+	call := rule.New("call", conc(identifier(), ws, char('('), ws, args, ws, char(')'))).WithEval(evalCall)
 
-	paren := conc(char('('), ws, expr, ws, char(')')).SetID("parenthesis").SetEvalFunc(func(m *match, r reader) (any, error) {
+	paren := rule.New("parenthesis", conc(char('('), ws, expr, ws, char(')'))).WithEval(func(m *match, r reader) (any, error) {
 		return num(m.Components[2], r)
 	})
 
-	primary := alt(number, call, variable, paren).SetEvalFunc(delegate)
+	primary := rule.New("primary", alt(number, call, variable, paren)).WithEval(delegate)
 
-	power := conc(primary, opt(conc(ws, char('^'), ws, unary))).SetID("power").SetEvalFunc(evalPower)
+	power := rule.New("power", conc(primary, opt(conc(ws, char('^'), ws, unary)))).WithEval(evalPower)
 
-	negation := conc(oneOf("+-", "sign"), ws, unary).SetID("negation").SetEvalFunc(evalNegation)
+	negation := rule.New("negation", conc(oneOf("+-", "sign"), ws, unary)).WithEval(evalNegation)
 
-	term := conc(unary, any0(conc(ws, oneOf("*/%", "multiplication operator"), ws, unary))).SetID("term").SetEvalFunc(evalBinary)
+	term := rule.New("term", conc(unary, any0(conc(ws, oneOf("*/%", "multiplication operator"), ws, unary)))).WithEval(evalBinary)
 
 	expr.Define(conc(term, any0(conc(ws, oneOf("+-", "addition operator"), ws, term))))
 	unary.Define(alt(negation, power))
 
-	return conc(ws, expr, ws, end.New[rune, runes.Pos]().SetPrintOutput("end of input")).SetID("input").SetEvalFunc(func(m *match, r reader) (any, error) {
+	return rule.New("input", conc(ws, expr, ws, ebnf.Text(end.New[rune, runes.Pos](), "end of input"))).WithEval(func(m *match, r reader) (any, error) {
 		return num(m.Components[1], r)
 	})
 }

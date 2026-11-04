@@ -1,23 +1,32 @@
 package end
 
 import (
+	"io"
+
 	ebnf "github.com/almerlucke/exbana/v2"
 )
 
 // End matches the end of stream
 type End[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 }
 
 // New creates a new end of stream pattern
 func New[T, P any]() *End[T, P] {
-	e := &End[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-	}
-
-	e.SetSelf(e)
+	e := &End[T, P]{}
 
 	return e
+}
+
+// MatchCont offers the one match of the end pattern
+func (e *End[T, P]) MatchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P]) (bool, error) {
+	return ebnf.Single(r, k, e.Match)
+}
+
+// Print prints the text of the pattern
+func (e *End[T, P]) Print(w io.Writer) error {
+	_, err := io.WriteString(w, e.Text())
+	return err
 }
 
 // Match matches a end of stream pattern against a stream

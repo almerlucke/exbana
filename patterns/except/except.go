@@ -10,7 +10,7 @@ import (
 
 // Except must not match the except pattern but must match the must pattern
 type Except[T, P any] struct {
-	*ebnf.BasePattern[T, P]
+	ebnf.Label
 	must      ebnf.Pattern[T, P]
 	exception ebnf.Pattern[T, P]
 	accept    func([]T) bool
@@ -20,12 +20,9 @@ type Except[T, P any] struct {
 // New creates a new exception pattern
 func New[T, P any](must ebnf.Pattern[T, P], exception ebnf.Pattern[T, P]) *Except[T, P] {
 	e := &Except[T, P]{
-		BasePattern: ebnf.NewBasePattern[T, P](),
-		must:        must,
-		exception:   exception,
+		must:      must,
+		exception: exception,
 	}
-
-	e.SetSelf(e)
 
 	return e
 }
@@ -48,7 +45,7 @@ func (e *Except[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P])
 
 	// First check for the exception match, we do not want to match the exception
 	// the exception is lookahead, it is supposed to fail on every successful match so it must not be logged
-	matched, result, err := e.exception.Match(ebnf.Silent(r))
+	matched, result, err := ebnf.Parse(e.exception, ebnf.Silent(r))
 	if err != nil {
 		return false, err
 	}

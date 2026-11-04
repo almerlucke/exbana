@@ -15,6 +15,7 @@ import (
 	ent "github.com/almerlucke/exbana/v2/patterns/entity"
 	"github.com/almerlucke/exbana/v2/patterns/except"
 	"github.com/almerlucke/exbana/v2/patterns/repetition"
+	"github.com/almerlucke/exbana/v2/patterns/rule"
 	vec "github.com/almerlucke/exbana/v2/patterns/vector"
 	"github.com/almerlucke/exbana/v2/readers/runes"
 )
@@ -251,49 +252,51 @@ func main() {
 
 	logger := ebnf.NewStackLog[rune, runes.Pos]()
 
-	ws := rep(stringContains(" \t\n\r")).SetID("whitespace")
+	ws := ebnf.Name(rep(stringContains(" \t\n\r")), "whitespace")
 
 	digit := rb('0', '9')
 	fraction := conc('.', atLeast1(digit))
 	exponent := conc(rm2('e', 'E'), opt(rm2('+', '-')), atLeast1(digit))
-	number := conc(
+	number := rule.New("number", conc(
 		opt('-'),
 		alt('0', conc(rb('1', '9'), rep(digit))),
 		opt(fraction),
 		opt(exponent),
-	).SetID("number").SetLogger(logger).SetEvalFunc(evalNumber)
+	)).WithEval(evalNumber)
 
 	hexDigit := ent.New[rune, runes.Pos](func(r rune) bool {
 		return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
 	})
-	uniLit := conc('u', n(hexDigit, 4)).SetID("unicodeLit")
-	escape := conc('\\', alt('"', '\\', '/', 'b', 'f', 'n', 'r', 't', uniLit)).SetID("escape")
+	uniLit := ebnf.Name(conc('u', n(hexDigit, 4)), "unicodeLit")
+	escape := ebnf.Name(conc('\\', alt('"', '\\', '/', 'b', 'f', 'n', 'r', 't', uniLit)), "escape")
 	anyChar := ex(ra(), alt('"', '\\', rmf(unicode.IsControl)))
-	str := conc('"', rep(alt(anyChar, escape)), '"').SetID("string").SetLogger(logger).SetEvalFunc(evalString)
+	str := rule.New("string", conc('"', rep(alt(anyChar, escape)), '"')).WithEval(evalString)
 
-	trueVal := rv([]rune{'t', 'r', 'u', 'e'}).SetID("true").SetLogger(logger).SetEvalFunc(evalTrue)
-	falseVal := rv([]rune{'f', 'a', 'l', 's', 'e'}).SetID("false").SetLogger(logger).SetEvalFunc(evalFalse)
-	nullVal := rv([]rune{'n', 'u', 'l', 'l'}).SetID("null").SetLogger(logger).SetEvalFunc(evalNull)
+	trueVal := rule.New("true", rv([]rune{'t', 'r', 'u', 'e'})).WithEval(evalTrue)
+	falseVal := rule.New("false", rv([]rune{'f', 'a', 'l', 's', 'e'})).WithEval(evalFalse)
+	nullVal := rule.New("null", rv([]rune{'n', 'u', 'l', 'l'})).WithEval(evalNull)
 
 	// forward value declaration
-	value := conc()
+	value := rule.Declare[rune, runes.Pos]("value").WithEval(evalValue)
 
-	array := conc(
+	array := rule.New("array", conc(
 		'[',
 		alt(conc(value, rep(conc(',', value))), ws),
 		']',
-	).SetID("array").SetLogger(logger).SetEvalFunc(evalArray)
+	)).WithEval(evalArray)
 
-	obj := conc(
+	obj := rule.New("object", conc(
 		'{',
 		alt(conc(ws, str, ws, ':', value, rep(conc(',', ws, str, ws, ':', value))), ws),
 		'}',
-	).SetID("object").SetLogger(logger).SetEvalFunc(evalObject)
+	)).WithEval(evalObject)
 
-	value.SetPatterns([]ebnf.Pattern[rune, runes.Pos]{ws, alt(str, number, obj, array, trueVal, falseVal, nullVal).SetOrthogonal(true), ws})
-	value.SetID("value").SetEvalFunc(evalValue)
+	value.Define(conc(ws, alt(str, number, obj, array, trueVal, falseVal, nullVal).SetOrthogonal(true), ws))
 
-	if ok, match, err := value.Match(rd); ok && match != nil {
+	// the logger belongs to this parse, so it goes in the context and not in the grammar
+	ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(logger)
+
+	if ok, match, err := ebnf.Parse[rune, runes.Pos](value, ctx); ok && match != nil {
 		val, err := match.Eval(rd)
 		if err != nil {
 			log.Fatal(err)
@@ -314,7 +317,7 @@ func main() {
 				rng = rng[len(rng)-10:]
 			}
 			log.Printf("failed to parse %s -> pos %d, line %d, failed at %s",
-				longestMatch.Pattern.ID(),
+				ebnf.IDOf(longestMatch.Pattern),
 				longestMatch.End.Col+1,
 				longestMatch.End.Line+1,
 				string(rng))

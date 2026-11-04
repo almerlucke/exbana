@@ -167,6 +167,21 @@ Give the leaf patterns of your grammar an ID (`SetID("digit")`) or print output 
 as the "expected" descriptions; leaves without either are left out. `Last()` returns the `*SyntaxError` with the
 position, the expected list and the unexpected element for your own formatting. The exception of an `except` is lookahead: it is supposed to fail on every successful match, so it is matched silently and never reaches the logger.
 
+## Rules
+
+`rule.New(name, pattern)` gives a pattern a name and an evaluation function; it is the unit a grammar is made of. A rule can be
+declared before it is defined, which is how recursion is written, so no placeholder patterns are needed:
+
+```go
+expr := rule.Declare[rune, runes.Pos]("expression").WithEval(evalBinary)
+paren := rule.New("parenthesis", conc(char('('), expr, char(')')))
+expr.Define(alt(number, paren))
+```
+
+A match of a rule has the rule as its pattern (`m.ID()` is the name, `m.Eval` runs the rule's function) and the components of the
+pattern it wraps. Matching a rule that was declared but never defined returns an error. `SetAtomic(true)` makes syntax errors say
+`expected number` instead of listing the leaves inside it, which suits token-like rules.
+
 ## EBNF Printing
 
 Exbana can output your defined patterns as EBNF strings:

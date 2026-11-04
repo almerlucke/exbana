@@ -16,6 +16,7 @@ import (
 	ent "github.com/almerlucke/exbana/v2/patterns/entity"
 	"github.com/almerlucke/exbana/v2/patterns/except"
 	"github.com/almerlucke/exbana/v2/patterns/repetition"
+	"github.com/almerlucke/exbana/v2/patterns/rule"
 	"github.com/almerlucke/exbana/v2/patterns/vector"
 	"github.com/almerlucke/exbana/v2/readers/runes"
 )
@@ -963,4 +964,80 @@ func TestParseContextLoggerIgnoresException(t *testing.T) {
 		}
 	}
 	t.Logf("expected: %v", e.Expected)
+}
+
+func TestRuleMatchEvalAndRecursion(t *testing.T) {
+	digit := entR(func(r rune) bool { return r >= '0' && r <= '9' }).SetID("digit")
+	number := rule.New[rune, runes.Pos]("number", concR(digit, repetition.New[rune, runes.Pos](digit, 0, 0))).
+		WithEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
+			rs, err := rd.Range(m.Begin, m.End)
+			return len(rs), err
+		})
+
+	// nest = number | '(' nest ')', recursion through a forward declaration
+	nest := rule.Declare[rune, runes.Pos]("nest")
+	nest.Define(altR(number, concR(runeR('('), nest, runeR(')'))))
+
+	rd, _ := runes.New(strings.NewReader("((123))"))
+	ok, m, err := nest.Match(rd)
+	if err != nil || !ok || m.ID() != "nest" {
+		t.Fatalf("ok=%v id=%v err=%v", ok, m, err)
+	}
+
+	// the number match sits two parentheses deep and evaluates through its rule
+	n := m.Components[0].Components[1]
+	n = n.Components[0].Components[1]
+	n = n.Components[0].Unpack()
+	if n.ID() != "number" {
+		t.Fatalf("got %q", n.ID())
+	}
+	if v, err := n.Eval(rd); err != nil || v != 3 {
+		t.Fatalf("eval = %v, %v", v, err)
+	}
+}
+
+func TestRuleUndefinedIsAnError(t *testing.T) {
+	r := rule.Declare[rune, runes.Pos]("later")
+	rd, _ := runes.New(strings.NewReader("x"))
+	if _, _, err := r.Match(rd); err == nil || !strings.Contains(err.Error(), "later") {
+		t.Fatalf("err = %v", err)
+	}
+	if r.Defined() {
+		t.Fatal("should not be defined")
+	}
+}
+
+func TestRulePrintAndGenerate(t *testing.T) {
+	r := rule.New[rune, runes.Pos]("ab", concR(runeR('a').SetPrintOutput("a"), runeR('b').SetPrintOutput("b")))
+	var buf bytes.Buffer
+	if err := r.Print(&buf); err != nil || buf.String() != "ab = (a, b)" {
+		t.Fatalf("print = %q, %v", buf.String(), err)
+	}
+	buf.Reset()
+	if err := concR(r, r).Print(&buf); err != nil || buf.String() != "(ab, ab)" {
+		t.Fatalf("print as child = %q, %v", buf.String(), err)
+	}
+}
+
+func TestRuleAtomicNamesTheRuleInSyntaxErrors(t *testing.T) {
+	digit := entR(func(r rune) bool { return r >= '0' && r <= '9' }).SetID("digit")
+	sign := entR(func(r rune) bool { return r == '-' }).SetID("minus")
+	for _, atomic := range []bool{false, true} {
+		number := rule.New[rune, runes.Pos]("number", concR(repetition.New[rune, runes.Pos](sign, 0, 1), digit)).SetAtomic(atomic)
+
+		rd, _ := runes.New(strings.NewReader("x"))
+		log := runes.NewFarthestLog(rd)
+		ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log)
+		if ok, _, _ := number.Match(ctx); ok {
+			t.Fatal("should not match")
+		}
+
+		msg := log.Err().Error()
+		if atomic && !strings.HasSuffix(msg, "expected number") {
+			t.Fatalf("atomic: %s", msg)
+		}
+		if !atomic && !strings.Contains(msg, "digit") {
+			t.Fatalf("non atomic: %s", msg)
+		}
+	}
 }

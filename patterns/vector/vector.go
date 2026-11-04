@@ -90,3 +90,16 @@ func (v *Vector[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte(v.Text()))
 	return err
 }
+
+// Named sets the identifier of the pattern and returns the pattern, so it can be chained: names are what syntax
+// errors and printed grammars call the pattern.
+func (v *Vector[T, P]) Named(id string) *Vector[T, P] {
+	v.SetID(id)
+	return v
+}
+
+// Printed sets the text the pattern prints as and returns the pattern.
+func (v *Vector[T, P]) Printed(text string) *Vector[T, P] {
+	v.SetText(text)
+	return v
+}

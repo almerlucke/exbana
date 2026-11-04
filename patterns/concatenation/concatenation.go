@@ -148,3 +148,16 @@ func (c *Concatenation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Concate
 func (c *Concatenation[T, P]) Children() ebnf.Patterns[T, P] {
 	return c.patterns
 }
+
+// Named sets the identifier of the pattern and returns the pattern, so it can be chained: names are what syntax
+// errors and printed grammars call the pattern.
+func (c *Concatenation[T, P]) Named(id string) *Concatenation[T, P] {
+	c.SetID(id)
+	return c
+}
+
+// Printed sets the text the pattern prints as and returns the pattern.
+func (c *Concatenation[T, P]) Printed(text string) *Concatenation[T, P] {
+	c.SetText(text)
+	return c
+}

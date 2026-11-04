@@ -176,3 +176,16 @@ func (e *Except[T, P]) Print(w io.Writer) error {
 func (e *Except[T, P]) Children() ebnf.Patterns[T, P] {
 	return ebnf.Patterns[T, P]{e.must}
 }
+
+// Named sets the identifier of the pattern and returns the pattern, so it can be chained: names are what syntax
+// errors and printed grammars call the pattern.
+func (e *Except[T, P]) Named(id string) *Except[T, P] {
+	e.SetID(id)
+	return e
+}
+
+// Printed sets the text the pattern prints as and returns the pattern.
+func (e *Except[T, P]) Printed(text string) *Except[T, P] {
+	e.SetText(text)
+	return e
+}

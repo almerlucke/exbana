@@ -1116,3 +1116,40 @@ func TestMemoizedFirstMatchGivesSameResults(t *testing.T) {
 		}
 	}
 }
+
+func TestNamedAndPrintedChainOnEveryPattern(t *testing.T) {
+	a := runeR('a')
+
+	named := map[string]ebnf.Named{
+		"entity":        entR(unicode.IsDigit).Named("n"),
+		"vector":        vecR("ab").Named("n"),
+		"end":           endR().Named("n"),
+		"alternation":   altR(a).Named("n"),
+		"concatenation": concR(a).Named("n"),
+		"repetition":    repR(a, 0, 0).Named("n"),
+		"except":        exceptR(a, a).Named("n"),
+	}
+	for name, p := range named {
+		if p.ID() != "n" {
+			t.Errorf("%s: ID = %q", name, p.ID())
+		}
+	}
+
+	// text is what leaves print as, and chains with the other setters
+	var buf bytes.Buffer
+	leaf := vecR("ab").Printed("<ab>").Named("ab")
+	if err := leaf.Print(&buf); err != nil || buf.String() != "<ab>" {
+		t.Errorf("print = %q, %v", buf.String(), err)
+	}
+	buf.Reset()
+	if err := ebnf.PrintChild[rune, runes.Pos](&buf, leaf); err != nil || buf.String() != "ab" {
+		t.Errorf("as child = %q, %v", buf.String(), err)
+	}
+	if got := repR(a, 0, 0).Named("r").SetPossessive(true); !got.Possessive() || got.ID() != "r" {
+		t.Error("Named does not chain into the other setters")
+	}
+	buf.Reset()
+	if err := endR().Printed("$").Print(&buf); err != nil || buf.String() != "$" {
+		t.Errorf("end = %q, %v", buf.String(), err)
+	}
+}

@@ -49,3 +49,16 @@ func (e *End[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) 
 func (e *End[T, P]) Generate(_ *ebnf.GenContext, w ebnf.Writer[T]) error {
 	return w.Finish()
 }
+
+// Named sets the identifier of the pattern and returns the pattern, so it can be chained: names are what syntax
+// errors and printed grammars call the pattern.
+func (e *End[T, P]) Named(id string) *End[T, P] {
+	e.SetID(id)
+	return e
+}
+
+// Printed sets the text the pattern prints as and returns the pattern.
+func (e *End[T, P]) Printed(text string) *End[T, P] {
+	e.SetText(text)
+	return e
+}

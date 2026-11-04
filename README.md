@@ -278,6 +278,44 @@ This is the base for tools that read a grammar: an analysis that finds where a r
 writes a parser as Go source. The tests check that the described tree means the same as the grammar by interpreting it with a
 second, independent implementation, over thousands of random grammars.
 
+## Making a grammar fast
+
+A grammar made of patterns backtracks: a repetition gives back what it matched when what follows fails, and an alternation tries
+its other branches. That is what makes it easy to write, and most of it is never needed. `optimize` finds the places where it
+provably is not, and turns them into the faster possessive repetition and orthogonal alternation:
+
+```go
+result, err := optimize.Optimize(grammar, optimize.Options{})
+fmt.Print(result)
+```
+
+```
+5 can be made possessive or orthogonal, 2 can not
+  safe possessive: [0-9]+: the item starts with '0' to '9', what follows never does
+  safe orthogonal: ("+" | "-"): the branches start with different elements, so at most one can match
+  not safe possessive: "a"*: the repeated item and what follows it can both start with 'a'
+```
+
+A repetition can stop giving back when its item can not start with anything that may follow it. An alternation can commit to the
+first branch that matches when its branches start with different elements and none of them can match nothing. The result
+matches exactly what the original did, in any context: the tests optimize random grammars and require the same answer alone and
+in front of other random grammars, and a fuzz target keeps looking. The report says why every other place was left alone, and
+a pattern that is used in several places is only changed if it is safe in all of them.
+
+What you give the analysis decides what it can do:
+
+- **Declarative leaves** (`entity.Between`, `In`, `Equals`, `vector.Text` and the like) say which elements they accept. A leaf made from
+  a function does not, so it counts as "could be anything" and keeps the places around it as they are; the report says so.
+- **Use `Options{Closed: true}`** if the grammar is the whole input, or end it with an `end` pattern. Otherwise it may be used inside
+  anything, and a repetition at its very end can not be changed.
+- **Put whitespace after tokens**, not before. With `ws "[" ...` and `ws digits` two alternatives both start with whitespace and the
+  choice can not be made by looking at the next element; with `"[" ws ...` and `digits ws` it can. The report names the overlap.
+- The elements have to be integers (runes, bytes, integer tokens).
+
+On a JSON grammar written the natural way, with 29 repetitions and alternations all found safe, parsing 2,000 objects takes 122 ms
+instead of 208 ms with 21% fewer allocations. That is what removing the backtracking is worth; a faster engine would need to stop
+building a tree of objects, which is a different project (see `ebnf.Analyze`, which is the first step towards it).
+
 ## EBNF Printing
 
 Exbana can output your defined patterns as EBNF strings. Named patterns print as their name inside other patterns, and leaves print as the text you gave them with `.Printed`:

@@ -52,6 +52,9 @@
 // Each pattern describes itself with a [Shape] (see [Structured], which a pattern you write can implement too); one that
 // does not is [KindOpaque]. The declarative leaves of the entity and vector packages (Between, In, Equals, Text and the
 // like) say what they accept, where a leaf made from a function is only "one element".
+//
+// The optimize package uses it to find the repetitions and alternations that never need to backtrack and to make them
+// possessive and orthogonal, which makes a grammar faster without changing what it matches.
 package exbana
 
 import (

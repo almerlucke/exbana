@@ -247,6 +247,37 @@ what a marked rule found at a position is remembered for the rest of the parse, 
 expression costs no more than parsing the text once. A rule that is not marked and is entered again at the same position returns
 `rule.ErrLeftRecursion` (naming the rule) and does not overflow the stack.
 
+## Describing grammars
+
+A pattern built with `entity.New(func)` is a function, and nobody but the function knows what it accepts. For a tool that wants to
+analyse a grammar or compile it into something faster that is a closed box. The declarative leaves say what they are:
+
+```go
+letter := entity.In[rune, runes.Pos](entity.Range[rune]{Lo: 'a', Hi: 'z'}, entity.Range[rune]{Lo: '_', Hi: '_'})
+digit := entity.Between[rune, runes.Pos]('0', '9')
+notQuote := entity.NotIn[rune, runes.Pos](entity.Range[rune]{Lo: '"', Hi: '"'})
+let := vector.Text[runes.Pos]("let") // or vector.Literal(values...) for other element types
+```
+
+They match exactly like the closure versions. `entity.OneOf`, `entity.Equals` and `entity.Any` complete the set, and `Equals` and
+`Text` can generate their value without a generate function.
+
+`ebnf.Analyze(pattern)` turns a grammar into a `Grammar`: a tree of nodes and a table of rules, where a use of a rule is a reference
+by name, so recursive grammars are finite. Every pattern of the library describes itself through its `Shape` (kind, parts, min and
+max, possessive, orthogonal, class ranges, literal values), and a pattern that does not, like one written from scratch, is a node of
+kind `KindOpaque` that can only be called. `Analyze` reports rules that were never defined, two different rules with the same name,
+and recursion that does not go through a named rule. `Grammar.String()` prints it as EBNF:
+
+```
+declaration = ("let", identifier, ("=", integer)?)
+identifier = ([a-z_], ([a-z_] | [0-9])*)
+integer = [0-9]++
+```
+
+This is the base for tools that read a grammar: an analysis that finds where a repetition can safely be possessive, or a generator that
+writes a parser as Go source. The tests check that the described tree means the same as the grammar by interpreting it with a
+second, independent implementation, over thousands of random grammars.
+
 ## EBNF Printing
 
 Exbana can output your defined patterns as EBNF strings. Named patterns print as their name inside other patterns, and leaves print as the text you gave them with `.Printed`:

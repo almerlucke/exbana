@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	ebnf "github.com/almerlucke/exbana/v3"
+	"github.com/almerlucke/exbana/v3/patterns/entity"
+	"github.com/almerlucke/exbana/v3/patterns/vector"
 	"github.com/almerlucke/exbana/v3/readers/runes"
 )
 
@@ -45,9 +47,29 @@ func union(sets ...map[int]bool) map[int]bool {
 
 func leafNode(c rune) gnode {
 	return gnode{
-		p: ebnf.Text(runeR(c), string(c)),
+		p: ebnf.Text(entity.Equals[rune, runes.Pos](c), string(c)),
 		ends: func(in []rune, pos int) map[int]bool {
 			if pos < len(in) && in[pos] == c {
+				return setOf(pos + 1)
+			}
+			return setOf()
+		},
+	}
+}
+
+// classNode is one element from lo to hi, or any other one if negated
+func classNode(lo, hi rune, negated bool) gnode {
+	var p ebnf.Pattern[rune, runes.Pos]
+	if negated {
+		p = ebnf.Text(entity.NotIn[rune, runes.Pos](entity.Range[rune]{Lo: lo, Hi: hi}), "[^"+string(lo)+"-"+string(hi)+"]")
+	} else {
+		p = ebnf.Text(entity.Between[rune, runes.Pos](lo, hi), "["+string(lo)+"-"+string(hi)+"]")
+	}
+
+	return gnode{
+		p: p,
+		ends: func(in []rune, pos int) map[int]bool {
+			if pos < len(in) && (in[pos] >= lo && in[pos] <= hi) != negated {
 				return setOf(pos + 1)
 			}
 			return setOf()
@@ -58,7 +80,7 @@ func leafNode(c rune) gnode {
 func vecNode(s string) gnode {
 	rs := []rune(s)
 	return gnode{
-		p: ebnf.Text(vecR(s), s),
+		p: vector.Text[runes.Pos](s),
 		ends: func(in []rune, pos int) map[int]bool {
 			if pos+len(rs) <= len(in) && slices.Equal(in[pos:pos+len(rs)], rs) {
 				return setOf(pos + len(rs))
@@ -189,7 +211,13 @@ func randomNode(rng *rand.Rand, depth int) gnode {
 // except: what follows the generated text decides if they match, and generating does not know what follows.
 func randomNodeFor(rng *rand.Rand, depth int, generating bool) gnode {
 	leaf := func() gnode {
-		switch rng.Intn(6) {
+		switch rng.Intn(8) {
+		case 6, 7:
+			if generating {
+				return leafNode('b')
+			}
+			lo := rune('a' + rng.Intn(3))
+			return classNode(lo, lo+rune(rng.Intn(int('c'-lo)+1)), rng.Intn(3) == 0)
 		case 0:
 			return vecNode([]string{"ab", "ba", "aa", "abc"}[rng.Intn(4)])
 		case 1:
@@ -301,6 +329,13 @@ func checkAgainstOracle(t testing.TB, g gnode, input []rune) bool {
 		return result{ok, m}
 	}
 
+	// the grammar described as a tree must mean the same as the grammar itself
+	if described, err := ebnf.Analyze[rune, runes.Pos](g.p); err != nil {
+		t.Fatalf("grammar %s: Analyze: %v", desc.String(), err)
+	} else if got := irEnds(described, described.Root, input, 0); !equalSets(got, want) {
+		fail("the analysed grammar %s ends at %v, the oracle says %v", described, got, want)
+	}
+
 	plain, memo := parse(g.p, false), parse(g.p, true)
 
 	if plain.ok != (len(want) > 0) {
@@ -379,4 +414,109 @@ func FuzzGrammarsAgainstOracle(f *testing.F) {
 		rng := rand.New(rand.NewSource(seed))
 		checkAgainstOracle(t, randomNode(rng, 3), abcInput(raw, 9))
 	})
+}
+
+func equalSets(a, b map[int]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// irEnds is a second, independent implementation of the oracle that works on the analysed tree, with nothing but
+// the information in the nodes: if it agrees, the shapes of the patterns describe them completely.
+func irEnds(g *ebnf.Grammar[rune, runes.Pos], n *ebnf.Node[rune, runes.Pos], in []rune, pos int) map[int]bool {
+	step := func(set map[int]bool, child *ebnf.Node[rune, runes.Pos]) map[int]bool {
+		next := map[int]bool{}
+		for at := range set {
+			next = union(next, irEnds(g, child, in, at))
+		}
+		return next
+	}
+
+	switch n.Kind {
+	case ebnf.KindRef:
+		return irEnds(g, g.Rules[n.ID].Children[0], in, pos)
+	case ebnf.KindEnd:
+		if pos == len(in) {
+			return setOf(pos)
+		}
+		return setOf()
+	case ebnf.KindLiteral:
+		if !n.Exact {
+			panic("literal with an equality function nobody can see")
+		}
+		if pos+len(n.Values) <= len(in) && slices.Equal(in[pos:pos+len(n.Values)], n.Values) {
+			return setOf(pos + len(n.Values))
+		}
+		return setOf()
+	case ebnf.KindClass:
+		if !n.Exact {
+			panic("class decided by a function nobody can see")
+		}
+		if pos >= len(in) {
+			return setOf()
+		}
+		inside := false
+		for _, r := range n.Ranges {
+			if in[pos] >= r[0] && in[pos] <= r[1] {
+				inside = true
+			}
+		}
+		if inside != n.Negated {
+			return setOf(pos + 1)
+		}
+		return setOf()
+	case ebnf.KindSeq:
+		cur := setOf(pos)
+		for _, c := range n.Children {
+			cur = step(cur, c)
+		}
+		return cur
+	case ebnf.KindAlt:
+		out := map[int]bool{}
+		for _, c := range n.Children {
+			out = union(out, irEnds(g, c, in, pos))
+		}
+		return out
+	case ebnf.KindExcept:
+		if len(irEnds(g, n.Children[1], in, pos)) > 0 {
+			return setOf()
+		}
+		return irEnds(g, n.Children[0], in, pos)
+	case ebnf.KindRepeat:
+		child := n.Children[0]
+		cur := setOf(pos)
+		for range n.Min {
+			cur = step(cur, child)
+		}
+		res := union(cur)
+		if n.Max == 0 {
+			for frontier := cur; len(frontier) > 0; {
+				next := map[int]bool{}
+				for at := range step(frontier, child) {
+					if !res[at] {
+						next[at] = true
+						res[at] = true
+					}
+				}
+				frontier = next
+			}
+			return res
+		}
+		for range n.Max - n.Min {
+			cur = step(cur, child)
+			res = union(res, cur)
+		}
+		return res
+	}
+
+	panic("cannot interpret " + n.Kind.String())
 }

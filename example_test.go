@@ -12,6 +12,7 @@ import (
 	"github.com/almerlucke/exbana/v3/patterns/end"
 	ent "github.com/almerlucke/exbana/v3/patterns/entity"
 	"github.com/almerlucke/exbana/v3/patterns/repetition"
+	"github.com/almerlucke/exbana/v3/patterns/rule"
 	"github.com/almerlucke/exbana/v3/patterns/vector"
 	"github.com/almerlucke/exbana/v3/readers/runes"
 )
@@ -235,4 +236,43 @@ func ExampleScan() {
 	fmt.Println()
 
 	// Output: 66 7 12
+}
+
+// Analyze describes a grammar as a tree and a table of rules, which is what a tool needs to analyse the grammar or
+// to compile it into something faster. Patterns whose meaning is in a function (made with entity.New) can only be seen
+// as "one element"; the declarative ones (Between, In, Equals, vector.Text and the like) can be read.
+func ExampleAnalyze() {
+	digit := ent.Between[rune, runes.Pos]('0', '9')
+	letter := ent.In[rune, runes.Pos](ent.Range[rune]{Lo: 'a', Hi: 'z'}, ent.Range[rune]{Lo: '_', Hi: '_'})
+
+	// declaration = "let" identifier [ "=" integer ]
+	identifier := rule.New[rune, runes.Pos]("identifier", concatenation.New[rune, runes.Pos](letter, repetition.Any[rune, runes.Pos](alternation.New[rune, runes.Pos](letter, digit))))
+	integer := rule.New[rune, runes.Pos]("integer", repetition.OneOrMore[rune, runes.Pos](digit).SetPossessive(true))
+	declaration := rule.New[rune, runes.Pos]("declaration", concatenation.New[rune, runes.Pos](
+		vector.Text[runes.Pos]("let"),
+		identifier,
+		repetition.Optional[rune, runes.Pos](concatenation.New[rune, runes.Pos](vector.Text[runes.Pos]("="), integer)),
+	))
+
+	g, err := ebnf.Analyze[rune, runes.Pos](declaration)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Print(g)
+
+	// the rules by name, and what kind of thing each is made of
+	for _, name := range g.Order {
+		def := g.Rules[name].Children[0]
+		fmt.Printf("%s is a %s\n", name, def.Kind)
+	}
+
+	// Output:
+	// declaration = ("let", identifier, ("=", integer)?)
+	// identifier = ([a-z_], ([a-z_] | [0-9])*)
+	// integer = [0-9]++
+	// declaration is a seq
+	// identifier is a seq
+	// integer is a repeat
 }

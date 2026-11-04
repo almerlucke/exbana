@@ -1,0 +1,277 @@
+package tests
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+
+	ebnf "github.com/almerlucke/exbana/v3"
+	"github.com/almerlucke/exbana/v3/patterns/alternation"
+	"github.com/almerlucke/exbana/v3/patterns/concatenation"
+	"github.com/almerlucke/exbana/v3/patterns/end"
+	"github.com/almerlucke/exbana/v3/patterns/entity"
+	"github.com/almerlucke/exbana/v3/patterns/except"
+	"github.com/almerlucke/exbana/v3/patterns/repetition"
+	"github.com/almerlucke/exbana/v3/patterns/rule"
+	"github.com/almerlucke/exbana/v3/patterns/vector"
+	"github.com/almerlucke/exbana/v3/readers/runes"
+)
+
+type (
+	shape = ebnf.Shape[rune, runes.Pos]
+	pat   = ebnf.Pattern[rune, runes.Pos]
+)
+
+func TestShapesOfTheBuiltInPatterns(t *testing.T) {
+	a, b := runeR('a'), runeR('b')
+
+	for name, c := range map[string]struct {
+		p     pat
+		check func(shape) bool
+	}{
+		"closure entity": {entR(func(rune) bool { return true }).Named("any").Printed("."),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindClass && !s.Exact && s.Ranges == nil && s.ID == "any" && s.Text == "."
+			}},
+		"between": {entity.Between[rune, runes.Pos]('a', 'f'),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindClass && s.Exact && !s.Negated && slices.Equal(s.Ranges, [][2]rune{{'a', 'f'}})
+			}},
+		"in": {entity.In[rune, runes.Pos](entity.Range[rune]{Lo: 'a', Hi: 'c'}, entity.Range[rune]{Lo: 'x', Hi: 'z'}),
+			func(s shape) bool { return s.Kind == ebnf.KindClass && s.Exact && len(s.Ranges) == 2 }},
+		"not in": {entity.NotIn[rune, runes.Pos](entity.Range[rune]{Lo: '"', Hi: '"'}),
+			func(s shape) bool { return s.Kind == ebnf.KindClass && s.Exact && s.Negated && len(s.Ranges) == 1 }},
+		"one of": {entity.OneOf[rune, runes.Pos]('+', '-'),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindClass && s.Exact && slices.Equal(s.Ranges, [][2]rune{{'+', '+'}, {'-', '-'}})
+			}},
+		"equals": {entity.Equals[rune, runes.Pos]('x'),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindLiteral && s.Exact && slices.Equal(s.Values, []rune{'x'})
+			}},
+		"any": {entity.Any[rune, runes.Pos](),
+			func(s shape) bool { return s.Kind == ebnf.KindClass && s.Exact && s.Negated && len(s.Ranges) == 0 }},
+		"closure vector": {vecR("abc"),
+			func(s shape) bool { return s.Kind == ebnf.KindLiteral && !s.Exact && string(s.Values) == "abc" }},
+		"literal": {vector.Literal[rune, runes.Pos]('a', 'b'),
+			func(s shape) bool { return s.Kind == ebnf.KindLiteral && s.Exact && string(s.Values) == "ab" }},
+		"text": {vector.Text[runes.Pos]("hi"),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindLiteral && s.Exact && string(s.Values) == "hi" && s.Text == `"hi"`
+			}},
+		"end": {end.New[rune, runes.Pos]().Printed("eof"),
+			func(s shape) bool { return s.Kind == ebnf.KindEnd && s.Text == "eof" }},
+		"concatenation": {concatenation.New[rune, runes.Pos](a, b).Named("pair"),
+			func(s shape) bool { return s.Kind == ebnf.KindSeq && len(s.Parts) == 2 && s.ID == "pair" }},
+		"alternation": {alternation.New[rune, runes.Pos](a, b).SetOrthogonal(true),
+			func(s shape) bool { return s.Kind == ebnf.KindAlt && len(s.Parts) == 2 && s.Orthogonal }},
+		"repetition": {repetition.New[rune, runes.Pos](a, 2, 5).SetPossessive(true),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindRepeat && s.Min == 2 && s.Max == 5 && s.Possessive && len(s.Parts) == 1
+			}},
+		"except": {except.New[rune, runes.Pos](a, b),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindExcept && len(s.Parts) == 2 && s.Parts[0] == pat(a) && s.Parts[1] == pat(b)
+			}},
+		"rule": {rule.New[rune, runes.Pos]("r", a).SetLeftRecursive(true).SetAtomic(true),
+			func(s shape) bool {
+				return s.Kind == ebnf.KindRule && s.ID == "r" && s.LeftRecursive && s.Atomic && len(s.Parts) == 1
+			}},
+		"undefined rule": {rule.Declare[rune, runes.Pos]("later"),
+			func(s shape) bool { return s.Kind == ebnf.KindRule && len(s.Parts) == 0 }},
+	} {
+		if s := ebnf.ShapeOf(c.p); !c.check(s) {
+			t.Errorf("%s: shape %+v", name, s)
+		}
+	}
+}
+
+func TestPatternsFromScratchAreOpaque(t *testing.T) {
+	s := ebnf.ShapeOf[rune, runes.Pos](anyOne{})
+	if s.Kind != ebnf.KindOpaque || len(s.Parts) != 0 {
+		t.Errorf("shape = %+v", s)
+	}
+}
+
+func TestDeclarativeLeavesMatchAndGenerate(t *testing.T) {
+	match := func(p pat, in string) bool {
+		ok, _, err := ebnf.Parse(concR(p, endR()), newRunes(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	letter := entity.In[rune, runes.Pos](entity.Range[rune]{Lo: 'a', Hi: 'z'}, entity.Range[rune]{Lo: 'A', Hi: 'Z'}, entity.Range[rune]{Lo: '_', Hi: '_'})
+	for in, want := range map[string]bool{"a": true, "Q": true, "_": true, "1": false, "": false, "ab": false, "{": false} {
+		if match(letter, in) != want {
+			t.Errorf("letter %q: want %v", in, want)
+		}
+	}
+
+	notQuote := entity.NotIn[rune, runes.Pos](entity.Range[rune]{Lo: '"', Hi: '"'}, entity.Range[rune]{Lo: '\\', Hi: '\\'})
+	for in, want := range map[string]bool{"a": true, `"`: false, `\`: false, "": false} {
+		if match(notQuote, in) != want {
+			t.Errorf("notQuote %q: want %v", in, want)
+		}
+	}
+
+	if !match(entity.OneOf[rune, runes.Pos]('+', '-'), "-") || match(entity.OneOf[rune, runes.Pos]('+', '-'), "*") {
+		t.Error("OneOf")
+	}
+	if !match(entity.Any[rune, runes.Pos](), "x") || match(entity.Any[rune, runes.Pos](), "") {
+		t.Error("Any")
+	}
+	if !match(entity.Between[rune, runes.Pos]('0', '9'), "7") || match(entity.Between[rune, runes.Pos]('0', '9'), "a") {
+		t.Error("Between")
+	}
+	if !match(vector.Text[runes.Pos]("let"), "let") || match(vector.Text[runes.Pos]("let"), "lex") {
+		t.Error("Text")
+	}
+
+	// they work with other element types than runes
+	words := entity.Between[string, int]("b", "d")
+	for w, want := range map[string]bool{"b": true, "cat": true, "d": true, "a": false, "e": false} {
+		if m, _ := words.Recognize([]string{w}); m != want {
+			t.Errorf("Between strings %q: %v", w, m)
+		}
+	}
+
+	// the ones that name a value can generate it
+	for _, p := range []pat{entity.Equals[rune, runes.Pos]('x'), vector.Text[runes.Pos]("xyz"), vector.Literal[rune, runes.Pos]('x', 'y', 'z')} {
+		out, err := gen(t, p, ebnf.NewGenContext(1))
+		if err != nil || !strings.HasPrefix("xyz", out) || out == "" {
+			t.Errorf("generated %q, %v", out, err)
+		}
+	}
+
+	// a class has to be told how to generate, as any entity does
+	if _, err := gen(t, letter, ebnf.NewGenContext(1)); !errors.Is(err, ebnf.ErrNoGenerator) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestAnalyzeResolvesRulesByName(t *testing.T) {
+	// list = "[" [ item { "," item } ] "]"   item = digit | list
+	digit := entity.Between[rune, runes.Pos]('0', '9').Printed("digit")
+	list := rule.Declare[rune, runes.Pos]("list")
+	item := rule.New[rune, runes.Pos]("item", alternation.New[rune, runes.Pos](digit, list))
+	list.Define(concatenation.New[rune, runes.Pos](
+		vector.Text[runes.Pos]("["),
+		repetition.Optional[rune, runes.Pos](concatenation.New[rune, runes.Pos](
+			item, repetition.Any[rune, runes.Pos](concatenation.New[rune, runes.Pos](vector.Text[runes.Pos](","), item)))),
+		vector.Text[runes.Pos]("]"),
+	))
+
+	g, err := ebnf.Analyze[rune, runes.Pos](list)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g.Root.Kind != ebnf.KindRef || g.Root.ID != "list" {
+		t.Errorf("root = %v %q, a rule is described as a reference to it", g.Root.Kind, g.Root.ID)
+	}
+	if !slices.Equal(g.Order, []string{"list", "item"}) || len(g.Rules) != 2 {
+		t.Errorf("order = %v, rules = %d", g.Order, len(g.Rules))
+	}
+
+	want := "list = (\"[\", (item, (\",\", item)*)?, \"]\")\nitem = ([0-9] | list)\n"
+	if got := g.String(); got != want {
+		t.Errorf("grammar:\n%s\nwant:\n%s", got, want)
+	}
+
+	// the table holds the definitions, the uses are references (the recursion is a finite structure)
+	def := g.Rules["item"]
+	if def.Kind != ebnf.KindRule || len(def.Children) != 1 || def.Children[0].Kind != ebnf.KindAlt {
+		t.Fatalf("definition of item: %v", def)
+	}
+	if ref := def.Children[0].Children[1]; ref.Kind != ebnf.KindRef || ref.ID != "list" || len(ref.Children) != 0 {
+		t.Errorf("use of list inside item: %v %q", ref.Kind, ref.ID)
+	}
+}
+
+func TestAnalyzeAPatternThatIsNotARule(t *testing.T) {
+	p := concatenation.New[rune, runes.Pos](vector.Text[runes.Pos]("a"), repetition.OneOrMore[rune, runes.Pos](entity.Between[rune, runes.Pos]('0', '9')))
+
+	g, err := ebnf.Analyze[rune, runes.Pos](p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g.Root.Kind != ebnf.KindSeq || len(g.Rules) != 0 || len(g.Root.Children) != 2 {
+		t.Errorf("root = %v, rules = %d", g.Root.Kind, len(g.Rules))
+	}
+	if got := g.String(); got != "(\"a\", [0-9]+)\n" {
+		t.Errorf("grammar = %q", got)
+	}
+}
+
+func TestAnalyzeKeepsOpaquePatternsToCall(t *testing.T) {
+	custom := anyOne{}
+	g, err := ebnf.Analyze[rune, runes.Pos](concR(runeR('a'), custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := g.Root.Children[1]
+	if n.Kind != ebnf.KindOpaque || n.Pattern != pat(custom) {
+		t.Errorf("node = %v, pattern %v", n.Kind, n.Pattern)
+	}
+}
+
+func TestAnalyzeReportsWhatCanNotBeDescribed(t *testing.T) {
+	a := runeR('a')
+
+	if _, err := ebnf.Analyze[rune, runes.Pos](concR(a, rule.Declare[rune, runes.Pos]("later"))); !errors.Is(err, ebnf.ErrUndefinedRule) || !strings.Contains(err.Error(), "later") {
+		t.Errorf("undefined: %v", err)
+	}
+
+	one, other := rule.New[rune, runes.Pos]("same", a), rule.New[rune, runes.Pos]("same", runeR('b'))
+	if _, err := ebnf.Analyze[rune, runes.Pos](concR(one, other)); !errors.Is(err, ebnf.ErrDuplicateRule) {
+		t.Errorf("duplicate: %v", err)
+	}
+
+	// the same rule twice is fine
+	if g, err := ebnf.Analyze[rune, runes.Pos](concR(one, one)); err != nil || len(g.Rules) != 1 {
+		t.Errorf("same rule twice: %v", err)
+	}
+
+	// a pattern that contains itself without a named rule in between
+	loop := concR()
+	loop.SetPatterns(ebnf.Patterns[rune, runes.Pos]{a, loop})
+	if _, err := ebnf.Analyze[rune, runes.Pos](loop); !errors.Is(err, ebnf.ErrUnnamedRecursion) {
+		t.Errorf("recursion: %v", err)
+	}
+
+	// and through an unnamed rule
+	r := rule.Declare[rune, runes.Pos]("")
+	r.Define(concR(a, r))
+	if _, err := ebnf.Analyze[rune, runes.Pos](r); !errors.Is(err, ebnf.ErrUnnamedRecursion) {
+		t.Errorf("recursion through an unnamed rule: %v", err)
+	}
+}
+
+func TestAnUnnamedRuleStandsForItsDefinition(t *testing.T) {
+	g, err := ebnf.Analyze[rune, runes.Pos](rule.New[rune, runes.Pos]("", vector.Text[runes.Pos]("ab")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g.Root.Kind != ebnf.KindLiteral || len(g.Rules) != 0 {
+		t.Errorf("root = %v, rules = %d", g.Root.Kind, len(g.Rules))
+	}
+}
+
+func TestAnalyzeAlsoWorksForOtherElementTypes(t *testing.T) {
+	p := repetition.OneOrMore[int, int](entity.Between[int, int](0, 9))
+
+	g, err := ebnf.Analyze[int, int](p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if g.String() != "[0-9]+\n" {
+		t.Errorf("grammar = %q", g.String())
+	}
+}

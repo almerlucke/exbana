@@ -197,3 +197,8 @@ func (c *Concatenation[T, P]) Printed(text string) *Concatenation[T, P] {
 	c.SetText(text)
 	return c
 }
+
+// Shape implements ebnf.Structured.
+func (c *Concatenation[T, P]) Shape() ebnf.Shape[T, P] {
+	return ebnf.Shape[T, P]{Kind: ebnf.KindSeq, ID: c.ID(), Text: c.Text(), Parts: c.patterns}
+}

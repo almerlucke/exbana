@@ -315,3 +315,13 @@ func (r *Rule[T, P]) Children() ebnf.Patterns[T, P] {
 
 	return ebnf.Patterns[T, P]{r.inner}
 }
+
+// Shape implements ebnf.Structured. The part of a rule is its definition, a rule that is declared and not defined has none.
+func (r *Rule[T, P]) Shape() ebnf.Shape[T, P] {
+	s := ebnf.Shape[T, P]{Kind: ebnf.KindRule, ID: r.ID(), LeftRecursive: r.leftRec, Atomic: r.atomic}
+	if r.inner != nil {
+		s.Parts = ebnf.Patterns[T, P]{r.inner}
+	}
+
+	return s
+}

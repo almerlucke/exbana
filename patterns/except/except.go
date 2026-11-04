@@ -191,3 +191,8 @@ func (e *Except[T, P]) Printed(text string) *Except[T, P] {
 	e.SetText(text)
 	return e
 }
+
+// Shape implements ebnf.Structured.
+func (e *Except[T, P]) Shape() ebnf.Shape[T, P] {
+	return ebnf.Shape[T, P]{Kind: ebnf.KindExcept, ID: e.ID(), Text: e.Text(), Parts: ebnf.Patterns[T, P]{e.must, e.exception}}
+}

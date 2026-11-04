@@ -91,7 +91,8 @@ func unary1(f func(float64) float64) func([]float64) (float64, error) {
 	}
 }
 
-// Calculator evaluates arithmetic expressions. It is not safe for concurrent use.
+// Calculator evaluates arithmetic expressions. Eval can be called from several goroutines at once, as long as Vars
+// is not changed meanwhile.
 type Calculator struct {
 	Vars map[string]float64
 
@@ -113,13 +114,14 @@ func (c *Calculator) Eval(input string) (float64, error) {
 		return 0, err
 	}
 
-	var r reader = rd
+	// everything specific to this parse lives in the context, the grammar is never changed. That makes Eval safe to
+	// call from several goroutines at once.
+	log := runes.NewFarthestLog(rd)
+	ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log)
 	if c.mode == Memoized {
-		r = ebnf.WithMemo(r, func(p runes.Pos) int { return p.Index })
+		ctx.WithMemo(func(p runes.Pos) int { return p.Index })
 	}
-
-	log := runes.NewFarthestLog(r)
-	ebnf.SetLogger(c.root, ebnf.Logger[rune, runes.Pos](log))
+	var r reader = ctx
 
 	matched, m, err := c.root.Match(r)
 	if err != nil {

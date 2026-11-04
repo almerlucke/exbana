@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -838,4 +839,128 @@ func TestGenerateExceptCannotCheck(t *testing.T) {
 	if _, err := gen(t, always, ebnf.NewGenContext(1)); err == nil {
 		t.Error("expected an error when every attempt is excepted")
 	}
+}
+
+func TestParseContextLoggerPrecedence(t *testing.T) {
+	patternLog := ebnf.NewStackLog[rune, runes.Pos]()
+	g := concR(runeR('a'), runeR('b'))
+	g.SetLogger(patternLog)
+	for _, child := range g.Children() {
+		child.SetLogger(patternLog)
+	}
+
+	// without a context the logger of the pattern is used
+	g.Match(newRunes("ax"))
+	if len(patternLog.Stack) == 0 {
+		t.Fatal("pattern logger got nothing")
+	}
+	before := len(patternLog.Stack)
+
+	// with a context its logger takes over, the pattern logger is left alone
+	ctxLog := ebnf.NewStackLog[rune, runes.Pos]()
+	ctx := ebnf.NewParseContext[rune, runes.Pos](newRunes("ax")).WithLogger(ctxLog)
+	g.Match(ctx)
+	if len(ctxLog.Stack) == 0 {
+		t.Error("context logger got nothing")
+	}
+	if len(patternLog.Stack) != before {
+		t.Error("pattern logger was used although the context has a logger")
+	}
+
+	// a context without a logger falls back to the pattern
+	g.Match(ebnf.NewParseContext[rune, runes.Pos](newRunes("ax")))
+	if len(patternLog.Stack) == before {
+		t.Error("pattern logger not used by a context without a logger")
+	}
+}
+
+func TestLogMismatchOnlyBuildsWhenListening(t *testing.T) {
+	p := runeR('a')
+	built := 0
+	build := func() *ebnf.Mismatch[rune, runes.Pos] {
+		built++
+		return nil
+	}
+
+	ebnf.LogMismatch[rune, runes.Pos](newRunes("a"), p, build)
+	ebnf.LogMismatch[rune, runes.Pos](ebnf.NewParseContext[rune, runes.Pos](newRunes("a")), p, build)
+	if built != 0 {
+		t.Errorf("mismatch was built %d times with nobody listening", built)
+	}
+
+	log := ebnf.NewStackLog[rune, runes.Pos]()
+	ebnf.LogMismatch[rune, runes.Pos](ebnf.NewParseContext[rune, runes.Pos](newRunes("a")).WithLogger(log), p, func() *ebnf.Mismatch[rune, runes.Pos] {
+		built++
+		return &ebnf.Mismatch[rune, runes.Pos]{}
+	})
+	if built != 1 || len(log.Stack) != 1 {
+		t.Errorf("built %d, logged %d", built, len(log.Stack))
+	}
+}
+
+// one grammar, many parses at the same time, each logging to its own logger (run with -race)
+func TestParseContextSharedGrammar(t *testing.T) {
+	g := concR(runeR('('), repetition.OneOrMore[rune, runes.Pos](entR(unicode.IsDigit).SetID("digit")), runeR(')'))
+
+	count := func() int {
+		log := ebnf.NewStackLog[rune, runes.Pos]()
+		g.Match(ebnf.NewParseContext[rune, runes.Pos](newRunes("(12x)")).WithLogger(log))
+		return len(log.Stack)
+	}
+	want := count()
+	if want == 0 {
+		t.Fatal("nothing logged")
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				if got := count(); got != want {
+					t.Errorf("logged %d mismatches, want %d", got, want)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestParseContextWithoutMemoBehavesPlain(t *testing.T) {
+	g := concR(anyR(altR(vecR("a"), vecR("ab"))), vecR("bc"), endR())
+	for _, in := range []string{"aabc", "abc", "abx", ""} {
+		plain, _, _ := g.Match(newRunes(in))
+		ctx, _, _ := g.Match(ebnf.NewParseContext[rune, runes.Pos](newRunes(in)))
+		memo, _, _ := g.Match(ebnf.NewParseContext[rune, runes.Pos](newRunes(in)).WithMemo(func(p runes.Pos) int { return p.Index }))
+		if plain != ctx || plain != memo {
+			t.Errorf("%q: plain %v, context %v, memo %v", in, plain, ctx, memo)
+		}
+	}
+}
+
+// the exception of an except is lookahead: it fails on every normal match, and must not show up in syntax errors
+func TestParseContextLoggerIgnoresException(t *testing.T) {
+	quote := lit('"')
+	char := exceptR(entR(func(r rune) bool { return true }).SetID("char"), altR(quote, lit('\\').SetID("backslash")))
+	g := concR(quote, anyR(char), quote)
+
+	rd := newRunes(`"ab`)
+	log := runes.NewFarthestLog(rd)
+	ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log)
+	if matched, _, _ := g.Match(ctx); matched {
+		t.Fatal("expected mismatch")
+	}
+
+	e := log.Last()
+	if !e.AtEnd || e.Pos.Index != 3 {
+		t.Fatalf("expected failure at end of input, got %+v", e)
+	}
+	for _, x := range e.Expected {
+		if x == "backslash" || x == `"\\"` {
+			t.Errorf("exception leaked into expected list: %v", e.Expected)
+		}
+	}
+	t.Logf("expected: %v", e.Expected)
 }

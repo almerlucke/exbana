@@ -32,6 +32,9 @@ type Memo[T, P any] interface {
 
 	// Index maps a position to a unique integer.
 	Index(P) int
+
+	// Enabled returns true if the reader actually memoizes.
+	Enabled() bool
 }
 
 // FailSet remembers the positions at which a search with one fixed continuation already failed, so the same dead
@@ -45,7 +48,7 @@ type FailSet[P any] struct {
 // NewFailSet creates a FailSet if the reader supports memoization, otherwise it returns nil.
 func NewFailSet[T, P any](r Reader[T, P]) *FailSet[P] {
 	memo, ok := r.(Memo[T, P])
-	if !ok {
+	if !ok || !memo.Enabled() {
 		return nil
 	}
 
@@ -76,7 +79,7 @@ func (f *FailSet[P]) Add(state int, pos P) {
 // something about the context and not about the pattern itself.
 func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], f func(Reader[T, P], Continuation[T, P]) (bool, error)) (bool, error) {
 	memo, ok := r.(Memo[T, P])
-	if !ok {
+	if !ok || !memo.Enabled() {
 		return f(r, k)
 	}
 
@@ -100,36 +103,4 @@ func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], 
 	}
 
 	return matched, err
-}
-
-type failKey[T, P any] struct {
-	pattern Pattern[T, P]
-	index   int
-}
-
-// MemoReader wraps a reader and adds failure memoization. Use one MemoReader per input, it assumes the
-// underlying data does not change while it is in use. Memory use is bounded by patterns x positions.
-type MemoReader[T, P any] struct {
-	Reader[T, P]
-	index func(P) int
-	fails map[failKey[T, P]]struct{}
-}
-
-// WithMemo wraps a reader to enable failure memoization. The index function maps a position to a unique
-// integer (for the runes reader: func(p runes.Pos) int { return p.Index }).
-func WithMemo[T, P any](r Reader[T, P], index func(P) int) *MemoReader[T, P] {
-	return &MemoReader[T, P]{Reader: r, index: index, fails: make(map[failKey[T, P]]struct{})}
-}
-
-func (m *MemoReader[T, P]) Index(pos P) int {
-	return m.index(pos)
-}
-
-func (m *MemoReader[T, P]) KnownFail(p Pattern[T, P], pos P) bool {
-	_, ok := m.fails[failKey[T, P]{p, m.index(pos)}]
-	return ok
-}
-
-func (m *MemoReader[T, P]) RecordFail(p Pattern[T, P], pos P) {
-	m.fails[failKey[T, P]{p, m.index(pos)}] = struct{}{}
 }

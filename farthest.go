@@ -52,7 +52,7 @@ func (e *SyntaxError[T, P]) Error() string {
 }
 
 // FarthestLog is a Logger that remembers only the mismatches that got the furthest into the stream, which is the
-// best guess for where the syntax error is. Use one FarthestLog for a whole grammar (see SetLogger), parse, and
+// best guess for where the syntax error is. Give it to the parse through a ParseContext (WithLogger), parse, and
 // when the match fails call Err to get an error with the position and what was expected there.
 //
 // Mismatches of composite patterns (concatenation, exception) are ignored: they are always caused by a leaf pattern that
@@ -191,7 +191,8 @@ type Parent[T, P any] interface {
 }
 
 // SetLogger sets the logger on a pattern and on all patterns it is built from, recursively. Recursive
-// grammars are fine, every pattern is visited once.
+// grammars are fine, every pattern is visited once. This changes the grammar, so it is not safe while the grammar
+// is in use by other parses: prefer ParseContext.WithLogger, which leaves the grammar alone.
 func SetLogger[T, P any](root Pattern[T, P], logger Logger[T, P]) {
 	visited := make(map[Pattern[T, P]]struct{})
 

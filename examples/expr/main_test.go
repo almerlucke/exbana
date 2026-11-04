@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -185,5 +186,42 @@ func BenchmarkFailNested(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// The grammar is shared by all parses and never changed by one, so concurrent Evals must not interfere or race.
+func TestConcurrentEval(t *testing.T) {
+	inputs := []struct {
+		in   string
+		want string // "" for success
+	}{
+		{"1+2*3", ""},
+		{"max(1, x*2, 3)", ""},
+		{"1+", "at 1:3"},
+		{"(1+2", "at 1:5"},
+		{"2^3^2", ""},
+		{"1 + * 2", "at 1:5"},
+	}
+
+	for _, mode := range modes {
+		c := newCalc(mode)
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < 200; i++ {
+					tc := inputs[(g+i)%len(inputs)]
+					_, err := c.Eval(tc.in)
+					switch {
+					case tc.want == "" && err != nil:
+						t.Errorf("%v: %q: unexpected error %v", mode, tc.in, err)
+					case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+						t.Errorf("%v: %q: got %v, want error containing %q", mode, tc.in, err, tc.want)
+					}
+				}
+			}()
+		}
+		wg.Wait()
 	}
 }

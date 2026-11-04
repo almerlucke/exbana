@@ -83,7 +83,9 @@ func (c *Concatenation[T, P]) matchCont(rd ebnf.Reader[T, P], k ebnf.Continuatio
 			return false, err
 		}
 
-		c.Logger().LogMismatch(ebnf.NewMismatch(c, beginPos, subEndPos, ebnf.NewMatch(pm, subBeginPos, subEndPos, nil, nil), slices.Clone(matches[:i])))
+		ebnf.LogMismatch(rd, ebnf.Pattern[T, P](c), func() *ebnf.Mismatch[T, P] {
+			return ebnf.NewMismatch(c, beginPos, subEndPos, ebnf.NewMatch(pm, subBeginPos, subEndPos, nil, nil), slices.Clone(matches[:i]))
+		})
 
 		failed.Add(i, subBeginPos)
 

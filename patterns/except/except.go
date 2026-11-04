@@ -47,7 +47,8 @@ func (e *Except[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P])
 	}
 
 	// First check for the exception match, we do not want to match the exception
-	matched, result, err := e.exception.Match(r)
+	// the exception is lookahead, it is supposed to fail on every successful match so it must not be logged
+	matched, result, err := e.exception.Match(ebnf.Silent(r))
 	if err != nil {
 		return false, err
 	}
@@ -58,7 +59,7 @@ func (e *Except[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T, P])
 			return false, err
 		}
 
-		e.Logger().LogMismatch(ebnf.NewMismatch(e, beginPos, endPos, result, nil))
+		ebnf.LogMismatch(r, ebnf.Pattern[T, P](e), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch(e, beginPos, endPos, result, nil) })
 
 		return false, nil
 	}

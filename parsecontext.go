@@ -5,7 +5,7 @@ package exbana
 // parse. That makes one grammar usable by many parses at the same time, each with its own context.
 //
 //	ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log).WithMemo(indexFn)
-//	matched, match, err := grammar.Match(ctx)
+//	matched, match, err := ebnf.Parse(grammar, ctx)
 //
 // A ParseContext is for one parse of one input and is not safe for concurrent use. It assumes the underlying data
 // does not change while it is in use.
@@ -13,10 +13,10 @@ type ParseContext[T, P any] struct {
 	Reader[T, P]
 	logger Logger[T, P]
 	index  func(P) int
-	fails  map[failKey[T, P]]struct{}
+	solved map[solutionKey[T, P]][]*Match[T, P]
 }
 
-type failKey[T, P any] struct {
+type solutionKey[T, P any] struct {
 	pattern Pattern[T, P]
 	index   int
 }
@@ -36,7 +36,7 @@ func (c *ParseContext[T, P]) WithLogger(logger Logger[T, P]) *ParseContext[T, P]
 // (for the runes reader: func(p runes.Pos) int { return p.Index }). Memory use is bounded by patterns x positions.
 func (c *ParseContext[T, P]) WithMemo(index func(P) int) *ParseContext[T, P] {
 	c.index = index
-	c.fails = make(map[failKey[T, P]]struct{})
+	c.solved = make(map[solutionKey[T, P]][]*Match[T, P])
 
 	return c
 }
@@ -53,7 +53,7 @@ func (c *ParseContext[T, P]) Logger() Logger[T, P] {
 
 // Enabled implements Memo
 func (c *ParseContext[T, P]) Enabled() bool {
-	return c.fails != nil
+	return c.solved != nil
 }
 
 // Index implements Memo
@@ -61,15 +61,15 @@ func (c *ParseContext[T, P]) Index(pos P) int {
 	return c.index(pos)
 }
 
-// KnownFail implements Memo
-func (c *ParseContext[T, P]) KnownFail(p Pattern[T, P], pos P) bool {
-	_, ok := c.fails[failKey[T, P]{p, c.index(pos)}]
-	return ok
+// Solutions implements Memo
+func (c *ParseContext[T, P]) Solutions(p Pattern[T, P], pos P) ([]*Match[T, P], bool) {
+	m, ok := c.solved[solutionKey[T, P]{p, c.index(pos)}]
+	return m, ok
 }
 
-// RecordFail implements Memo
-func (c *ParseContext[T, P]) RecordFail(p Pattern[T, P], pos P) {
-	c.fails[failKey[T, P]{p, c.index(pos)}] = struct{}{}
+// SetSolutions implements Memo
+func (c *ParseContext[T, P]) SetSolutions(p Pattern[T, P], pos P, matches []*Match[T, P]) {
+	c.solved[solutionKey[T, P]{p, c.index(pos)}] = matches
 }
 
 // LogMismatch reports a mismatch of pattern p to the logger of the reader, if it is a ParseContext with a logger. The
@@ -106,7 +106,7 @@ func Silent[T, P any](r Reader[T, P]) Reader[T, P] {
 	quiet := *c
 	quiet.logger = NewVoidLog[T, P]()
 	quiet.index = nil
-	quiet.fails = nil
+	quiet.solved = nil
 
 	return &quiet
 }

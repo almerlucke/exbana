@@ -195,6 +195,15 @@ func evalTag(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (an
 		return &Node{Name: name, Attrs: attrs}, nil
 	}
 
+	// the closing tag must repeat the name of the opening tag
+	closeVal, err := choiceMatch.Components[7].Eval(r)
+	if err != nil {
+		return nil, err
+	}
+	if closeName := closeVal.(string); closeName != name {
+		return nil, fmt.Errorf("closing tag </%s> does not match <%s>", closeName, name)
+	}
+
 	contentMatch := choiceMatch.Components[5]
 	var children []*Node
 	var sb strings.Builder
@@ -234,7 +243,8 @@ func evalText(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (a
 	return string(rs), nil
 }
 
-func main() {
+// Parse parses an XML document with a single root element into a tree of nodes.
+func Parse(input string) (*Node, error) {
 	// Define Grammar
 	ws := rep(ent.New[rune, runes.Pos](unicode.IsSpace))
 	nameChar := alt(rb('a', 'z'), rb('A', 'Z'), rb('0', '9'), '_', '-')
@@ -275,44 +285,51 @@ func main() {
 
 	xmlGrammar := conc(ws, tag, ws)
 
-	// Test strings
-	inputs := []string{
-		`<root id="123" type="example">
+	rd, err := runes.New(strings.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+
+	ok, match, err := ebnf.Parse[rune, runes.Pos](xmlGrammar, rd)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok || match == nil {
+		return nil, fmt.Errorf("no match")
+	}
+
+	if !rd.Finished() {
+		return nil, fmt.Errorf("unexpected input after the root element")
+	}
+
+	// xmlGrammar: conc(ws, tag, ws)
+	// index: 0: ws, 1: tag, 2: ws
+	val, err := match.Components[1].Components[0].Eval(rd)
+	if err != nil {
+		return nil, err
+	}
+
+	return val.(*Node), nil
+}
+
+func main() {
+	input := `<root id="123" type="example">
 			<item name="foo">Hello</item>
 			<item name="bar" empty="true"/>
 			<nested>
 				<child>Deep</child>
 			</nested>
-		</root>`,
+		</root>`
+
+	fmt.Printf("Input:\n%s\n", input)
+
+	node, err := Parse(input)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	for _, input := range inputs {
-		fmt.Printf("Input:\n%s\n", input)
-		rd, err := runes.New(strings.NewReader(input))
-		if err != nil {
-			log.Fatalf("Reader error: %v", err)
-		}
-
-		ok, match, err := ebnf.Parse[rune, runes.Pos](xmlGrammar, rd)
-		if err != nil {
-			log.Fatalf("Match error: %v", err)
-		}
-
-		if !ok || match == nil {
-			log.Fatalf("No match found")
-		}
-
-		// xmlGrammar: conc(ws, tag, ws)
-		// index: 0: ws, 1: tag, 2: ws
-		tagMatch := match.Components[1]
-		val, err := tagMatch.Components[0].Eval(rd)
-		if err != nil {
-			log.Fatalf("Eval error: %v", err)
-		}
-
-		node := val.(*Node)
-		printNode(node, 0)
-	}
+	printNode(node, 0)
 }
 
 func printNode(n *Node, indent int) {

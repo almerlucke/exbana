@@ -28,7 +28,6 @@ func objToPattern(obj any) ebnf.Pattern[rune, runes.Pos] {
 		return p
 	}
 	panic(fmt.Sprintf("invalid object type %v", reflect.TypeOf(obj)))
-	return nil
 }
 
 func objsToPatterns(objs ...any) []ebnf.Pattern[rune, runes.Pos] {
@@ -58,7 +57,7 @@ func rm(r rune) *ent.Entity[rune, runes.Pos] {
 		return obj == r
 	})
 	e.SetGenerateFunc(func() rune { return r })
-	return e
+	return ebnf.Text(e, strconv.QuoteRune(r))
 }
 
 func rmf(rf func(rune) bool) *ent.Entity[rune, runes.Pos] {
@@ -179,7 +178,7 @@ func evalValue(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (
 }
 
 func evalArray(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) (any, error) {
-	var array []any
+	array := []any{}
 
 	// check for whitespace
 	comp := m.Components[1].Unpack()
@@ -246,11 +245,14 @@ func evalObject(m *ebnf.Match[rune, runes.Pos], r ebnf.Reader[rune, runes.Pos]) 
 	return obj, nil
 }
 
-func main() {
-	jsonStr := `{ "foo": "bar\u231834", "test": 2.3, "hallo": [1, 2, 3, "test", null, true, false, [ ]] }`
-	rd, _ := runes.New(strings.NewReader(jsonStr))
+// Parse parses a JSON text with the grammar below and evaluates it to nil, bool, float64, string, []any or map[string]any.
+func Parse(input string) (any, error) {
+	rd, err := runes.New(strings.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
 
-	logger := ebnf.NewStackLog[rune, runes.Pos]()
+	logger := runes.NewFarthestLog(rd)
 
 	ws := ebnf.Name(rep(stringContains(" \t\n\r")), "whitespace")
 
@@ -262,7 +264,7 @@ func main() {
 		alt('0', conc(rb('1', '9'), rep(digit))),
 		opt(fraction),
 		opt(exponent),
-	)).WithEval(evalNumber)
+	)).WithEval(evalNumber).SetAtomic(true)
 
 	hexDigit := ent.New[rune, runes.Pos](func(r rune) bool {
 		return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
@@ -270,11 +272,11 @@ func main() {
 	uniLit := ebnf.Name(conc('u', n(hexDigit, 4)), "unicodeLit")
 	escape := ebnf.Name(conc('\\', alt('"', '\\', '/', 'b', 'f', 'n', 'r', 't', uniLit)), "escape")
 	anyChar := ex(ra(), alt('"', '\\', rmf(unicode.IsControl)))
-	str := rule.New("string", conc('"', rep(alt(anyChar, escape)), '"')).WithEval(evalString)
+	str := rule.New("string", conc('"', rep(alt(anyChar, escape)), '"')).WithEval(evalString).SetAtomic(true)
 
-	trueVal := rule.New("true", rv([]rune{'t', 'r', 'u', 'e'})).WithEval(evalTrue)
-	falseVal := rule.New("false", rv([]rune{'f', 'a', 'l', 's', 'e'})).WithEval(evalFalse)
-	nullVal := rule.New("null", rv([]rune{'n', 'u', 'l', 'l'})).WithEval(evalNull)
+	trueVal := rule.New("true", rv([]rune{'t', 'r', 'u', 'e'})).WithEval(evalTrue).SetAtomic(true)
+	falseVal := rule.New("false", rv([]rune{'f', 'a', 'l', 's', 'e'})).WithEval(evalFalse).SetAtomic(true)
+	nullVal := rule.New("null", rv([]rune{'n', 'u', 'l', 'l'})).WithEval(evalNull).SetAtomic(true)
 
 	// forward value declaration
 	value := rule.Declare[rune, runes.Pos]("value").WithEval(evalValue)
@@ -296,39 +298,38 @@ func main() {
 	// the logger belongs to this parse, so it goes in the context and not in the grammar
 	ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(logger)
 
-	if ok, match, err := ebnf.Parse[rune, runes.Pos](value, ctx); ok && match != nil {
-		val, err := match.Eval(rd)
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Printf("value: %v", val)
-		//log.Printf("match %v: %v", match.Pattern.ID(), val)
-		//realValue := match.Components[1].Unpack()
-		//rs, _ := rd.Range(realValue.Begin, realValue.End)
-		//log.Printf("match %v: %v", realValue.ID(), string(rs))
-	} else {
-		if err != nil {
-			log.Fatal(err)
-		}
-		longestMatch := logger.LongestMatch()
-		if longestMatch != nil {
-			rng, _ := rd.Range(longestMatch.Begin, longestMatch.End)
-			if len(rng) > 10 {
-				rng = rng[len(rng)-10:]
-			}
-			log.Printf("failed to parse %s -> pos %d, line %d, failed at %s",
-				ebnf.IDOf(longestMatch.Pattern),
-				longestMatch.End.Col+1,
-				longestMatch.End.Line+1,
-				string(rng))
-		}
-		log.Printf("no match")
+	ok, match, err := ebnf.Parse[rune, runes.Pos](value, ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	var jsonObj map[string]any
+	if !ok || match == nil {
+		if err := logger.Err(); err != nil {
+			return nil, err
+		}
 
-	err := json.Unmarshal([]byte(jsonStr), &jsonObj)
+		return nil, fmt.Errorf("no match")
+	}
+
+	if !rd.Finished() {
+		return nil, fmt.Errorf("unexpected input after the value")
+	}
+
+	return match.Eval(rd)
+}
+
+func main() {
+	jsonStr := `{ "foo": "bar\u231834", "test": 2.3, "hallo": [1, 2, 3, "test", null, true, false, [ ]] }`
+
+	val, err := Parse(jsonStr)
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("value: %v", val)
+
+	var jsonObj map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &jsonObj); err != nil {
 		log.Fatal(err)
 	}
 

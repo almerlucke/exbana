@@ -182,11 +182,20 @@ func exceptNode(must, exception gnode) gnode {
 }
 
 func randomNode(rng *rand.Rand, depth int) gnode {
+	return randomNodeFor(rng, depth, false)
+}
+
+// randomNodeFor makes a random grammar. A grammar that is only used to generate from can not have an end pattern or an
+// except: what follows the generated text decides if they match, and generating does not know what follows.
+func randomNodeFor(rng *rand.Rand, depth int, generating bool) gnode {
 	leaf := func() gnode {
 		switch rng.Intn(6) {
 		case 0:
 			return vecNode([]string{"ab", "ba", "aa", "abc"}[rng.Intn(4)])
 		case 1:
+			if generating {
+				return leafNode('c')
+			}
 			return endNode()
 		default:
 			return leafNode(rune("abc"[rng.Intn(3)]))
@@ -200,7 +209,7 @@ func randomNode(rng *rand.Rand, depth int) gnode {
 	kids := func(n int) []gnode {
 		out := make([]gnode, n)
 		for i := range out {
-			out[i] = randomNode(rng, depth-1)
+			out[i] = randomNodeFor(rng, depth-1, generating)
 		}
 		return out
 	}
@@ -213,9 +222,9 @@ func randomNode(rng *rand.Rand, depth int) gnode {
 	case 3, 4:
 		return concNode(kids(2 + rng.Intn(2))...)
 	case 5:
-		child := randomNode(rng, depth-1)
+		child := randomNodeFor(rng, depth-1, generating)
 		for tries := 0; child.nullable && tries < 5; tries++ {
-			child = randomNode(rng, depth-1)
+			child = randomNodeFor(rng, depth-1, generating)
 		}
 		if child.nullable {
 			child = leaf()
@@ -234,6 +243,9 @@ func randomNode(rng *rand.Rand, depth int) gnode {
 		}
 		return repNode(child, min, max)
 	default:
+		if generating {
+			return leaf()
+		}
 		return exceptNode(randomNode(rng, depth-1), randomNode(rng, depth-1))
 	}
 }
@@ -253,77 +265,96 @@ func fingerprint(m *ebnf.Match[rune, runes.Pos]) string {
 	return sb.String()
 }
 
-func TestDifferentialAgainstOracle(t *testing.T) {
-	rng := rand.New(rand.NewSource(20240607))
+// checkAgainstOracle matches the grammar against the input in every way and compares with the oracle, it reports whether
+// the grammar matched.
+func checkAgainstOracle(t testing.TB, g gnode, input []rune) bool {
+	t.Helper()
+
+	var desc bytes.Buffer
+	_ = g.p.Print(&desc)
+
 	memoIdx := func(p runes.Pos) int { return p.Index }
 
-	grammars, checks := 0, 0
-	matchedCount := 0
+	fail := func(format string, args ...any) {
+		t.Helper()
+		t.Errorf("grammar %s, input %q: %s", desc.String(), string(input), fmt.Sprintf(format, args...))
+	}
+
+	want := g.ends(input, 0)
+
+	type result struct {
+		ok bool
+		m  *ebnf.Match[rune, runes.Pos]
+	}
+
+	parse := func(p ebnf.Pattern[rune, runes.Pos], memo bool) result {
+		var rd ebnf.Reader[rune, runes.Pos] = newRunes(string(input))
+		if memo {
+			rd = ebnf.WithMemo[rune, runes.Pos](rd, memoIdx)
+		}
+
+		ok, m, err := ebnf.Parse(p, rd)
+		if err != nil {
+			t.Fatalf("grammar %s, input %q: %v", desc.String(), string(input), err)
+		}
+
+		return result{ok, m}
+	}
+
+	plain, memo := parse(g.p, false), parse(g.p, true)
+
+	if plain.ok != (len(want) > 0) {
+		fail("matched=%v but the oracle ends are %v", plain.ok, want)
+	}
+	if plain.ok && !want[plain.m.End.Index] {
+		fail("ends at %d, the oracle says %v", plain.m.End.Index, want)
+	}
+	if plain.ok != memo.ok || (plain.ok && fingerprint(plain.m) != fingerprint(memo.m)) {
+		fail("memo differs: plain %v, memo %v", plain.ok, memo.ok)
+	}
+
+	// grammar, end of input: only works if the grammar gives back until the ends line up
+	full := concR(g.p, endR())
+	wantFull := want[len(input)]
+	plainFull, memoFull := parse(full, false), parse(full, true)
+
+	if plainFull.ok != wantFull {
+		fail("followed by end of input: matched=%v, the oracle says %v", plainFull.ok, wantFull)
+	}
+	if plainFull.ok != memoFull.ok || (plainFull.ok && fingerprint(plainFull.m) != fingerprint(memoFull.m)) {
+		fail("followed by end of input: memo differs: plain %v, memo %v", plainFull.ok, memoFull.ok)
+	}
+
+	return plain.ok
+}
+
+// abcInput maps arbitrary bytes onto the alphabet the random grammars use
+func abcInput(raw string, limit int) []rune {
+	out := make([]rune, 0, limit)
+	for i := 0; i < len(raw) && i < limit; i++ {
+		out = append(out, rune('a'+raw[i]%3))
+	}
+
+	return out
+}
+
+func TestDifferentialAgainstOracle(t *testing.T) {
+	rng := rand.New(rand.NewSource(20240607))
+
+	grammars, checks, matchedCount := 0, 0, 0
 
 	for range 600 {
 		g := randomNode(rng, 3)
 		grammars++
 
-		var desc bytes.Buffer
-		_ = g.p.Print(&desc)
-
-		full := concR(g.p, endR())
-
 		for range 12 {
-			n := rng.Intn(7)
-			input := make([]rune, n)
+			input := make([]rune, rng.Intn(7))
 			for i := range input {
 				input[i] = rune('a' + rng.Intn(3))
 			}
 
-			fail := func(format string, args ...any) {
-				t.Helper()
-				t.Errorf("grammar %s, input %q: %s", desc.String(), string(input), fmt.Sprintf(format, args...))
-			}
-
-			want := g.ends(input, 0)
-
-			type result struct {
-				ok bool
-				m  *ebnf.Match[rune, runes.Pos]
-			}
-			parse := func(p ebnf.Pattern[rune, runes.Pos], memo bool) result {
-				var rd ebnf.Reader[rune, runes.Pos] = newRunes(string(input))
-				if memo {
-					rd = ebnf.WithMemo[rune, runes.Pos](rd, memoIdx)
-				}
-				ok, m, err := ebnf.Parse(p, rd)
-				if err != nil {
-					t.Fatalf("grammar %s, input %q: %v", desc.String(), string(input), err)
-				}
-				return result{ok, m}
-			}
-
-			plain, memo := parse(g.p, false), parse(g.p, true)
-
-			if plain.ok != (len(want) > 0) {
-				fail("matched=%v but the oracle ends are %v", plain.ok, want)
-			}
-			if plain.ok && !want[plain.m.End.Index] {
-				fail("ends at %d, the oracle says %v", plain.m.End.Index, want)
-			}
-			if plain.ok != memo.ok || (plain.ok && fingerprint(plain.m) != fingerprint(memo.m)) {
-				fail("memo differs: plain %v, memo %v", plain.ok, memo.ok)
-			}
-
-			// grammar, end of input: only works if the grammar gives back until the ends line up
-			wantFull := want[len(input)]
-			plainFull, memoFull := parse(full, false), parse(full, true)
-
-			if plainFull.ok != wantFull {
-				fail("followed by end of input: matched=%v, the oracle says %v", plainFull.ok, wantFull)
-			}
-			if plainFull.ok != memoFull.ok || (plainFull.ok && fingerprint(plainFull.m) != fingerprint(memoFull.m)) {
-				fail("followed by end of input: memo differs: plain %v, memo %v", plainFull.ok, memoFull.ok)
-			}
-
 			checks++
-			if plain.ok {
+			if checkAgainstOracle(t, g, input) {
 				matchedCount++
 			}
 		}
@@ -334,4 +365,18 @@ func TestDifferentialAgainstOracle(t *testing.T) {
 		t.Errorf("%d of %d cases matched, the random grammars are too one sided", matchedCount, checks)
 	}
 	t.Logf("%d grammars, %d cases, %d matched", grammars, checks, matchedCount)
+}
+
+// FuzzGrammarsAgainstOracle lets the fuzzer pick the grammar (through the seed of the random grammar generator) and the
+// input. Run it with: go test ./tests -run '^$' -fuzz FuzzGrammarsAgainstOracle
+func FuzzGrammarsAgainstOracle(f *testing.F) {
+	f.Add(int64(1), "abcab")
+	f.Add(int64(20240607), "")
+	f.Add(int64(42), "aaaaaaa")
+	f.Add(int64(7), "cba")
+
+	f.Fuzz(func(t *testing.T, seed int64, raw string) {
+		rng := rand.New(rand.NewSource(seed))
+		checkAgainstOracle(t, randomNode(rng, 3), abcInput(raw, 9))
+	})
 }

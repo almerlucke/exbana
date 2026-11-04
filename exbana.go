@@ -1,5 +1,49 @@
-// Package exbana is a versatile and generic EBNF-based pattern matching and generation library for Go.
-// It allows you to define complex patterns using common EBNF constructs and match them against any stream of objects.
+// Package exbana is a generic EBNF pattern matching and generation library. Grammars are built from patterns that
+// match any stream of objects of type T, at positions of type P, and the same patterns can generate output and print
+// themselves as EBNF.
+//
+// # Using the library
+//
+// Build a grammar from the pattern packages (entity, vector, concatenation, alternation, repetition, except, end and
+// rule), match it with [Parse], and read the result from the [Match]:
+//
+//	ok, match, err := ebnf.Parse(grammar, reader)
+//
+// [Parse] returns the most preferred match. [Matches] iterates over all of them. Patterns backtrack: when what follows a
+// pattern fails, it offers its next alternative; possessive repetitions and orthogonal alternations opt out of that for
+// speed.
+//
+// Everything that belongs to one parse lives in a [ParseContext] that wraps the reader, so a grammar is never changed
+// by parsing it and can be shared between goroutines:
+//
+//	ctx := ebnf.NewParseContext(reader).WithLogger(log).WithMemo(indexOf)
+//	ok, match, err := ebnf.Parse(grammar, ctx)
+//
+// A logger receives the mismatches of the parse; [FarthestLog] turns them into a [SyntaxError] that says where the
+// input went wrong and what was expected. WithMemo remembers the ways each pattern can end at each position, which
+// keeps ambiguous grammars from taking exponential time.
+//
+// Name patterns with Named and give leaves a print text with Printed. A rule (package rule) is a named pattern with an
+// evaluation function that [Match.Eval] runs; rules can be declared before they are defined for recursive grammars,
+// and marked left recursive.
+//
+// To generate, call Generate on a pattern with a [GenContext], which carries the seeded random source, the depth limit
+// and your own state. [PrintRules] prints a grammar as EBNF.
+//
+// # Writing your own patterns
+//
+// A [Pattern] has three methods: MatchCont, Generate and Print. MatchCont offers every way the pattern can match to a
+// continuation, in order of preference, and stops when the continuation accepts one. Patterns with exactly one way to
+// match use [Single]. Everything else about a pattern is optional and found by asking it: [Named] (an ID), [Evaluator]
+// (a value for a match), [Unpackable], [Parent] (the patterns it is built from, which loggers use to find out
+// whether it is a composite) and [Recognizer] (a way to check generated output, used by except).
+//
+// A composite pattern that wants memoization wraps its matcher in [MatchMemo]. Its search can use [FailSet] to
+// remember dead ends for the duration of one call, [FirstMatch] to run a sub pattern to its first match, and
+// [DistinctMatches] to walk the matches of a sub pattern in a loop. Failures are reported with [LogFailure] (a leaf)
+// or [LogMismatch] (a composite, with details), and lookahead is matched through [Silent] so that it does not reach
+// the logger. Embed [Label] to be [Named] and to print leaves. [EnsureContext], [EndSet] and the rule frames are what
+// a rule uses to find left recursion.
 package exbana
 
 import (

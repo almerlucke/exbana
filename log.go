@@ -7,18 +7,11 @@ type Logger[T, P any] interface {
 	LogMismatch(*Mismatch[T, P])
 }
 
-// VoidLog is a no-op logger that discards all log events.
-type VoidLog[T, P any] struct{}
+// voidLog is a logger that discards all log events, it silences lookahead.
+type voidLog[T, P any] struct{}
 
-// NewVoidLog creates a new VoidLog instance.
-func NewVoidLog[T, P any]() *VoidLog[T, P] {
-	return &VoidLog[T, P]{}
-}
-
-// LogMismatch implements the Logger interface for VoidLog (it does nothing).
-func (l *VoidLog[T, P]) LogMismatch(_ *Mismatch[T, P]) {
-	/* void */
-}
+// LogMismatch implements Logger, it discards the mismatch.
+func (l *voidLog[T, P]) LogMismatch(_ *Mismatch[T, P]) {}
 
 // MismatchFilter is an optional extension of Logger. A logger that implements it is asked whether it wants the
 // mismatches of a pattern before they are built, and building a mismatch costs allocations on every failed

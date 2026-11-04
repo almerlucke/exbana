@@ -27,7 +27,7 @@ func evalNum(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (a
 
 func digitsRule() rr {
 	digit := ebnf.Name(entR(func(r rune) bool { return r >= '0' && r <= '9' }), "digit")
-	return rule.New[rune, runes.Pos]("num", repetition.OneOrMore[rune, runes.Pos](digit)).WithEval(evalNum)
+	return rule.New[rune, runes.Pos]("num", repetition.OneOrMore[rune, runes.Pos](digit)).SetEval(evalNum)
 }
 
 func evalFirst(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
@@ -37,9 +37,9 @@ func evalFirst(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) 
 // expr = expr "-" num | num, left recursive
 func subtractionGrammar(leftRecursive bool) (expr rr, full ebnf.Pattern[rune, runes.Pos]) {
 	num := digitsRule()
-	expr = rule.Declare[rune, runes.Pos]("expr").WithEval(evalFirst).SetLeftRecursive(leftRecursive)
+	expr = rule.Declare[rune, runes.Pos]("expr").SetEval(evalFirst).SetLeftRecursive(leftRecursive)
 	sub := rule.New[rune, runes.Pos]("sub", concR(expr, runeR('-'), num)).
-		WithEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
+		SetEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
 			l, err := m.Components[0].Eval(rd)
 			if err != nil {
 				return nil, err

@@ -139,6 +139,7 @@ func (a *Alternation[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[T
 	return false, nil
 }
 
+// CanUnpack implements ebnf.Unpackable: the match of an alternation is a wrapper around the match of the branch that matched.
 func (a *Alternation[T, P]) CanUnpack() bool {
 	return true
 }
@@ -227,6 +228,7 @@ func (a *Alternation[T, P]) Print(w io.Writer) error {
 	return err
 }
 
+// SetPatterns replaces the branches of the alternation.
 func (a *Alternation[T, P]) SetPatterns(patterns ebnf.Patterns[T, P]) *Alternation[T, P] {
 	a.patterns = patterns
 	return a

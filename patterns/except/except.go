@@ -92,11 +92,13 @@ type bufferWriter[T any] struct {
 	finished bool
 }
 
+// Write implements ebnf.Writer, it collects what the must pattern generates.
 func (b *bufferWriter[T]) Write(values ...T) error {
 	b.values = append(b.values, values...)
 	return nil
 }
 
+// Finish implements ebnf.Writer, it notes that the must pattern finished the stream.
 func (b *bufferWriter[T]) Finish() error {
 	b.finished = true
 	return nil

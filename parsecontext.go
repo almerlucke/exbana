@@ -120,9 +120,9 @@ func (c *ParseContext[T, P]) FindOpenFrame(p Pattern[T, P], pos P) *RuleFrame[T,
 	return nil
 }
 
-// GrowingAt returns true if a rule is growing a seed at the position. Results of patterns at that position depend on
+// growingAt returns true if a rule is growing a seed at the position. Results of patterns at that position depend on
 // the seed, which changes while it grows, so they must not be memoized.
-func (c *ParseContext[T, P]) GrowingAt(pos P) bool {
+func (c *ParseContext[T, P]) growingAt(pos P) bool {
 	s := c.frames.frames
 
 	for i := len(s) - 1; i >= 0; i-- {
@@ -163,24 +163,20 @@ func (c *ParseContext[T, P]) Logger() Logger[T, P] {
 	return c.logger
 }
 
-// Enabled implements Memo
-func (c *ParseContext[T, P]) Enabled() bool {
+func (c *ParseContext[T, P]) memoEnabled() bool {
 	return c.solved != nil
 }
 
-// Index implements Memo
-func (c *ParseContext[T, P]) Index(pos P) int {
+func (c *ParseContext[T, P]) indexOf(pos P) int {
 	return c.index(pos)
 }
 
-// Solutions implements Memo
-func (c *ParseContext[T, P]) Solutions(p Pattern[T, P], pos P) ([]*Match[T, P], bool) {
+func (c *ParseContext[T, P]) solutions(p Pattern[T, P], pos P) ([]*Match[T, P], bool) {
 	m, ok := c.solved[solutionKey[T, P]{p, c.index(pos)}]
 	return m, ok
 }
 
-// SetSolutions implements Memo
-func (c *ParseContext[T, P]) SetSolutions(p Pattern[T, P], pos P, matches []*Match[T, P]) {
+func (c *ParseContext[T, P]) setSolutions(p Pattern[T, P], pos P, matches []*Match[T, P]) {
 	c.solved[solutionKey[T, P]{p, c.index(pos)}] = matches
 }
 
@@ -197,7 +193,7 @@ func listener[T, P any](r Reader[T, P], p Pattern[T, P]) Logger[T, P] {
 		return nil
 	}
 
-	if _, void := logger.(*VoidLog[T, P]); void {
+	if _, void := logger.(*voidLog[T, P]); void {
 		return nil
 	}
 
@@ -246,7 +242,7 @@ func Silent[T, P any](r Reader[T, P]) Reader[T, P] {
 	}
 
 	quiet := *c
-	quiet.logger = NewVoidLog[T, P]()
+	quiet.logger = &voidLog[T, P]{}
 	quiet.index = nil
 	quiet.solved = nil
 

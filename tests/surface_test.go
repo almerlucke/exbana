@@ -79,7 +79,7 @@ func TestDepthLimitIsExact(t *testing.T) {
 
 func TestRuleEvalFallsBackToTheWrappedPattern(t *testing.T) {
 	inner := rule.New[rune, runes.Pos]("inner", runeR('a')).
-		WithEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
+		SetEval(func(m *ebnf.Match[rune, runes.Pos], rd ebnf.Reader[rune, runes.Pos]) (any, error) {
 			return "evaluated", nil
 		})
 	outer := rule.New[rune, runes.Pos]("outer", inner)

@@ -86,6 +86,7 @@ func (v *Vector[T, P]) Recognize(values []T) (bool, bool) {
 	return true, true
 }
 
+// Print prints the text of the vector, see Printed.
 func (v *Vector[T, P]) Print(w io.Writer) error {
 	_, err := w.Write([]byte(v.Text()))
 	return err

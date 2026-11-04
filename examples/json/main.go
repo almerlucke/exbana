@@ -264,7 +264,7 @@ func Parse(input string) (any, error) {
 		alt('0', conc(rb('1', '9'), rep(digit))),
 		opt(fraction),
 		opt(exponent),
-	)).WithEval(evalNumber).SetAtomic(true)
+	)).SetEval(evalNumber).SetAtomic(true)
 
 	hexDigit := ent.New[rune, runes.Pos](func(r rune) bool {
 		return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
@@ -272,26 +272,26 @@ func Parse(input string) (any, error) {
 	uniLit := ebnf.Name(conc('u', n(hexDigit, 4)), "unicodeLit")
 	escape := ebnf.Name(conc('\\', alt('"', '\\', '/', 'b', 'f', 'n', 'r', 't', uniLit)), "escape")
 	anyChar := ex(ra(), alt('"', '\\', rmf(unicode.IsControl)))
-	str := rule.New("string", conc('"', rep(alt(anyChar, escape)), '"')).WithEval(evalString).SetAtomic(true)
+	str := rule.New("string", conc('"', rep(alt(anyChar, escape)), '"')).SetEval(evalString).SetAtomic(true)
 
-	trueVal := rule.New("true", rv([]rune{'t', 'r', 'u', 'e'})).WithEval(evalTrue).SetAtomic(true)
-	falseVal := rule.New("false", rv([]rune{'f', 'a', 'l', 's', 'e'})).WithEval(evalFalse).SetAtomic(true)
-	nullVal := rule.New("null", rv([]rune{'n', 'u', 'l', 'l'})).WithEval(evalNull).SetAtomic(true)
+	trueVal := rule.New("true", rv([]rune{'t', 'r', 'u', 'e'})).SetEval(evalTrue).SetAtomic(true)
+	falseVal := rule.New("false", rv([]rune{'f', 'a', 'l', 's', 'e'})).SetEval(evalFalse).SetAtomic(true)
+	nullVal := rule.New("null", rv([]rune{'n', 'u', 'l', 'l'})).SetEval(evalNull).SetAtomic(true)
 
 	// forward value declaration
-	value := rule.Declare[rune, runes.Pos]("value").WithEval(evalValue)
+	value := rule.Declare[rune, runes.Pos]("value").SetEval(evalValue)
 
 	array := rule.New("array", conc(
 		'[',
 		alt(conc(value, rep(conc(',', value))), ws),
 		']',
-	)).WithEval(evalArray)
+	)).SetEval(evalArray)
 
 	obj := rule.New("object", conc(
 		'{',
 		alt(conc(ws, str, ws, ':', value, rep(conc(',', ws, str, ws, ':', value))), ws),
 		'}',
-	)).WithEval(evalObject)
+	)).SetEval(evalObject)
 
 	value.Define(conc(ws, alt(str, number, obj, array, trueVal, falseVal, nullVal).SetOrthogonal(true), ws))
 

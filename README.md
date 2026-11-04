@@ -45,7 +45,7 @@ matched, match, err := ebnf.Parse(grammar, ctx)
 Both `WithLogger` and `WithMemo` are optional. Any `Reader` works too, you just get no logging and no memo.
 
 ### `Logger[T, P]`
-Receives the mismatches of a parse, which is useful for debugging complex grammars to find why and where a match failed. See `StackLog` and `FarthestLog` (below). Mismatches are only built when a logger is listening.
+Receives the mismatches of a parse, which is useful for debugging complex grammars to find why and where a match failed. See `FarthestLog` (below), or write your own: a `Logger` is a single method. Mismatches are only built when a logger is listening.
 
 ## Built-in Patterns
 
@@ -139,9 +139,13 @@ ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithMemo(func(p runes.Pos) int 
 matched, result, err := ebnf.Parse(pattern, ctx)
 ```
 
-This remembers failures only (a pattern with no match at a position; a concatenation or repetition whose remainder
-already failed from a position), so catastrophic cases like `(a*)*, c` stay polynomial. It does not cache successes.
-Use one context per input; it assumes the input does not change. Mismatches already seen are not logged again.
+For each composite pattern and position the context remembers the distinct ways it can end (one match per end position, the
+preferred one). Whether the rest of a parse succeeds depends on where a pattern ended and not on how it matched, so the result
+of a parse is the same with or without the memo, but the work is bounded by patterns x positions instead of by the number of
+derivations. That keeps cases like `(a*)*, c` and nested unfactored alternations (`e = e "+" a | e "-" a | e`) polynomial, where they
+are exponential without it. The price is a map entry per pattern and position, and that the first time a pattern is tried at a
+position all its ways to match are computed, not just the first. Use one context per input; it assumes the input does not
+change. Mismatches already seen are not logged again.
 
 ## Generation
 

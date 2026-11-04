@@ -855,14 +855,23 @@ func TestLogMismatchOnlyBuildsWhenListening(t *testing.T) {
 		t.Errorf("mismatch was built %d times with nobody listening", built)
 	}
 
-	log := ebnf.NewStackLog[rune, runes.Pos]()
+	log := &recorder{}
 	ebnf.LogMismatch[rune, runes.Pos](ebnf.NewParseContext[rune, runes.Pos](newRunes("a")).WithLogger(log), p, func() *ebnf.Mismatch[rune, runes.Pos] {
 		built++
 		return &ebnf.Mismatch[rune, runes.Pos]{}
 	})
-	if built != 1 || len(log.Stack) != 1 {
-		t.Errorf("built %d, logged %d", built, len(log.Stack))
+	if built != 1 || len(log.mismatches) != 1 {
+		t.Errorf("built %d, logged %d", built, len(log.mismatches))
 	}
+}
+
+// recorder is a Logger that keeps every mismatch it is given
+type recorder struct {
+	mismatches []*ebnf.Mismatch[rune, runes.Pos]
+}
+
+func (r *recorder) LogMismatch(m *ebnf.Mismatch[rune, runes.Pos]) {
+	r.mismatches = append(r.mismatches, m)
 }
 
 // one grammar, many parses at the same time, each logging to its own logger (run with -race)
@@ -870,9 +879,9 @@ func TestParseContextSharedGrammar(t *testing.T) {
 	g := concR(runeR('('), repetition.OneOrMore[rune, runes.Pos](ebnf.Name(entR(unicode.IsDigit), "digit")), runeR(')'))
 
 	count := func() int {
-		log := ebnf.NewStackLog[rune, runes.Pos]()
+		log := &recorder{}
 		g.Match(ebnf.NewParseContext[rune, runes.Pos](newRunes("(12x)")).WithLogger(log))
-		return len(log.Stack)
+		return len(log.mismatches)
 	}
 	want := count()
 	if want == 0 {
@@ -1071,5 +1080,39 @@ func TestNameAndTextHelpers(t *testing.T) {
 	var buf bytes.Buffer
 	if err := concR(plus, d).Print(&buf); err != nil || buf.String() != `("+", digit)` {
 		t.Errorf("print = %q, %v", buf.String(), err)
+	}
+}
+
+func TestMemoMakesNestedAlternationsPolynomial(t *testing.T) {
+	// 3^30 steps without the memo, which would never finish
+	g := unfactoredGrammar(30)
+
+	done := make(chan *ebnf.Match[rune, runes.Pos], 1)
+	go func() {
+		ok, m, _ := ebnf.Parse(g, ebnf.WithMemo[rune, runes.Pos](newRunes("a-a"), func(p runes.Pos) int { return p.Index }))
+		if !ok {
+			m = nil
+		}
+		done <- m
+	}()
+
+	select {
+	case m := <-done:
+		if m == nil || m.End.Index != 3 {
+			t.Fatalf("got %+v", m)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("did not finish, the first match of a pattern is not memoized")
+	}
+}
+
+func TestMemoizedFirstMatchGivesSameResults(t *testing.T) {
+	g := unfactoredGrammar(6)
+	for _, in := range []string{"a", "a+a", "a-a", "a+", "b", ""} {
+		ok1, m1, _ := ebnf.Parse(g, newRunes(in))
+		ok2, m2, _ := ebnf.Parse(g, ebnf.WithMemo[rune, runes.Pos](newRunes(in), func(p runes.Pos) int { return p.Index }))
+		if ok1 != ok2 || (ok1 && m1.End.Index != m2.End.Index) {
+			t.Errorf("%q: plain %v, memo %v", in, ok1, ok2)
+		}
 	}
 }

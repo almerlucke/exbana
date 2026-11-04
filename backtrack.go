@@ -21,14 +21,16 @@ func FirstMatch[T, P any](r Reader[T, P], f func(Reader[T, P], Continuation[T, P
 	return true, result, nil
 }
 
-// Memo remembers which patterns are known to have no match at a position.
-// A reader that implements Memo enables failure memoization for composite patterns.
+// Memo remembers, for a pattern at a position, the distinct ways it can end. A reader that implements Memo (a
+// ParseContext with WithMemo) enables memoization for composite patterns.
 type Memo[T, P any] interface {
-	// KnownFail returns true if the pattern is known to have no match at the position.
-	KnownFail(Pattern[T, P], P) bool
+	// Solutions returns the matches remembered for the pattern at the position, one per distinct end position in
+	// order of preference. The second result is false if nothing is remembered yet. An empty list means the pattern
+	// is known to have no match there.
+	Solutions(Pattern[T, P], P) ([]*Match[T, P], bool)
 
-	// RecordFail records that the pattern has no match at the position.
-	RecordFail(Pattern[T, P], P)
+	// SetSolutions remembers the matches of the pattern at the position.
+	SetSolutions(Pattern[T, P], P, []*Match[T, P])
 
 	// Index maps a position to a unique integer.
 	Index(P) int
@@ -74,9 +76,17 @@ func (f *FailSet[P]) Add(state int, pos P) {
 }
 
 // MatchMemo runs f (the continuation based matcher of pattern p) and, if the reader supports memoization,
-// skips it when p is known to fail at the current position and records the failure when p offered no candidate at all.
-// A failure is only recorded if the continuation was never called, because a rejection by the continuation says
-// something about the context and not about the pattern itself.
+// remembers the ways p can match at the current position, so that the next time p is tried there the work is not
+// done again.
+//
+// What is remembered is one match per distinct end position, in the order f offered them. That is enough because
+// whether the rest of a parse succeeds depends on where p ended and not on how it matched, so a second match with the
+// same end could only fail the same way. The first one is the preferred one, so the result of a parse does not change.
+// Without this, a pattern with many derivations that end at the same position (nested alternations that can match
+// the same text in different ways) takes exponential time when what follows fails.
+//
+// Remembering all ways means f runs to completion the first time instead of stopping at the first match that is
+// accepted; the cost is bounded by the number of positions, not by the number of derivations.
 func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], f func(Reader[T, P], Continuation[T, P]) (bool, error)) (bool, error) {
 	memo, ok := r.(Memo[T, P])
 	if !ok || !memo.Enabled() {
@@ -88,19 +98,36 @@ func MatchMemo[T, P any](p Pattern[T, P], r Reader[T, P], k Continuation[T, P], 
 		return false, err
 	}
 
-	if memo.KnownFail(p, pos) {
-		return false, nil
+	solutions, known := memo.Solutions(p, pos)
+	if !known {
+		seen := make(map[int]struct{})
+
+		_, err = f(r, func(m *Match[T, P]) (bool, error) {
+			end := memo.Index(m.End)
+			if _, dup := seen[end]; !dup {
+				seen[end] = struct{}{}
+				solutions = append(solutions, m)
+			}
+
+			return false, nil
+		})
+		if err != nil {
+			return false, err
+		}
+
+		memo.SetSolutions(p, pos, solutions)
 	}
 
-	offered := false
+	for _, m := range solutions {
+		if err := r.SetPosition(m.End); IsStreamError(err) {
+			return false, err
+		}
 
-	matched, err := f(r, func(m *Match[T, P]) (bool, error) {
-		offered = true
-		return k(m)
-	})
-	if err == nil && !matched && !offered {
-		memo.RecordFail(p, pos)
+		matched, err := k(m)
+		if err != nil || matched {
+			return matched, err
+		}
 	}
 
-	return matched, err
+	return false, nil
 }

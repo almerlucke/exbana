@@ -115,13 +115,13 @@ For grammars that do backtrack a lot, wrap the reader to remember dead ends:
 
 ```go
 rd, _ := runes.New(strings.NewReader(input))
-mrd := ebnf.WithMemo[rune, runes.Pos](rd, func(p runes.Pos) int { return p.Index })
-matched, result, err := pattern.Match(mrd)
+ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithMemo(func(p runes.Pos) int { return p.Index })
+matched, result, err := pattern.Match(ctx)
 ```
 
 This remembers failures only (a pattern with no match at a position; a concatenation or repetition whose remainder
 already failed from a position), so catastrophic cases like `(a*)*, c` stay polynomial. It does not cache successes.
-Use one wrapper per input; it assumes the input does not change. Mismatches already seen are not logged again.
+Use one context per input; it assumes the input does not change. Mismatches already seen are not logged again.
 
 ## Generation
 
@@ -156,17 +156,16 @@ what would have matched there.
 ```go
 rd, _ := runes.New(strings.NewReader("(12x)"))
 log := runes.NewFarthestLog(rd)
-ebnf.SetLogger[rune, runes.Pos](grammar, log) // attaches the logger to every pattern in the grammar
+ctx := ebnf.NewParseContext[rune, runes.Pos](rd).WithLogger(log)
 
-if matched, _, _ := grammar.Match(rd); !matched {
+if matched, _, _ := grammar.Match(ctx); !matched {
 	fmt.Println(log.Err()) // syntax error at 1:4: unexpected 'x', expected digit or ")"
 }
 ```
 
 Give the leaf patterns of your grammar an ID (`SetID("digit")`) or print output (`SetPrintOutput("\")\"")`), they are used
 as the "expected" descriptions; leaves without either are left out. `Last()` returns the `*SyntaxError` with the
-position, the expected list and the unexpected element for your own formatting. Exception patterns are not attached
-by `SetLogger` because they are lookahead: they are supposed to fail on every successful match.
+position, the expected list and the unexpected element for your own formatting. The exception of an `except` is lookahead: it is supposed to fail on every successful match, so it is matched silently and never reaches the logger.
 
 ## EBNF Printing
 

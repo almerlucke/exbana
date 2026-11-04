@@ -31,7 +31,7 @@ func (e *End[T, P]) Match(r ebnf.Reader[T, P]) (bool, *ebnf.Match[T, P], error) 
 		return true, ebnf.NewMatch[T, P](e, pos, pos, nil, nil), nil
 	}
 
-	e.Logger().LogMismatch(ebnf.NewMismatch[T, P](e, pos, pos, nil, nil))
+	ebnf.LogMismatch(r, ebnf.Pattern[T, P](e), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch[T, P](e, pos, pos, nil, nil) })
 
 	return false, nil, nil
 }

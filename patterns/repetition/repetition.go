@@ -147,7 +147,9 @@ func (rep *Repetition[T, P]) matchCont(r ebnf.Reader[T, P], k ebnf.Continuation[
 		}
 
 		if n < rep.min {
-			rep.Logger().LogMismatch(ebnf.NewMismatch(rep, beginPos, herePos, nil, slices.Clone(matches)))
+			ebnf.LogMismatch(r, ebnf.Pattern[T, P](rep), func() *ebnf.Mismatch[T, P] {
+				return ebnf.NewMismatch(rep, beginPos, herePos, nil, slices.Clone(matches))
+			})
 			return false, nil
 		}
 
@@ -194,7 +196,7 @@ func (rep *Repetition[T, P]) matchPossessive(r ebnf.Reader[T, P], beginPos P, k 
 	}
 
 	if len(matches) < rep.min {
-		rep.Logger().LogMismatch(ebnf.NewMismatch(rep, beginPos, endPos, nil, matches))
+		ebnf.LogMismatch(r, ebnf.Pattern[T, P](rep), func() *ebnf.Mismatch[T, P] { return ebnf.NewMismatch(rep, beginPos, endPos, nil, matches) })
 		return false, nil
 	}
 

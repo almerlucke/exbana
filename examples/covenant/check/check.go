@@ -42,7 +42,18 @@ type Result struct {
 	// Types are the types of the expressions of the program, as far as they are known.
 	Types map[ast.Node]Type
 
+	// Refs say what a name stands for, where it is not a variable of the function: a function, a constant, a type, a variant.
+	// The keys are the *ast.Name of an expression, and the *ast.PatName of a pattern (then the Entity is a *Variant or a *Def).
+	Refs map[ast.Node]Ref
+
 	Modules map[string]*Module
+}
+
+// Ref is what a name stands for. Rest are the names after the ones that were followed to the Entity: the variant or the
+// function of a type, as in Shape::Circle.
+type Ref struct {
+	Entity any // *FnDef, *ConstDef, *Def, *VariantRef, *Variant, ...
+	Rest   []string
 }
 
 // OK says whether the program has no problems.
@@ -81,6 +92,7 @@ type checker struct {
 	trail   []func()
 	known   map[string]bool
 	types   map[ast.Node]Type
+	refs    map[ast.Node]Ref
 	sources map[*Module]*covenant.File
 	implOf  map[*ast.Impl]*Impl
 	ts      *tscope // the type parameters of the function that is being checked
@@ -96,7 +108,7 @@ type checker struct {
 // in) is part of every program.
 func Check(cfg Config, sources map[string]string) *Result {
 	c := &checker{
-		cfg: cfg, mods: map[string]*Module{}, known: map[string]bool{}, types: map[ast.Node]Type{}, sources: map[*Module]*covenant.File{}, implOf: map[*ast.Impl]*Impl{},
+		cfg: cfg, mods: map[string]*Module{}, known: map[string]bool{}, types: map[ast.Node]Type{}, refs: map[ast.Node]Ref{}, sources: map[*Module]*covenant.File{}, implOf: map[*ast.Impl]*Impl{},
 	}
 
 	for _, e := range cfg.Effects {
@@ -114,7 +126,7 @@ func Check(cfg Config, sources map[string]string) *Result {
 		return a.Span.Begin < b.Span.Begin
 	})
 
-	return &Result{Diagnostics: c.diags, Types: c.types, Modules: c.mods}
+	return &Result{Diagnostics: c.diags, Types: c.types, Refs: c.refs, Modules: c.mods}
 }
 
 // errorf reports a problem in the module that is being checked.

@@ -1,0 +1,46 @@
+// A small program to try the command on.
+
+use io
+
+struct Point { x: Float, y: Float }
+
+enum Shape {
+    Circle(radius: Float)
+    Rect(width: Float, height: Float)
+}
+
+trait Area {
+    fn area(self) -> Float
+}
+
+impl Area for Shape {
+    fn area(self) -> Float {
+        return match self {
+            Circle(radius) => 3.0 * radius * radius
+            Rect(width, height) => width * height
+        }
+    }
+}
+
+fn factorial(n: Int) -> Int {
+    requires n >= 0
+    example factorial(0) == 1
+    example factorial(5) == 120
+    if n == 0 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fn greet(name: Text) with io::print {
+    io::print("hello, " + name)
+}
+
+fn main() with io::print -> Int {
+    greet("covenant")
+    let shapes = [Shape::Circle(radius: 2.0), Shape::Rect(2.0, 3.0)]
+    for shape in shapes {
+        io::print(shape.area().to_text())
+    }
+    return factorial(10)
+}

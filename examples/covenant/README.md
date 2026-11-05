@@ -3,8 +3,8 @@
 A small language meant to be read by people and by agents alike, and to be embedded in Go programs as a scripting language.
 So far there is a lexer (`token/`), a grammar over its tokens (`grammar/`), a parser generated from the grammar (`parser/`,
 regenerate it with `go generate` here), `covenant.Parse`, the program as plain Go values (`ast/`), a type and effect checker
-(`check/`), and this note, which records the decisions the grammar does not show. Nothing runs yet, and faults are not
-implemented: they are a promise of the language, see below.
+(`check/`), an interpreter for checked programs (`run/`), a command (`cmd/covenant`), and this note, which records the
+decisions the grammar does not show.
 
 ## Syntax the parser needed
 
@@ -120,3 +120,35 @@ the names `A` and `B` that are not types are parameters of the impl.
 - Faults (overflow, division by zero): they happen when the program runs.
 - Unused names, unreachable code, a name that shadows another.
 - An `impl` for a type of another module (there is no rule on who may write it yet), and two impls of one trait that overlap.
+
+## Running a program
+
+`run.New(result, config)` makes a program of what the checker accepted (one with problems in it is refused), and
+`program.Call(ctx, "app", "main", args...)` runs a function. The interpreter walks the tree; it uses what the checker found out
+(which function a name stands for, which variant a pattern is for) and nothing else, so it can not run what was not checked.
+
+- **Values** are Go values: `int64`, `float64`, `string`, `bool`, `run.Unit`, `*run.List`, `*run.Map`, `*run.Set`, `*run.Struct`,
+  `*run.Enum` (`Option` and `Result` are enums) and `*run.Func`. They never change. A new list, map or set that is made by adding
+  to the latest version of another shares its storage, so building one in a loop is not quadratic; making one from an older version
+  copies. `run.Format` writes a value the way a program would.
+- **Faults** are the promises of the language: `Int` overflow (including `-` of the smallest and `abs` of it), division and
+  remainder by zero, a `requires` that is false (the message says which, and for which call), calls nested more than
+  `MaxDepth` deep, and a `Float` that does not fit an `Int`. The call ends with a `*run.Fault` that has the kind, the place in the
+  source and the functions that were running. A program can not catch one.
+- **Limits** are not faults: more than `MaxSteps` steps, or a cancelled or expired context, end the call with a `*run.Limit`.
+- **Effects** have to be granted: `Config.Grant` lists them, and a function whose signature has an effect that is not granted is
+  not called (`*run.Denied`). The checker has proven that nothing the function calls needs more. The functions of a native module
+  are `Config.Host["module::name"]`, and `New` refuses a program for a module whose functions the host does not give.
+- **Examples** are run by `program.Examples`: each is a Bool that has to be true, and none of them needs the host, since an
+  example can have no effects. An example does not see the parameters of its function; it is a fact about the function and calls
+  it.
+- A closure takes the values of the names it sees when it is made. A `var` that changes later is not changed in the closure.
+- The order of a map and of a set is the order things were added, so a program that goes over one gives the same result every
+  time.
+
+`go run ./examples/covenant/cmd/covenant check|test|run files...` does this from the command line. Every file is a module, and a
+program can print with `io::print`.
+
+**Not there yet.** Memory is not limited, only steps and depth; the standard library is what `check/prelude.cov` lists; the
+interpreter walks the tree, which is slow next to what a compiler to bytecode would do; and `Map.set` of a key that is already
+there, `Map.remove` and `List.concat` copy.

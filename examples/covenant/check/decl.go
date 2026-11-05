@@ -858,7 +858,7 @@ func (c *checker) nativeTrait(m *Module, d *ast.Trait) {
 	self := &Con{def, args}
 
 	for _, md := range d.Methods {
-		fd := &FnDef{Name: md.Name, Module: m, Decl: md, Pub: true}
+		fd := &FnDef{Name: md.Name, Module: m, Decl: md, Pub: true, Owner: def}
 		c.fnSig(fd, ts, def.Params, self)
 
 		if _, dup := def.Methods[md.Name]; dup {

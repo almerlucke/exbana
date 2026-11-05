@@ -147,9 +147,15 @@ func (c *checker) blockBody(b *ast.Block) {
 		c.promise(e)
 	}
 
+	// an example is a fact about the function and does not have its parameters: it can be run on its own
+	params := c.scope
+
 	for _, e := range b.Examples {
+		c.scope = &scope{vars: map[string]*local{}}
 		c.promise(e)
 	}
+
+	c.scope = params
 
 	c.push()
 

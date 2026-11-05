@@ -440,6 +440,11 @@ var rejected = []badCase{
 	{"a match on the wrong enum", "enum A {\n    X\n}\nenum B {\n    X\n}\nfn f(a: A) -> Int {\n    return match a {\n        B::X => 1\n    }\n}\n", 9, "type-mismatch", "this pattern is for B"},
 	{"the same name twice in a pattern", "enum E {\n    A(x: Int, y: Int)\n}\nfn f(e: E) -> Int {\n    return match e {\n        A(v, v) => v\n    }\n}\n", 6, "duplicate", "v is declared twice"},
 
+	// numbers and examples
+	{"an Int that is too large", "fn f() -> Int {\n    return 9223372036854775808\n}\n", 2, "number", "does not fit in an Int"},
+	{"a Float that is too large", "fn f() -> Float {\n    return 1e999\n}\n", 2, "number", "does not fit in a Float"},
+	{"an example that uses a parameter", "fn f(n: Int) -> Int {\n    example n == 1\n    return n\n}\n", 2, "unknown-name", "there is no n"},
+
 	// declarations
 	{"a function declared twice", "fn f() {\n}\nfn f() {\n}\n", 3, "duplicate", "f is declared twice"},
 	{"a name declared twice in a block", "fn f() {\n    let a = 1\n    let a = 2\n}\n", 3, "duplicate", "a is declared twice in the same block"},

@@ -488,7 +488,7 @@ func TestElementTypes(t *testing.T) {
 	}
 
 	_, err = NewStmtParser().Parse([]string{"let", "x", "y"})
-	if err == nil || err.Error() != "syntax error at element 2: unexpected y, expected the =" {
+	if err == nil || err.Error() != "syntax error at element 2: unexpected \"y\", expected the =" {
 		t.Errorf("stmt error: %v", err)
 	}
 }

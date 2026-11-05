@@ -192,6 +192,10 @@ err := pattern.Generate(ctx, writer)
 
 `examples/melody` generates seeded melodies with all of this: weighted bar rhythms, a weighted random walk over scale degrees whose weights depend on the previous note (kept in `ctx.State`), and a cadence.
 
+The same grammar also reads. `melody -learn` parses known tunes with it (a pattern both parses and generates), counts which rhythm every bar has and how far each note steps from the one before, and generates new melodies with those counts as the odds. The grammar stays as it is; only the weights, a `Model`, come from the songs.
+
+`melody -nottingham DIR` does the same with real folk tunes: it reads the Nottingham Music Database (ABC files, GPL, so not part of this repository) with `examples/melody/abc`, turns each tune into a row of sixteenth-note cells, and reads them with a grammar of parts, four-bar phrases and bars. From the parses it learns the rhythm, the steps of the melody and the notes phrases come to rest on, and it writes new tunes as ABC. Of the 1,033 tunes about 650 fit the grammar (the others have triplets, minor keys or key changes, or parts that are not made of four-bar phrases), and tunes made from the 320 in 4/4 match the real ones in note lengths, step sizes and notes of the scale to within a few percent. The grammar fixes how a tune is built, and the model, learned from the parses, says what is likely inside it. What it does not do is repeat motifs, so the tunes sound like folk tunes played by someone who has forgotten the last bar.
+
 Generation is forward only: a rule can't look ahead, so a melody can't "plan" its way to the cadence (see the example). Use state and weight functions to steer, or enumerate the endings in the grammar.
 
 ## Syntax Errors
@@ -421,4 +425,5 @@ fmt.Print(rules)
 - `examples/argsgen`: the command line of a small package manager, as a grammar over the arguments (strings, no lexer and no text) with typed views, errors that name the argument, and a leaf that is a function, which shows what the optimizer can and cannot prove about those.
 - `examples/json`, `examples/xml`: parsers with evaluation functions that build values.
 - `examples/golang`: Go literal tokens, scanning and seeded generation.
-- `examples/melody`: seeded melody generation with weights and state.
+- `examples/melody`: seeded melody generation with weights and state, and learning the weights by parsing known melodies with the same grammar.
+- `examples/melody/abc`: a reader for ABC notation (the format of folk tune collections like the Nottingham Music Database): notes as steps of the scale, ties, triplets, repeats and endings. `abcstat` reports how many tunes of a collection it reads.

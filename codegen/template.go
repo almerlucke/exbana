@@ -272,6 +272,9 @@ func (e *{{.SynErr}}) Error() string {
 {{- if .IsText}}
 	default:
 		fmt.Fprintf(&sb, ": unexpected %q", rune(e.Found))
+{{- else if eq .Elem "string"}}
+	default:
+		fmt.Fprintf(&sb, ": unexpected %q", e.Found)
 {{- else}}
 	default:
 		fmt.Fprintf(&sb, ": unexpected %v", e.Found)

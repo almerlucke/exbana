@@ -58,6 +58,9 @@ jobs:
       - name: Generated calculator (left recursion) against its grammar
         run: go test ./examples/calcgen -run '^$' -fuzz '^FuzzGeneratedParserAgainstGrammar$' -fuzztime 30s
 
+      - name: Generated command line parser (string elements) against its grammar
+        run: go test ./examples/argsgen -run '^$' -fuzz '^FuzzGeneratedParserAgainstGrammar$' -fuzztime 30s
+
       - name: JSON decoded through the typed views against encoding/json
         run: go test ./examples/jsongen -run '^$' -fuzz '^FuzzDecodeAgainstEncodingJSON$' -fuzztime 30s
 

@@ -397,7 +397,7 @@ orthogonal, because you said so or because `optimize` proved it. A grammar that 
 places (a place that needs it can be rewritten, or accepted with `Config.Commit`, which means "first match wins"). Leaves have to be
 declarative (`entity.Between`, `In`, `Equals`, `vector.Text` and the like) so the generator can see what they accept. Every problem is reported at once.
 
-**Other element types.** The generated parser reads a slice of any element type, with an int as the position; the position type of the grammar does
+**Other element types.** (`examples/argsgen` parses command line arguments this way.) The generated parser reads a slice of any element type, with an int as the position; the position type of the grammar does
 not matter, and nothing of the library is needed at run time. Runes, bytes, integers, strings and floats work out of the box. For another type, like a
 struct for a token, set `Config.ElemType` and give `Config.Class` the Go expression for each leaf that is a function (`x.Kind == KindPlus`). The
 `optimize` analysis works on integer elements, so for other types you mark the possessive and orthogonal places yourself or set `Commit`.
@@ -418,6 +418,7 @@ fmt.Print(rules)
 - `examples/tokens`: a calculator in two stages: a lexer produces a `[]Token` and the grammar parses it through a slice reader, with left recursive rules for left associative operators and syntax errors that point back into the text.
 - `examples/jsongen`: JSON as a grammar, optimized and turned into a generated parser that reads UTF-8 text, with the generated file checked in and kept honest by tests and a fuzz target.
 - `examples/calcgen`: arithmetic with left recursive rules, generated as loops, evaluated by walking the tree, and fuzzed against the grammar as it was written.
+- `examples/argsgen`: the command line of a small package manager, as a grammar over the arguments (strings, no lexer and no text) with typed views, errors that name the argument, and a leaf that is a function, which shows what the optimizer can and cannot prove about those.
 - `examples/json`, `examples/xml`: parsers with evaluation functions that build values.
 - `examples/golang`: Go literal tokens, scanning and seeded generation.
 - `examples/melody`: seeded melody generation with weights and state.

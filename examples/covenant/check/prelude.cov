@@ -1,0 +1,107 @@
+// The prelude: what every program has. The checker reads it as the source of a module that the host provides, so there are
+// signatures and no bodies: a trait named like a type holds the methods of that type, and the trait Functions holds functions.
+
+enum Option<T> {
+    Some(value: T)
+    None
+}
+
+enum Result<T, E> {
+    Ok(value: T)
+    Err(error: E)
+}
+
+enum ParseError {
+    NotANumber
+    OutOfRange
+}
+
+trait Functions {
+    fn range(from: Int, to: Int) -> List<Int>
+}
+
+trait Int {
+    fn to_float(self) -> Float
+    fn to_text(self) -> Text
+    fn abs(self) -> Int
+    fn min(self, other: Int) -> Int
+    fn max(self, other: Int) -> Int
+}
+
+trait Float {
+    fn to_text(self) -> Text
+    fn abs(self) -> Float
+    fn min(self, other: Float) -> Float
+    fn max(self, other: Float) -> Float
+    fn sqrt(self) -> Float
+    fn floor(self) -> Int
+    fn round(self) -> Int
+}
+
+trait Bool {
+    fn to_text(self) -> Text
+}
+
+trait Text {
+    fn length(self) -> Int
+    fn is_empty(self) -> Bool
+    fn to_int(self) -> Result<Int, ParseError>
+    fn to_float(self) -> Result<Float, ParseError>
+    fn contains(self, part: Text) -> Bool
+    fn starts_with(self, part: Text) -> Bool
+    fn split(self, separator: Text) -> List<Text>
+    fn trim(self) -> Text
+    fn upper(self) -> Text
+    fn lower(self) -> Text
+}
+
+trait List<T> {
+    fn length(self) -> Int
+    fn is_empty(self) -> Bool
+    fn get(self, index: Int) -> Option<T>
+    fn first(self) -> Option<T>
+    fn last(self) -> Option<T>
+    fn push(self, item: T) -> List<T>
+    fn concat(self, other: List<T>) -> List<T>
+    fn reverse(self) -> List<T>
+    fn map<U, E>(self, f: Fn(T) with E -> U) with E -> List<U>
+    fn filter<E>(self, f: Fn(T) with E -> Bool) with E -> List<T>
+    fn fold<A, E>(self, start: A, f: Fn(A, T) with E -> A) with E -> A
+    fn any<E>(self, f: Fn(T) with E -> Bool) with E -> Bool
+    fn all<E>(self, f: Fn(T) with E -> Bool) with E -> Bool
+}
+
+trait Map<K, V> {
+    fn length(self) -> Int
+    fn get(self, key: K) -> Option<V>
+    fn has(self, key: K) -> Bool
+    fn set(self, key: K, value: V) -> Map<K, V>
+    fn remove(self, key: K) -> Map<K, V>
+    fn keys(self) -> List<K>
+    fn values(self) -> List<V>
+}
+
+trait Set<T> {
+    fn from(items: List<T>) -> Set<T>
+    fn length(self) -> Int
+    fn has(self, item: T) -> Bool
+    fn add(self, item: T) -> Set<T>
+    fn remove(self, item: T) -> Set<T>
+    fn to_list(self) -> List<T>
+}
+
+trait Option<T> {
+    fn is_some(self) -> Bool
+    fn is_none(self) -> Bool
+    fn unwrap_or(self, fallback: T) -> T
+    fn or_error<E>(self, error: E) -> Result<T, E>
+    fn map<U, F>(self, f: Fn(T) with F -> U) with F -> Option<U>
+}
+
+trait Result<T, E> {
+    fn is_ok(self) -> Bool
+    fn is_err(self) -> Bool
+    fn unwrap_or(self, fallback: T) -> T
+    fn map_error<X, F>(self, f: Fn(E) with F -> X) with F -> Result<T, X>
+    fn ok(self) -> Option<T>
+}

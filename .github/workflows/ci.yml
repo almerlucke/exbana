@@ -67,5 +67,11 @@ jobs:
       - name: ABC reader does not panic or lose time
         run: go test ./examples/melody/abc -run '^$' -fuzz '^FuzzRead$' -fuzztime 20s
 
+      - name: Covenant lexer does not panic and keeps its tokens in order
+        run: go test ./examples/covenant/token -run '^$' -fuzz '^FuzzLex$' -fuzztime 15s
+
+      - name: Generated Covenant parser against its grammar
+        run: go test ./examples/covenant -run '^$' -fuzz '^FuzzGeneratedParserAgainstGrammar$' -fuzztime 30s
+
       - name: Slice reader against the runes reader
         run: go test ./readers/slice -run '^$' -fuzz '^FuzzReaderOperations$' -fuzztime 20s

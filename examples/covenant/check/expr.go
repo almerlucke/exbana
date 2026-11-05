@@ -2,7 +2,9 @@ package check
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/ast"
@@ -40,8 +42,16 @@ func (c *checker) exprOf(e ast.Expr, want Type) Type {
 	case *ast.Lit:
 		switch e.Kind {
 		case ast.LitInt:
+			if _, err := strconv.ParseInt(strings.ReplaceAll(e.Text, "_", ""), 0, 64); err != nil {
+				c.errorf(e, "number", "%s does not fit in an Int", e.Text)
+			}
+
 			return c.intT()
 		case ast.LitFloat:
+			if f, err := strconv.ParseFloat(strings.ReplaceAll(e.Text, "_", ""), 64); err != nil || math.IsInf(f, 0) {
+				c.errorf(e, "number", "%s does not fit in a Float", e.Text)
+			}
+
 			return c.con(c.tFloat)
 		case ast.LitText:
 			return c.con(c.tText)
@@ -178,6 +188,10 @@ func (c *checker) nameExpr(e *ast.Name) Type {
 	if private != "" {
 		c.errorf(e, "private", "%s is not public", private)
 		return bad
+	}
+
+	if ent != nil {
+		c.refs[e] = Ref{ent, rest}
 	}
 
 	switch ent := ent.(type) {
@@ -350,6 +364,10 @@ func (c *checker) call(e *ast.Call, want Type) Type {
 			c.args(e, nil)
 
 			return bad
+		}
+
+		if ent != nil {
+			c.refs[f] = Ref{ent, rest}
 		}
 
 		switch ent := ent.(type) {

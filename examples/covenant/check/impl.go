@@ -83,7 +83,7 @@ func (c *checker) declareImpl(m *Module, d *ast.Impl) {
 	}
 
 	for _, md := range d.Methods {
-		fd := &FnDef{Name: md.Name, Module: m, Decl: md, Pub: md.Pub, Impl: impl}
+		fd := &FnDef{Name: md.Name, Module: m, Decl: md, Pub: md.Pub, Impl: impl, Owner: con.Def}
 		c.fnSig(fd, ts, params, self)
 
 		if _, dup := impl.Methods[md.Name]; dup {

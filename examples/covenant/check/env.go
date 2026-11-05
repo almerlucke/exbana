@@ -34,6 +34,7 @@ type FnDef struct {
 	HasSelf bool
 	Impl    *Impl
 	Trait   *TraitDef
+	Owner   *Def // the type a method belongs to, or nil for a function of a module
 
 	ts *tscope // the type parameters in scope in the signature and the body
 }

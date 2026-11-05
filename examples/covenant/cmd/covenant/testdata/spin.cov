@@ -1,0 +1,4 @@
+fn spin() {
+    while true {
+    }
+}

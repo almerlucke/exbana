@@ -1,0 +1,5 @@
+fn double(n: Int) -> Int {
+    example double(2) == 4
+    example double(3) == 7
+    return n * 2
+}

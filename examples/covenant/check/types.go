@@ -192,6 +192,9 @@ func (e *Eff) names() []string {
 	return out
 }
 
+// All are the effects in the set, in order.
+func (e *Eff) All() []string { return e.names() }
+
 func (e *Eff) has(name string) bool {
 	return slicesContains(e.names(), name)
 }

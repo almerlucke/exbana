@@ -118,6 +118,12 @@ func (c *checker) namePattern(p *ast.PatName, t Type, bind func(string, Type, as
 		return wildPat
 	}
 
+	if v != nil {
+		c.refs[p] = Ref{Entity: v}
+	} else {
+		c.refs[p] = Ref{Entity: def}
+	}
+
 	con, isCon := prune(t).(*Con)
 	if !isCon || con.Def != def {
 		if _, isBad := prune(t).(*Bad); !isBad {

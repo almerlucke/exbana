@@ -136,18 +136,24 @@ func ones(n int) []float64 {
 // slots is the number of cells in a bar.
 func (f *FolkModel) slots() int { return slotsOf(f.Meter) }
 
-// strength says how strong a place in the bar is: 0 for the start of the bar, 1 for another beat, 2 for an eighth, 3
-// for a sixteenth.
-func strength(m abc.Meter, slot int) int {
+// beatSlots is the number of slots in a beat: a quarter note is four, and in compound meters (6/8) a beat is a dotted quarter.
+func beatSlots(m abc.Meter) int {
 	unit := map[int]int{2: 8, 4: 4, 8: 2, 16: 1}[m.Den]
 	if unit == 0 {
 		unit = 4
 	}
 
-	beat := unit
 	if m.Num > 3 && m.Num%3 == 0 {
-		beat = 3 * unit // 6/8: a beat is a dotted quarter
+		return 3 * unit
 	}
+
+	return unit
+}
+
+// strength says how strong a place in the bar is: 0 for the start of the bar, 1 for another beat, 2 for an eighth, 3
+// for a sixteenth.
+func strength(m abc.Meter, slot int) int {
+	beat := beatSlots(m)
 
 	switch {
 	case slot == 0:

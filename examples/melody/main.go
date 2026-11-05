@@ -19,7 +19,9 @@
 // cells, one for every sixteenth note, reads them with a grammar of parts, phrases and bars (folk.go), learns from the
 // parses how the rhythm goes, how far the notes step and where phrases come to rest, and writes new tunes as ABC:
 //
-//	melody -nottingham ABC_cleaned -meter 6/8 -key G -n 3 > jigs.abc
+//	melody -nottingham ABC_cleaned -meter 6/8 -key G -n 3 -midi jig.mid > jigs.abc
+//
+// -midi writes each tune as a MIDI file as well (-tempo sets the speed), with its repeats played.
 //
 // A tune is left out of the learning if it does not fit the grammar: it has triplets, is not in a major key, changes key,
 // or has parts that are not made of phrases of four bars. The command says how many, and why.
@@ -30,6 +32,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -137,7 +140,7 @@ func percent(ws []float64) string {
 }
 
 // folk learns from the ABC files of a directory what folk tunes of a meter are like, and writes new ones.
-func folk(dir, meterText string, key string, seed int64, count int) error {
+func folk(dir, meterText string, key string, seed int64, count int, midiPath string, tempo int) error {
 	var meter abc.Meter
 
 	if _, err := fmt.Sscanf(meterText, "%d/%d", &meter.Num, &meter.Den); err != nil {
@@ -185,6 +188,25 @@ func folk(dir, meterText string, key string, seed int64, count int) error {
 
 		fmt.Println()
 		fmt.Print(text)
+
+		if midiPath != "" {
+			data, err := MIDI(cells, meter, key, fmt.Sprintf("Generated %d", seed+int64(i)), tempo, true)
+			if err != nil {
+				return err
+			}
+
+			path := midiPath
+			if count > 1 {
+				ext := filepath.Ext(path)
+				path = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(path, ext), i+1, ext)
+			}
+
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				return err
+			}
+
+			fmt.Printf("%% written to %s\n", path)
+		}
 	}
 
 	return nil
@@ -199,10 +221,12 @@ func main() {
 	dir := flag.String("nottingham", "", "learn folk tunes from the ABC files in this directory (the Nottingham Music Database), and write new ones in ABC")
 	meterFlag := flag.String("meter", "4/4", "the meter of the folk tunes")
 	key := flag.String("key", "D", "the key the folk tunes are written in")
+	midiPath := flag.String("midi", "", "also write the folk tunes as MIDI files: this file, or with the number of the tune before the extension for more than one")
+	tempo := flag.Int("tempo", 110, "the beats a minute of the MIDI files, a beat is a quarter note, or a dotted quarter in 6/8")
 	flag.Parse()
 
 	if *dir != "" {
-		if err := folk(*dir, *meterFlag, *key, *seed, *count); err != nil {
+		if err := folk(*dir, *meterFlag, *key, *seed, *count, *midiPath, *tempo); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

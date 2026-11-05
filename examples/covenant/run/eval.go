@@ -3,7 +3,6 @@ package run
 import (
 	"context"
 	"errors"
-	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -74,6 +73,8 @@ type Func struct {
 	closure *ast.Closure
 	env     *env
 	module  *check.Module
+	proto   *proto  // a closure made by the bytecode machine
+	caps    []Value // and the values it captured
 }
 
 type machine struct {
@@ -123,7 +124,9 @@ func (m *machine) fault(at ast.Node, kind, msg string) *Fault {
 }
 
 // public turns what ended the run into what the caller is told.
-func (m *machine) public(err error) error {
+func (m *machine) public(err error) error { return publicError(err) }
+
+func publicError(err error) error {
 	var f *Fault
 	var l *Limit
 
@@ -136,6 +139,8 @@ func (m *machine) public(err error) error {
 
 	return err
 }
+
+func position(m *check.Module, offset int) (line, col int) { return token.Position(m.Source, offset) }
 
 func (m *machine) text(n ast.Node) string {
 	sp := n.At()
@@ -899,16 +904,12 @@ func (m *machine) unary(e *ast.Unary, en *env) (Value, error) {
 	case "not":
 		return x != true, nil
 	case "-":
-		switch x := x.(type) {
-		case int64:
-			if x == math.MinInt64 {
-				return nil, m.fault(e, "overflow", "-"+strconv.FormatInt(x, 10)+" does not fit in an Int")
-			}
-
-			return -x, nil
-		case float64:
-			return -x, nil
+		v, kind, msg := negate(x)
+		if kind != "" {
+			return nil, m.fault(e, kind, msg)
 		}
+
+		return v, nil
 	case "try":
 		en, ok := x.(*Enum)
 		if !ok {
@@ -959,112 +960,10 @@ func (m *machine) binary(e *ast.Binary, en *env) (Value, error) {
 		return !Equal(l, r), nil
 	}
 
-	switch a := l.(type) {
-	case int64:
-		return m.intOp(e, a, r.(int64))
-	case float64:
-		return m.floatOp(e, a, r.(float64))
-	case string:
-		b := r.(string)
-
-		switch e.Op {
-		case "+":
-			return a + b, nil
-		case "<":
-			return a < b, nil
-		case "<=":
-			return a <= b, nil
-		case ">":
-			return a > b, nil
-		case ">=":
-			return a >= b, nil
-		}
+	v, kind, msg := binaryOp(e.Op, l, r)
+	if kind != "" {
+		return nil, m.fault(e, kind, msg)
 	}
 
-	return nil, m.fault(e, "internal", "an operator on values it does not fit")
-}
-
-func (m *machine) floatOp(e *ast.Binary, a, b float64) (Value, error) {
-	switch e.Op {
-	case "+":
-		return a + b, nil
-	case "-":
-		return a - b, nil
-	case "*":
-		return a * b, nil
-	case "/":
-		return a / b, nil
-	case "<":
-		return a < b, nil
-	case "<=":
-		return a <= b, nil
-	case ">":
-		return a > b, nil
-	case ">=":
-		return a >= b, nil
-	}
-
-	return nil, m.fault(e, "internal", "an operator on Floats it does not fit")
-}
-
-func (m *machine) intOp(e *ast.Binary, a, b int64) (Value, error) {
-	over := func() (Value, error) {
-		return nil, m.fault(e, "overflow", strconv.FormatInt(a, 10)+" "+e.Op+" "+strconv.FormatInt(b, 10)+" does not fit in an Int")
-	}
-
-	switch e.Op {
-	case "+":
-		c := a + b
-		if (a^c)&(b^c) < 0 {
-			return over()
-		}
-
-		return c, nil
-	case "-":
-		c := a - b
-		if (a^b)&(a^c) < 0 {
-			return over()
-		}
-
-		return c, nil
-	case "*":
-		if a == 0 || b == 0 {
-			return int64(0), nil
-		}
-
-		c := a * b
-		if c/b != a || (a == -1 && b == math.MinInt64) || (b == -1 && a == math.MinInt64) {
-			return over()
-		}
-
-		return c, nil
-	case "/", "%":
-		if b == 0 {
-			return nil, m.fault(e, "division", strconv.FormatInt(a, 10)+" "+e.Op+" 0")
-		}
-
-		if a == math.MinInt64 && b == -1 {
-			if e.Op == "%" {
-				return int64(0), nil
-			}
-
-			return over()
-		}
-
-		if e.Op == "/" {
-			return a / b, nil
-		}
-
-		return a % b, nil
-	case "<":
-		return a < b, nil
-	case "<=":
-		return a <= b, nil
-	case ">":
-		return a > b, nil
-	case ">=":
-		return a >= b, nil
-	}
-
-	return nil, m.fault(e, "internal", "an operator on Ints it does not fit")
+	return v, nil
 }

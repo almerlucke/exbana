@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,36 @@ trait Functions {
 	},
 }
 
+// bytecode is the way the tests run the programs now: they are run both ways, and have to give the same.
+var bytecode bool
+
+func engines(t *testing.T, f func(t *testing.T)) {
+	for _, bc := range []bool{false, true} {
+		name := "tree"
+		if bc {
+			name = "bytecode"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			bytecode = bc
+
+			defer func() { bytecode = false }()
+
+			f(t)
+		})
+	}
+}
+
 func program(t *testing.T, src string, cfg run.Config) *run.Program {
 	t.Helper()
+
+	return programB(t, src, cfg)
+}
+
+func programB(t testing.TB, src string, cfg run.Config) *run.Program {
+	t.Helper()
+
+	cfg.Bytecode = bytecode
 
 	// the module the host provides is only there for the tests that give the host
 	cc := check.Config{Effects: checkConfig.Effects}
@@ -63,7 +92,9 @@ func call(t *testing.T, src, fn string, args ...run.Value) string {
 	return run.Format(v)
 }
 
-func TestPrograms(t *testing.T) {
+func TestPrograms(t *testing.T) { engines(t, testPrograms) }
+
+func testPrograms(t *testing.T) {
 	for _, c := range []struct {
 		name, src, fn, want string
 		args                []run.Value
@@ -302,6 +333,159 @@ fn f(ports: Ports) -> Int {
     return ports.first().unwrap_or(limit) + limit
 }
 `, "f", "84", []run.Value{run.NewList(nil)}},
+		{"closures in closures capture from every level", `
+fn f() -> List<Int> {
+    let a = 1
+    let outer = fn(b: Int) -> Fn(Int) -> Int {
+        let c = 10
+        return fn(d) => a + b + c + d
+    }
+    let g = outer(100)
+    let h = outer(200)
+    return [g(1000), h(1000), g(2000)]
+}
+`, "f", "[1111, 1211, 2111]", nil},
+		{"a closure that calls the function around it", `
+fn twice(f: Fn(Int) -> Int, x: Int) -> Int {
+    return f(f(x))
+}
+fn f() -> Int {
+    let k = 3
+    return twice(fn(n) => twice(fn(m) => m + k, n), 0)
+}
+`, "f", "12", nil},
+		{"return from inside loops", `
+fn find(items: List<Int>, target: Int) -> Int {
+    var index = 0
+    for item in items {
+        if item == target {
+            return index
+        }
+        index = index + 1
+    }
+    return -1
+}
+fn f() -> List<Int> {
+    return [find([5, 6, 7], 7), find([5, 6, 7], 9)]
+}
+`, "f", "[2, -1]", nil},
+		{"try inside a loop and a closure", `
+fn parse_all(items: List<Text>) -> Result<Int, Text> {
+    var total = 0
+    for item in items {
+        let n = try item.to_int().map_error(fn(e) => "bad: " + item)
+        total = total + n
+    }
+    return Ok(total)
+}
+fn f() -> List<Result<Int, Text>> {
+    return [parse_all(["1", "2", "3"]), parse_all(["1", "x", "3"])]
+}
+`, "f", `[Ok(6), Err("bad: x")]`, nil},
+		{"methods of traits on parameters", `
+trait Name {
+    fn name(self) -> Text
+}
+struct Dog {}
+struct Cat { lives: Int }
+impl Name for Dog {
+    fn name(self) -> Text {
+        return "dog"
+    }
+}
+impl Name for Cat {
+    fn name(self) -> Text {
+        return "cat" + self.lives.to_text()
+    }
+}
+fn names<T: Name>(items: List<T>) -> List<Text> {
+    return items.map(fn(x) => x.name())
+}
+fn f() -> List<List<Text>> {
+    return [names([Dog(), Dog()]), names([Cat(lives: 9)])]
+}
+`, "f", `[["dog", "dog"], ["cat9"]]`, nil},
+		{"structs inside structs", `
+struct Inner { n: Int }
+struct Outer { inner: Inner, items: List<Inner> }
+fn f() -> Outer {
+    let o = Outer(inner: Inner(n: 1), items: [Inner(n: 2)])
+    let p = o with { inner: Inner(n: 5) }
+    return p with { items: o.items.push(Inner(n: 3)) }
+}
+`, "f", "Outer(inner: Inner(n: 5), items: [Inner(n: 2), Inner(n: 3)])", nil},
+		{"labels in a different order", `
+struct P { a: Int, b: Text, c: Bool }
+fn f() -> P {
+    return P(c: true, a: 1, b: "x")
+}
+`, "f", `P(a: 1, b: "x", c: true)`, nil},
+		{"and and or stop early", `
+fn boom() -> Bool {
+    return 1 / 0 == 1
+}
+fn f() -> List<Bool> {
+    return [false and boom(), true or boom(), true and true, false or false]
+}
+`, "f", "[false, true, true, false]", nil},
+		{"early return in a nested if", `
+fn classify(n: Int) -> Text {
+    if n < 0 {
+        if n < -100 {
+            return "very negative"
+        }
+        return "negative"
+    } else if n == 0 {
+        return "zero"
+    }
+    return "positive"
+}
+fn f() -> List<Text> {
+    return [classify(-500), classify(-5), classify(0), classify(7)]
+}
+`, "f", `["very negative", "negative", "zero", "positive"]`, nil},
+		{"a constant that uses a function", `
+fn base() -> Int {
+    return 7
+}
+const answer: Int = base() * 6
+fn f() -> Int {
+    return answer + answer
+}
+`, "f", "84", nil},
+		{"destructuring in a let", `
+struct P { x: Int, y: Int }
+fn f() -> Int {
+    let P(a, b) = P(x: 3, y: 4)
+    return a * 10 + b
+}
+`, "f", "34", nil},
+		{"mutual recursion", `
+fn even(n: Int) -> Bool {
+    if n == 0 {
+        return true
+    }
+    return odd(n - 1)
+}
+fn odd(n: Int) -> Bool {
+    if n == 0 {
+        return false
+    }
+    return even(n - 1)
+}
+fn f() -> List<Bool> {
+    return [even(10), odd(10), even(7)]
+}
+`, "f", "[true, false, false]", nil},
+		{"a promise inside a closure", `
+fn f() -> Int {
+    let g = fn(n: Int) -> Int {
+        requires n > 0
+        return n * 2
+    }
+    return g(4)
+}
+`, "f", "8", nil},
 		{"a promise that holds", `
 fn clamp(n: Int, lo: Int, hi: Int) -> Int {
     requires lo <= hi
@@ -338,25 +522,31 @@ func fault(t *testing.T, src, fn string, args ...run.Value) *run.Fault {
 	return f
 }
 
-func TestFaults(t *testing.T) {
-	for _, c := range []struct {
-		name, src, fn, kind, msg string
-		line                     int
-		args                     []run.Value
-	}{
-		{"overflow in +", "fn f(n: Int) -> Int {\n    return n + 1\n}\n", "f", "overflow", "9223372036854775807 + 1", 2, []run.Value{int64(9223372036854775807)}},
-		{"overflow in -", "fn f(n: Int) -> Int {\n    return n - 1\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
-		{"overflow in *", "fn f(n: Int) -> Int {\n    return n * 2\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(5000000000000000000)}},
-		{"overflow in negation", "fn f(n: Int) -> Int {\n    return -n\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
-		{"overflow in the smallest divided by -1", "fn f(n: Int) -> Int {\n    return n / -1\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
-		{"division by zero", "fn f(n: Int) -> Int {\n    return 10 / n\n}\n", "f", "division", "10 / 0", 2, []run.Value{int64(0)}},
-		{"remainder by zero", "fn f(n: Int) -> Int {\n    return 10 % n\n}\n", "f", "division", "10 % 0", 2, []run.Value{int64(0)}},
-		{"a promise that fails", "fn f(n: Int) -> Int {\n    requires n > 0\n    return n\n}\n", "f", "requires", "requires n > 0 is false", 2, []run.Value{int64(-1)}},
-		{"a promise that fails inside", "fn g(n: Int) -> Int {\n    requires n > 0\n    return n\n}\nfn f() -> Int {\n    return g(0)\n}\n", "f", "requires", "for the call of g", 2, nil},
-		{"calls nested too deep", "fn f(n: Int) -> Int {\n    return f(n + 1)\n}\n", "f", "stack", "too deep", 2, []run.Value{int64(0)}},
-		{"a Float that is not an Int", "fn f(x: Float) -> Int {\n    return x.floor()\n}\n", "f", "range", "does not fit", 2, []run.Value{1e30}},
-		{"abs of the smallest", "fn f(n: Int) -> Int {\n    return n.abs()\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
-	} {
+func TestFaults(t *testing.T) { engines(t, testFaults) }
+
+type faultCase struct {
+	name, src, fn, kind, msg string
+	line                     int
+	args                     []run.Value
+}
+
+var faultCases = []faultCase{
+	{"overflow in +", "fn f(n: Int) -> Int {\n    return n + 1\n}\n", "f", "overflow", "9223372036854775807 + 1", 2, []run.Value{int64(9223372036854775807)}},
+	{"overflow in -", "fn f(n: Int) -> Int {\n    return n - 1\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
+	{"overflow in *", "fn f(n: Int) -> Int {\n    return n * 2\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(5000000000000000000)}},
+	{"overflow in negation", "fn f(n: Int) -> Int {\n    return -n\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
+	{"overflow in the smallest divided by -1", "fn f(n: Int) -> Int {\n    return n / -1\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
+	{"division by zero", "fn f(n: Int) -> Int {\n    return 10 / n\n}\n", "f", "division", "10 / 0", 2, []run.Value{int64(0)}},
+	{"remainder by zero", "fn f(n: Int) -> Int {\n    return 10 % n\n}\n", "f", "division", "10 % 0", 2, []run.Value{int64(0)}},
+	{"a promise that fails", "fn f(n: Int) -> Int {\n    requires n > 0\n    return n\n}\n", "f", "requires", "requires n > 0 is false", 2, []run.Value{int64(-1)}},
+	{"a promise that fails inside", "fn g(n: Int) -> Int {\n    requires n > 0\n    return n\n}\nfn f() -> Int {\n    return g(0)\n}\n", "f", "requires", "for the call of g", 2, nil},
+	{"calls nested too deep", "fn f(n: Int) -> Int {\n    return f(n + 1)\n}\n", "f", "stack", "too deep", 2, []run.Value{int64(0)}},
+	{"a Float that is not an Int", "fn f(x: Float) -> Int {\n    return x.floor()\n}\n", "f", "range", "does not fit", 2, []run.Value{1e30}},
+	{"abs of the smallest", "fn f(n: Int) -> Int {\n    return n.abs()\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
+}
+
+func testFaults(t *testing.T) {
+	for _, c := range faultCases {
 		t.Run(c.name, func(t *testing.T) {
 			f := fault(t, c.src, c.fn, c.args...)
 
@@ -373,7 +563,29 @@ func TestFaults(t *testing.T) {
 	}
 }
 
-func TestLimits(t *testing.T) {
+// The tree and the bytecode are two ways to run one program: a fault is the same, down to the column and the stack.
+func TestTheWaysAgreeOnFaults(t *testing.T) {
+	for _, c := range faultCases {
+		t.Run(c.name, func(t *testing.T) {
+			var got [2]*run.Fault
+
+			for i, bc := range []bool{false, true} {
+				bytecode = bc
+				got[i] = fault(t, c.src, c.fn, c.args...)
+			}
+
+			bytecode = false
+
+			if !reflect.DeepEqual(got[0], got[1]) {
+				t.Errorf("the tree says\n%v\nand the bytecode says\n%v", got[0], got[1])
+			}
+		})
+	}
+}
+
+func TestLimits(t *testing.T) { engines(t, testLimits) }
+
+func testLimits(t *testing.T) {
 	src := "fn spin() {\n    while true {\n    }\n}\n"
 	p := program(t, src, run.Config{MaxSteps: 10000})
 
@@ -395,7 +607,9 @@ func TestLimits(t *testing.T) {
 	}
 }
 
-func TestEffectsNeedAGrant(t *testing.T) {
+func TestEffectsNeedAGrant(t *testing.T) { engines(t, testEffectsNeedAGrant) }
+
+func testEffectsNeedAGrant(t *testing.T) {
 	src := `
 use fs
 use fs::Path
@@ -473,7 +687,9 @@ func TestAProgramWithProblemsDoesNotRun(t *testing.T) {
 	}
 }
 
-func TestExamples(t *testing.T) {
+func TestExamples(t *testing.T) { engines(t, testExamples) }
+
+func testExamples(t *testing.T) {
 	src := `
 fn double(n: Int) -> Int {
     example double(2) == 4

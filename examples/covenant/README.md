@@ -3,7 +3,8 @@
 A small language meant to be read by people and by agents alike, and to be embedded in Go programs as a scripting language.
 So far there is a lexer (`token/`), a grammar over its tokens (`grammar/`), a parser generated from the grammar (`parser/`,
 regenerate it with `go generate` here), `covenant.Parse`, the program as plain Go values (`ast/`), a type and effect checker
-(`check/`), an interpreter for checked programs (`run/`), a command (`cmd/covenant`), and this note, which records the
+(`check/`), an interpreter for checked programs that walks the tree or runs bytecode (`run/`), a command (`cmd/covenant`), and
+this note, which records the
 decisions the grammar does not show.
 
 ## Syntax the parser needed
@@ -149,6 +150,29 @@ the names `A` and `B` that are not types are parameters of the impl.
 `go run ./examples/covenant/cmd/covenant check|test|run files...` does this from the command line. Every file is a module, and a
 program can print with `io::print`.
 
-**Not there yet.** Memory is not limited, only steps and depth; the standard library is what `check/prelude.cov` lists; the
-interpreter walks the tree, which is slow next to what a compiler to bytecode would do; and `Map.set` of a key that is already
-there, `Map.remove` and `List.concat` copy.
+**Not there yet.** Memory is not limited, only steps and depth; the standard library is what `check/prelude.cov` lists; and
+`Map.set` of a key that is already there, `Map.remove` and `List.concat` copy.
+
+## Bytecode
+
+`run.Config{Bytecode: true}` (`-bytecode` in the command) runs the program as bytecode on a machine with a stack, and not by
+walking the tree. It does what the tree does: the same values, the same faults down to the column and the stack, the same
+limits, grants and host functions, and the same library. The tests run every program both ways, and compare the faults field
+by field.
+
+- **The compiler** (`run/compile.go`) turns each function and each closure into a *proto*: instructions, the values they refer
+  to, and the protos of the closures made in it. It does that the first time a function is needed, together with the functions it
+  calls, and keeps it for the program. `covenant dis files... module::function` (or `Program.Disassemble`) writes it out.
+- **Names are numbers.** A parameter, a let, a var and every name a pattern binds have a local variable of their own, which is a
+  place on the stack. A closure captures by value, which is all the language promises, so it carries an array of the values it
+  uses, made when it is made; there are no cells to share and nothing to close over.
+- **Calls** to a known function are an instruction that names the function; a method is found from the value it is called on,
+  as for the tree; a function value is called through the stack. Calls do not use the stack of Go, so they nest as deep as
+  `MaxDepth` allows (100,000 calls deep is fine); a library function that calls a closure, like `map`, does.
+- **A step is an instruction** here, and an expression or a statement for the tree, so `MaxSteps` means about three times as much
+  work in bytecode.
+- **How much faster.** On this machine, `fib(22)` takes 30 ms by the tree and 2.5 ms by the bytecode (12 times), a loop of
+  200,000 additions 68 ms and 22 ms (3 times), and `range(0, 100000).map(...).filter(...).fold(...)` 67 ms and 19 ms (3.5
+  times). What is left in the loops is the library and the boxing of `Int`s in Go values, which both ways pay.
+- **Not done.** No optimisation: there is no folding of constants, no specialised instructions for `Int` and `Float` beyond a fast
+  path for `Int` addition, subtraction and comparison, and no inlining.

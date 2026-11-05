@@ -77,3 +77,29 @@ func TestSpinningIsEnded(t *testing.T) {
 		t.Errorf("%d %q", code, errs)
 	}
 }
+
+func TestBytecode(t *testing.T) {
+	code, out, errs := cmd("run", "-bytecode", "testdata/demo.cov", "demo::main")
+	if code != 0 || out != "hello, covenant\n12.0\n6.0\n3628800\n" {
+		t.Errorf("run: %d %q %q", code, out, errs)
+	}
+
+	code, out, errs = cmd("test", "-bytecode", "testdata/demo.cov")
+	if code != 0 || !strings.Contains(out, "2 examples, 0 fail") {
+		t.Errorf("test: %d %q %q", code, out, errs)
+	}
+
+	code, _, errs = cmd("run", "-bytecode", "testdata/demo.cov", "demo::factorial", "25")
+	if code != 1 || !strings.Contains(errs, "fault (overflow) at demo:32:12") {
+		t.Errorf("overflow: %d %q", code, errs)
+	}
+
+	code, out, errs = cmd("dis", "testdata/demo.cov", "demo::factorial")
+	if code != 0 || !strings.Contains(out, "func demo::factorial (params 1, locals 1, captures 0)") || !strings.Contains(out, "calldef") {
+		t.Errorf("dis: %d %q %q", code, out, errs)
+	}
+
+	if code, _, _ = cmd("dis", "testdata/demo.cov"); code != 2 {
+		t.Errorf("dis without a function: %d", code)
+	}
+}

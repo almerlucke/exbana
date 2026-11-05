@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strconv"
@@ -11,10 +12,23 @@ import (
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
 )
 
-type native func(m *machine, at ast.Node, a []Value) (Value, error)
+// rtime is what the library needs of the way a program is run: to call a closure, to say where a fault is, and what the program is.
+// The tree walker and the bytecode machine both are one, so they share the library.
+type rtime interface {
+	program() *Program
+	context() context.Context
+	callback(f Value, at ast.Node, args ...Value) (Value, error)
+	fault(at ast.Node, kind, msg string) *Fault
+}
+
+type native func(m rtime, at ast.Node, a []Value) (Value, error)
 
 // callNative calls a function that has a signature and no body: one of the library, or one the host provides.
 func (m *machine) callNative(fd *check.FnDef, args []Value, at ast.Node) (Value, error) {
+	return nativeCall(m, fd, args, at)
+}
+
+func nativeCall(rt rtime, fd *check.FnDef, args []Value, at ast.Node) (Value, error) {
 	name := fd.Name
 	if fd.Owner != nil {
 		name = fd.Owner.Name + "." + fd.Name
@@ -22,10 +36,10 @@ func (m *machine) callNative(fd *check.FnDef, args []Value, at ast.Node) (Value,
 
 	if fd.Module.Name == "prelude" {
 		if f, ok := stdlib[name]; ok {
-			return f(m, at, args)
+			return f(rt, at, args)
 		}
 
-		return nil, m.fault(at, "internal", "the library has no "+name)
+		return nil, rt.fault(at, "internal", "the library has no "+name)
 	}
 
 	key := name
@@ -33,12 +47,12 @@ func (m *machine) callNative(fd *check.FnDef, args []Value, at ast.Node) (Value,
 		key = fd.Module.Name + "::" + fd.Name
 	}
 
-	h, ok := m.p.cfg.Host[key]
+	h, ok := rt.program().cfg.Host[key]
 	if !ok {
-		return nil, m.fault(at, "host", "the host does not provide "+key)
+		return nil, rt.fault(at, "host", "the host does not provide "+key)
 	}
 
-	v, err := h(m.ctx, args)
+	v, err := h(rt.context(), args)
 	if err != nil {
 		var f *Fault
 		var l *Limit
@@ -47,7 +61,7 @@ func (m *machine) callNative(fd *check.FnDef, args []Value, at ast.Node) (Value,
 			return nil, err
 		}
 
-		return nil, m.fault(at, "host", key+": "+err.Error())
+		return nil, rt.fault(at, "host", key+": "+err.Error())
 	}
 
 	return v, nil
@@ -58,14 +72,17 @@ func (m *machine) callback(f Value, at ast.Node, args ...Value) (Value, error) {
 	return m.callFunc(f.(*Func), args, at)
 }
 
-func (m *machine) enum(enum, variant string, fields ...Value) Value {
-	return m.p.variant(enum, variant, fields...)
+func (m *machine) program() *Program        { return m.p }
+func (m *machine) context() context.Context { return m.ctx }
+
+func enumOf(m rtime, enum, variant string, fields ...Value) Value {
+	return m.program().variant(enum, variant, fields...)
 }
 
-func (m *machine) some(v Value) Value { return m.enum("Option", "Some", v) }
-func (m *machine) none() Value        { return m.enum("Option", "None") }
+func someOf(m rtime, v Value) Value { return enumOf(m, "Option", "Some", v) }
+func noneOf(m rtime) Value          { return enumOf(m, "Option", "None") }
 
-func (m *machine) rangeFault(at ast.Node, msg string) error { return m.fault(at, "range", msg) }
+func rangeFault(m rtime, at ast.Node, msg string) error { return m.fault(at, "range", msg) }
 
 // isVariant says whether an enum value is of the variant.
 func isVariant(v Value, name string) bool { return v.(*Enum).Variant.Name == name }
@@ -74,14 +91,14 @@ var stdlib map[string]native
 
 func init() {
 	stdlib = map[string]native{
-		"range": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"range": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			from, to := a[0].(int64), a[1].(int64)
 			if to <= from {
 				return NewList(nil), nil
 			}
 
 			if to-from > 50_000_000 || to-from < 0 {
-				return nil, m.rangeFault(at, "range is too long to make")
+				return nil, rangeFault(m, at, "range is too long to make")
 			}
 
 			items := make([]Value, 0, to-from)
@@ -93,11 +110,11 @@ func init() {
 		},
 
 		// Int
-		"Int.to_float": func(m *machine, at ast.Node, a []Value) (Value, error) { return float64(a[0].(int64)), nil },
-		"Int.to_text": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Int.to_float": func(m rtime, at ast.Node, a []Value) (Value, error) { return float64(a[0].(int64)), nil },
+		"Int.to_text": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return strconv.FormatInt(a[0].(int64), 10), nil
 		},
-		"Int.abs": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Int.abs": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			n := a[0].(int64)
 			if n == math.MinInt64 {
 				return nil, m.fault(at, "overflow", "the absolute value of "+strconv.FormatInt(n, 10)+" does not fit in an Int")
@@ -109,44 +126,44 @@ func init() {
 
 			return n, nil
 		},
-		"Int.min": func(m *machine, at ast.Node, a []Value) (Value, error) { return min(a[0].(int64), a[1].(int64)), nil },
-		"Int.max": func(m *machine, at ast.Node, a []Value) (Value, error) { return max(a[0].(int64), a[1].(int64)), nil },
+		"Int.min": func(m rtime, at ast.Node, a []Value) (Value, error) { return min(a[0].(int64), a[1].(int64)), nil },
+		"Int.max": func(m rtime, at ast.Node, a []Value) (Value, error) { return max(a[0].(int64), a[1].(int64)), nil },
 
 		// Float
-		"Float.to_text": func(m *machine, at ast.Node, a []Value) (Value, error) { return formatFloat(a[0].(float64)), nil },
-		"Float.abs":     func(m *machine, at ast.Node, a []Value) (Value, error) { return math.Abs(a[0].(float64)), nil },
-		"Float.min": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Float.to_text": func(m rtime, at ast.Node, a []Value) (Value, error) { return formatFloat(a[0].(float64)), nil },
+		"Float.abs":     func(m rtime, at ast.Node, a []Value) (Value, error) { return math.Abs(a[0].(float64)), nil },
+		"Float.min": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return math.Min(a[0].(float64), a[1].(float64)), nil
 		},
-		"Float.max": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Float.max": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return math.Max(a[0].(float64), a[1].(float64)), nil
 		},
-		"Float.sqrt": func(m *machine, at ast.Node, a []Value) (Value, error) { return math.Sqrt(a[0].(float64)), nil },
-		"Float.floor": func(m *machine, at ast.Node, a []Value) (Value, error) {
-			return m.toInt(at, math.Floor(a[0].(float64)))
+		"Float.sqrt": func(m rtime, at ast.Node, a []Value) (Value, error) { return math.Sqrt(a[0].(float64)), nil },
+		"Float.floor": func(m rtime, at ast.Node, a []Value) (Value, error) {
+			return toIntOf(m, at, math.Floor(a[0].(float64)))
 		},
-		"Float.round": func(m *machine, at ast.Node, a []Value) (Value, error) {
-			return m.toInt(at, math.Round(a[0].(float64)))
+		"Float.round": func(m rtime, at ast.Node, a []Value) (Value, error) {
+			return toIntOf(m, at, math.Round(a[0].(float64)))
 		},
 
 		// Bool
-		"Bool.to_text": func(m *machine, at ast.Node, a []Value) (Value, error) { return strconv.FormatBool(a[0].(bool)), nil },
+		"Bool.to_text": func(m rtime, at ast.Node, a []Value) (Value, error) { return strconv.FormatBool(a[0].(bool)), nil },
 
 		// Text
-		"Text.length": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Text.length": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return int64(utf8.RuneCountInString(a[0].(string))), nil
 		},
-		"Text.is_empty": func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(string) == "", nil },
-		"Text.contains": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Text.is_empty": func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(string) == "", nil },
+		"Text.contains": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return strings.Contains(a[0].(string), a[1].(string)), nil
 		},
-		"Text.starts_with": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Text.starts_with": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return strings.HasPrefix(a[0].(string), a[1].(string)), nil
 		},
-		"Text.trim":  func(m *machine, at ast.Node, a []Value) (Value, error) { return strings.TrimSpace(a[0].(string)), nil },
-		"Text.upper": func(m *machine, at ast.Node, a []Value) (Value, error) { return strings.ToUpper(a[0].(string)), nil },
-		"Text.lower": func(m *machine, at ast.Node, a []Value) (Value, error) { return strings.ToLower(a[0].(string)), nil },
-		"Text.split": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Text.trim":  func(m rtime, at ast.Node, a []Value) (Value, error) { return strings.TrimSpace(a[0].(string)), nil },
+		"Text.upper": func(m rtime, at ast.Node, a []Value) (Value, error) { return strings.ToUpper(a[0].(string)), nil },
+		"Text.lower": func(m rtime, at ast.Node, a []Value) (Value, error) { return strings.ToLower(a[0].(string)), nil },
+		"Text.split": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			var parts []string
 
 			if a[1].(string) == "" {
@@ -164,73 +181,73 @@ func init() {
 
 			return &List{&listBase{items}, len(items)}, nil
 		},
-		"Text.to_int": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Text.to_int": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			s := a[0].(string)
 			if s == "" || strings.ContainsAny(s, "_ \t\n") || strings.HasPrefix(strings.TrimLeft(s, "+-"), "0x") {
-				return m.parseError("NotANumber"), nil
+				return parseErrorOf(m, "NotANumber"), nil
 			}
 
 			n, err := strconv.ParseInt(s, 10, 64)
 
 			switch {
 			case errors.Is(err, strconv.ErrRange):
-				return m.parseError("OutOfRange"), nil
+				return parseErrorOf(m, "OutOfRange"), nil
 			case err != nil:
-				return m.parseError("NotANumber"), nil
+				return parseErrorOf(m, "NotANumber"), nil
 			}
 
-			return m.enum("Result", "Ok", n), nil
+			return enumOf(m, "Result", "Ok", n), nil
 		},
-		"Text.to_float": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Text.to_float": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			s := a[0].(string)
 			if s == "" || strings.Trim(s, "0123456789+-.eE") != "" {
-				return m.parseError("NotANumber"), nil
+				return parseErrorOf(m, "NotANumber"), nil
 			}
 
 			f, err := strconv.ParseFloat(s, 64)
 
 			switch {
 			case errors.Is(err, strconv.ErrRange):
-				return m.parseError("OutOfRange"), nil
+				return parseErrorOf(m, "OutOfRange"), nil
 			case err != nil:
-				return m.parseError("NotANumber"), nil
+				return parseErrorOf(m, "NotANumber"), nil
 			}
 
-			return m.enum("Result", "Ok", f), nil
+			return enumOf(m, "Result", "Ok", f), nil
 		},
 
 		// List
-		"List.length":   func(m *machine, at ast.Node, a []Value) (Value, error) { return int64(a[0].(*List).Len()), nil },
-		"List.is_empty": func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*List).Len() == 0, nil },
-		"List.get": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.length":   func(m rtime, at ast.Node, a []Value) (Value, error) { return int64(a[0].(*List).Len()), nil },
+		"List.is_empty": func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*List).Len() == 0, nil },
+		"List.get": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			l, i := a[0].(*List), a[1].(int64)
 			if i < 0 || i >= int64(l.Len()) {
-				return m.none(), nil
+				return noneOf(m), nil
 			}
 
-			return m.some(l.At(int(i))), nil
+			return someOf(m, l.At(int(i))), nil
 		},
-		"List.first": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.first": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			l := a[0].(*List)
 			if l.Len() == 0 {
-				return m.none(), nil
+				return noneOf(m), nil
 			}
 
-			return m.some(l.At(0)), nil
+			return someOf(m, l.At(0)), nil
 		},
-		"List.last": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.last": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			l := a[0].(*List)
 			if l.Len() == 0 {
-				return m.none(), nil
+				return noneOf(m), nil
 			}
 
-			return m.some(l.At(l.Len() - 1)), nil
+			return someOf(m, l.At(l.Len()-1)), nil
 		},
-		"List.push": func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*List).Push(a[1]), nil },
-		"List.concat": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.push": func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*List).Push(a[1]), nil },
+		"List.concat": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			return NewList(append(append([]Value(nil), a[0].(*List).Items()...), a[1].(*List).Items()...)), nil
 		},
-		"List.reverse": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.reverse": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			items := a[0].(*List).Items()
 			out := make([]Value, len(items))
 
@@ -240,7 +257,7 @@ func init() {
 
 			return &List{&listBase{out}, len(out)}, nil
 		},
-		"List.map": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.map": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			items := a[0].(*List).Items()
 			out := make([]Value, len(items))
 
@@ -255,7 +272,7 @@ func init() {
 
 			return &List{&listBase{out}, len(out)}, nil
 		},
-		"List.filter": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.filter": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			var out []Value
 
 			for _, x := range a[0].(*List).Items() {
@@ -271,7 +288,7 @@ func init() {
 
 			return &List{&listBase{out}, len(out)}, nil
 		},
-		"List.fold": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.fold": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			acc := a[1]
 
 			for _, x := range a[0].(*List).Items() {
@@ -285,7 +302,7 @@ func init() {
 
 			return acc, nil
 		},
-		"List.any": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.any": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			for _, x := range a[0].(*List).Items() {
 				v, err := m.callback(a[1], at, x)
 				if err != nil {
@@ -299,7 +316,7 @@ func init() {
 
 			return false, nil
 		},
-		"List.all": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"List.all": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			for _, x := range a[0].(*List).Items() {
 				v, err := m.callback(a[1], at, x)
 				if err != nil {
@@ -315,21 +332,21 @@ func init() {
 		},
 
 		// Map
-		"Map.length": func(m *machine, at ast.Node, a []Value) (Value, error) { return int64(a[0].(*Map).Len()), nil },
-		"Map.get": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Map.length": func(m rtime, at ast.Node, a []Value) (Value, error) { return int64(a[0].(*Map).Len()), nil },
+		"Map.get": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			if v, ok := a[0].(*Map).Get(a[1]); ok {
-				return m.some(v), nil
+				return someOf(m, v), nil
 			}
 
-			return m.none(), nil
+			return noneOf(m), nil
 		},
-		"Map.has": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Map.has": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			_, ok := a[0].(*Map).Get(a[1])
 			return ok, nil
 		},
-		"Map.set":    func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*Map).Set(a[1], a[2]), nil },
-		"Map.remove": func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*Map).Remove(a[1]), nil },
-		"Map.keys": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Map.set":    func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*Map).Set(a[1], a[2]), nil },
+		"Map.remove": func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*Map).Remove(a[1]), nil },
+		"Map.keys": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			mp := a[0].(*Map)
 			out := make([]Value, mp.Len())
 
@@ -339,7 +356,7 @@ func init() {
 
 			return &List{&listBase{out}, len(out)}, nil
 		},
-		"Map.values": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Map.values": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			mp := a[0].(*Map)
 			out := make([]Value, mp.Len())
 
@@ -351,7 +368,7 @@ func init() {
 		},
 
 		// Set
-		"Set.from": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Set.from": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			s := NewSet()
 			for _, x := range a[0].(*List).Items() {
 				s = s.Add(x)
@@ -359,11 +376,11 @@ func init() {
 
 			return s, nil
 		},
-		"Set.length": func(m *machine, at ast.Node, a []Value) (Value, error) { return int64(a[0].(*Set).Len()), nil },
-		"Set.has":    func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*Set).Has(a[1]), nil },
-		"Set.add":    func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*Set).Add(a[1]), nil },
-		"Set.remove": func(m *machine, at ast.Node, a []Value) (Value, error) { return a[0].(*Set).Remove(a[1]), nil },
-		"Set.to_list": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Set.length": func(m rtime, at ast.Node, a []Value) (Value, error) { return int64(a[0].(*Set).Len()), nil },
+		"Set.has":    func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*Set).Has(a[1]), nil },
+		"Set.add":    func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*Set).Add(a[1]), nil },
+		"Set.remove": func(m rtime, at ast.Node, a []Value) (Value, error) { return a[0].(*Set).Remove(a[1]), nil },
+		"Set.to_list": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			s := a[0].(*Set)
 			out := make([]Value, s.Len())
 
@@ -375,23 +392,23 @@ func init() {
 		},
 
 		// Option
-		"Option.is_some": func(m *machine, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "Some"), nil },
-		"Option.is_none": func(m *machine, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "None"), nil },
-		"Option.unwrap_or": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Option.is_some": func(m rtime, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "Some"), nil },
+		"Option.is_none": func(m rtime, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "None"), nil },
+		"Option.unwrap_or": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			if e := a[0].(*Enum); e.Variant.Name == "Some" {
 				return e.Fields[0], nil
 			}
 
 			return a[1], nil
 		},
-		"Option.or_error": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Option.or_error": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			if e := a[0].(*Enum); e.Variant.Name == "Some" {
-				return m.enum("Result", "Ok", e.Fields[0]), nil
+				return enumOf(m, "Result", "Ok", e.Fields[0]), nil
 			}
 
-			return m.enum("Result", "Err", a[1]), nil
+			return enumOf(m, "Result", "Err", a[1]), nil
 		},
-		"Option.map": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Option.map": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			e := a[0].(*Enum)
 			if e.Variant.Name != "Some" {
 				return e, nil
@@ -402,20 +419,20 @@ func init() {
 				return nil, err
 			}
 
-			return m.some(v), nil
+			return someOf(m, v), nil
 		},
 
 		// Result
-		"Result.is_ok":  func(m *machine, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "Ok"), nil },
-		"Result.is_err": func(m *machine, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "Err"), nil },
-		"Result.unwrap_or": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Result.is_ok":  func(m rtime, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "Ok"), nil },
+		"Result.is_err": func(m rtime, at ast.Node, a []Value) (Value, error) { return isVariant(a[0], "Err"), nil },
+		"Result.unwrap_or": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			if e := a[0].(*Enum); e.Variant.Name == "Ok" {
 				return e.Fields[0], nil
 			}
 
 			return a[1], nil
 		},
-		"Result.map_error": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Result.map_error": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			e := a[0].(*Enum)
 			if e.Variant.Name == "Ok" {
 				return e, nil
@@ -426,20 +443,20 @@ func init() {
 				return nil, err
 			}
 
-			return m.enum("Result", "Err", v), nil
+			return enumOf(m, "Result", "Err", v), nil
 		},
-		"Result.ok": func(m *machine, at ast.Node, a []Value) (Value, error) {
+		"Result.ok": func(m rtime, at ast.Node, a []Value) (Value, error) {
 			if e := a[0].(*Enum); e.Variant.Name == "Ok" {
-				return m.some(e.Fields[0]), nil
+				return someOf(m, e.Fields[0]), nil
 			}
 
-			return m.none(), nil
+			return noneOf(m), nil
 		},
 	}
 }
 
-// toInt turns a Float with no fraction into an Int, and it is a fault if it does not fit.
-func (m *machine) toInt(at ast.Node, f float64) (Value, error) {
+// toIntOf turns a Float with no fraction into an Int, and it is a fault if it does not fit.
+func toIntOf(m rtime, at ast.Node, f float64) (Value, error) {
 	if math.IsNaN(f) || f >= 9223372036854775808.0 || f < -9223372036854775808.0 {
 		return nil, m.fault(at, "range", formatFloat(f)+" does not fit in an Int")
 	}
@@ -447,6 +464,7 @@ func (m *machine) toInt(at ast.Node, f float64) (Value, error) {
 	return int64(f), nil
 }
 
-func (m *machine) parseError(variant string) Value {
-	return m.enum("Result", "Err", &Enum{m.p.defs["ParseError"], variantOf(m.p.defs["ParseError"], variant), nil})
+func parseErrorOf(m rtime, variant string) Value {
+	def := m.program().defs["ParseError"]
+	return enumOf(m, "Result", "Err", &Enum{def, variantOf(def, variant), nil})
 }

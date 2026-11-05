@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/ast"
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
@@ -29,6 +30,10 @@ type Config struct {
 
 	// MaxDepth is how deep calls can nest before it is a fault. The default is 2000.
 	MaxDepth int
+
+	// Bytecode runs the program as bytecode, on a machine with a stack, and not by walking the tree. What it does is the same,
+	// faults and all, and it is faster. A step is an instruction then, and not an expression.
+	Bytecode bool
 }
 
 // Program is a checked program, ready to run. It can be used from several goroutines: a call has its own state.
@@ -38,6 +43,12 @@ type Program struct {
 	grant  map[string]bool
 	defs   map[string]*check.Def // of the prelude
 	consts map[*check.ConstDef]Value
+
+	// the bytecode, made when it is first needed
+	mu          sync.Mutex
+	protos      map[*check.FnDef]*proto
+	constProtos map[*check.ConstDef]*proto
+	queue       []func() error
 }
 
 // New makes a program of a result of the checker. A result with problems in it can not be run.
@@ -54,7 +65,10 @@ func New(res *check.Result, cfg Config) (*Program, error) {
 		cfg.MaxDepth = 2000
 	}
 
-	p := &Program{res: res, cfg: cfg, grant: map[string]bool{}, defs: map[string]*check.Def{}, consts: map[*check.ConstDef]Value{}}
+	p := &Program{
+		res: res, cfg: cfg, grant: map[string]bool{}, defs: map[string]*check.Def{}, consts: map[*check.ConstDef]Value{},
+		protos: map[*check.FnDef]*proto{}, constProtos: map[*check.ConstDef]*proto{},
+	}
 
 	for _, g := range cfg.Grant {
 		p.grant[g] = true
@@ -170,6 +184,17 @@ func (p *Program) Call(ctx context.Context, module, function string, args ...Val
 		return nil, &Denied{module + "::" + function, denied}
 	}
 
+	if p.cfg.Bytecode {
+		mc := newVM(p, ctx, m)
+
+		v, err := mc.callDef(fd, args, nil)
+		if err != nil {
+			return nil, publicError(err)
+		}
+
+		return v, nil
+	}
+
 	mc := &machine{p: p, ctx: ctx, cur: m}
 
 	v, err := mc.callDef(fd, args, nil)
@@ -208,13 +233,11 @@ func (p *Program) Examples(ctx context.Context) []ExampleResult {
 				line, _ := token.Position(m.Source, ex.At().Begin)
 				r := ExampleResult{Module: m.Name, Function: fn, Line: line, Text: m.Source[ex.At().Begin:ex.At().End]}
 
-				mc := &machine{p: p, ctx: ctx, cur: m}
-
-				v, err := mc.eval(ex, newEnv(nil))
+				v, err := p.example(ctx, m, ex)
 
 				switch {
 				case err != nil:
-					r.Err = mc.public(err)
+					r.Err = publicError(err)
 				case v != true:
 					r.Err = errors.New("it is false")
 				}
@@ -236,6 +259,29 @@ func (p *Program) Examples(ctx context.Context) []ExampleResult {
 	}
 
 	return out
+}
+
+// example runs the expression of an example.
+func (p *Program) example(ctx context.Context, m *check.Module, ex ast.Expr) (Value, error) {
+	if !p.cfg.Bytecode {
+		mc := &machine{p: p, ctx: ctx, cur: m}
+		return mc.eval(ex, newEnv(nil))
+	}
+
+	p.mu.Lock()
+	pr, err := p.exprProto(m, "example", ex)
+
+	if err == nil {
+		err = p.drain()
+	}
+
+	p.mu.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+
+	return newVM(p, ctx, m).invoke(pr, nil, nil, nil)
 }
 
 func keys[V any](m map[string]V) []string {

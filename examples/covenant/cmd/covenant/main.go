@@ -3,6 +3,9 @@
 //	covenant check app.cov [more.cov ...]      the types and effects of the program
 //	covenant test  app.cov [more.cov ...]      the same, and then the examples of its functions
 //	covenant run   app.cov [more.cov ...] app::main [arguments]   call a function
+//	covenant dis   app.cov [more.cov ...] app::main            the bytecode of a function
+//
+// run and test walk the tree by default; with -bytecode they run the bytecode, which gives the same and is faster.
 //
 // Every file is a module, named by the name of the file without .cov: geometry.cov is the module geometry, which another file
 // uses with "use geometry". A function is named with its module, app::main. The arguments are numbers, true and false, and
@@ -47,6 +50,7 @@ func command(args []string, stdout, stderr io.Writer) int {
 	grant := fs.String("grant", "", "effects to grant, separated by commas")
 	steps := fs.Int64("max-steps", 0, "end the call after this many steps (0 is the default, -1 is no limit)")
 	timeout := fs.Duration("timeout", 0, "end the call after this long")
+	bytecode := fs.Bool("bytecode", false, "run the bytecode and not the tree")
 
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -94,13 +98,14 @@ func command(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%d modules: no problems\n", len(sources))
 
 		return 0
-	case "test", "run":
+	case "test", "run", "dis":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		return 2
 	}
 
 	cfg := run.Config{
+		Bytecode: *bytecode,
 		MaxSteps: *steps,
 		Grant:    append([]string{"io::print"}, splitList(*grant)...),
 		Host: map[string]run.HostFunc{
@@ -126,8 +131,11 @@ func command(args []string, stdout, stderr io.Writer) int {
 		defer cancel()
 	}
 
-	if args[0] == "test" {
+	switch args[0] {
+	case "test":
 		return test(ctx, prog, stdout, stderr)
+	case "dis":
+		return dis(prog, rest, stdout, stderr)
 	}
 
 	return call(ctx, prog, rest, stdout, stderr)
@@ -158,6 +166,29 @@ func test(ctx context.Context, prog *run.Program, stdout, stderr io.Writer) int 
 	if failed > 0 {
 		return 1
 	}
+
+	return 0
+}
+
+func dis(prog *run.Program, rest []string, stdout, stderr io.Writer) int {
+	if len(rest) != 1 {
+		fmt.Fprintln(stderr, "which function? give module::function after the files")
+		return 2
+	}
+
+	module, fn, ok := strings.Cut(rest[0], "::")
+	if !ok {
+		fmt.Fprintf(stderr, "%q is not module::function\n", rest[0])
+		return 2
+	}
+
+	out, err := prog.Disassemble(module, fn)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	fmt.Fprint(stdout, out)
 
 	return 0
 }

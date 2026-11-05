@@ -64,5 +64,8 @@ jobs:
       - name: JSON decoded through the typed views against encoding/json
         run: go test ./examples/jsongen -run '^$' -fuzz '^FuzzDecodeAgainstEncodingJSON$' -fuzztime 30s
 
+      - name: ABC reader does not panic or lose time
+        run: go test ./examples/melody/abc -run '^$' -fuzz '^FuzzRead$' -fuzztime 20s
+
       - name: Slice reader against the runes reader
         run: go test ./readers/slice -run '^$' -fuzz '^FuzzReaderOperations$' -fuzztime 20s

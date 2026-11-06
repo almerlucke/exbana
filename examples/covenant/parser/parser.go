@@ -27,6 +27,7 @@ const (
 	CovenantRuleType
 	CovenantRuleFnType
 	CovenantRuleEffect
+	CovenantRuleDynType
 	CovenantRuleBlock
 	CovenantRuleRequires
 	CovenantRuleExpr
@@ -56,6 +57,7 @@ const (
 	CovenantRuleMember
 	CovenantRuleUpdate
 	CovenantRuleFieldInit
+	CovenantRuleCast
 	CovenantRuleMulOp
 	CovenantRuleAddOp
 	CovenantRuleCmpOp
@@ -94,6 +96,7 @@ var CovenantruleNames = [...]string{
 	"type",
 	"fn_type",
 	"effect",
+	"dyn_type",
 	"block",
 	"requires",
 	"expr",
@@ -123,6 +126,7 @@ var CovenantruleNames = [...]string{
 	"member",
 	"update",
 	"field_init",
+	"cast",
 	"mul_op",
 	"add_op",
 	"cmp_op",
@@ -365,6 +369,16 @@ func (t *CovenantTree) FindEffect(parent int) iter.Seq[int] {
 // FirstEffect is the first node of rule "effect" directly below a node, or at the top level if parent is -1.
 func (t *CovenantTree) FirstEffect(parent int) (node int, ok bool) {
 	return t.First(parent, CovenantRuleEffect)
+}
+
+// FindDynType are the nodes of rule "dyn_type" directly below a node, or at the top level if parent is -1.
+func (t *CovenantTree) FindDynType(parent int) iter.Seq[int] {
+	return t.Find(parent, CovenantRuleDynType)
+}
+
+// FirstDynType is the first node of rule "dyn_type" directly below a node, or at the top level if parent is -1.
+func (t *CovenantTree) FirstDynType(parent int) (node int, ok bool) {
+	return t.First(parent, CovenantRuleDynType)
 }
 
 // FindBlock are the nodes of rule "block" directly below a node, or at the top level if parent is -1.
@@ -655,6 +669,16 @@ func (t *CovenantTree) FindFieldInit(parent int) iter.Seq[int] {
 // FirstFieldInit is the first node of rule "field_init" directly below a node, or at the top level if parent is -1.
 func (t *CovenantTree) FirstFieldInit(parent int) (node int, ok bool) {
 	return t.First(parent, CovenantRuleFieldInit)
+}
+
+// FindCast are the nodes of rule "cast" directly below a node, or at the top level if parent is -1.
+func (t *CovenantTree) FindCast(parent int) iter.Seq[int] {
+	return t.Find(parent, CovenantRuleCast)
+}
+
+// FirstCast is the first node of rule "cast" directly below a node, or at the top level if parent is -1.
+func (t *CovenantTree) FirstCast(parent int) (node int, ok bool) {
+	return t.First(parent, CovenantRuleCast)
 }
 
 // FindMulOp are the nodes of rule "mul_op" directly below a node, or at the top level if parent is -1.
@@ -1558,6 +1582,13 @@ func (v CovenantType) FnType() (CovenantFnType, bool) {
 	return CovenantFnType{v.Tree, node}, ok
 }
 
+// DynType is the dyn_type inside, if there is one.
+func (v CovenantType) DynType() (CovenantDynType, bool) {
+	node, ok := v.Tree.First(v.Node, CovenantRuleDynType)
+
+	return CovenantDynType{v.Tree, node}, ok
+}
+
 // Path is the path inside, if there is one.
 func (v CovenantType) Path() (CovenantPath, bool) {
 	node, ok := v.Tree.First(v.Node, CovenantRulePath)
@@ -1654,6 +1685,40 @@ func (v CovenantEffect) Slice() []int {
 
 // Path is the path inside.
 func (v CovenantEffect) Path() CovenantPath {
+	node, _ := v.Tree.First(v.Node, CovenantRulePath)
+
+	return CovenantPath{v.Tree, node}
+}
+
+// CovenantDynType is a node of the rule "dyn_type", seen through the grammar: the rules that match inside it are its methods.
+type CovenantDynType struct {
+	Tree *CovenantTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsDynType is the node seen as a CovenantDynType. ok is false if the node is not of that rule.
+func (t *CovenantTree) AsDynType(node int) (CovenantDynType, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != CovenantRuleDynType {
+		return CovenantDynType{}, false
+	}
+
+	return CovenantDynType{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v CovenantDynType) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v CovenantDynType) Slice() []int {
+	return v.Tree.Slice(v.Node)
+}
+
+// Path is the path inside.
+func (v CovenantDynType) Path() CovenantPath {
 	node, _ := v.Tree.First(v.Node, CovenantRulePath)
 
 	return CovenantPath{v.Tree, node}
@@ -2234,6 +2299,17 @@ func (v CovenantPostfix) Updates() iter.Seq[CovenantUpdate] {
 	return func(yield func(CovenantUpdate) bool) {
 		for node := range v.Tree.Find(v.Node, CovenantRuleUpdate) {
 			if !yield(CovenantUpdate{v.Tree, node}) {
+				return
+			}
+		}
+	}
+}
+
+// Casts are the cast nodes inside, in order.
+func (v CovenantPostfix) Casts() iter.Seq[CovenantCast] {
+	return func(yield func(CovenantCast) bool) {
+		for node := range v.Tree.Find(v.Node, CovenantRuleCast) {
+			if !yield(CovenantCast{v.Tree, node}) {
 				return
 			}
 		}
@@ -2983,6 +3059,40 @@ func (v CovenantFieldInit) Expr() CovenantExpr {
 	node, _ := v.Tree.First(v.Node, CovenantRuleExpr)
 
 	return CovenantExpr{v.Tree, node}
+}
+
+// CovenantCast is a node of the rule "cast", seen through the grammar: the rules that match inside it are its methods.
+type CovenantCast struct {
+	Tree *CovenantTree
+
+	// Node is the number of the node in the tree, or -1 for the top level.
+	Node int
+}
+
+// AsCast is the node seen as a CovenantCast. ok is false if the node is not of that rule.
+func (t *CovenantTree) AsCast(node int) (CovenantCast, bool) {
+	if node < 0 || node >= len(t.Nodes) || t.Nodes[node].Rule != CovenantRuleCast {
+		return CovenantCast{}, false
+	}
+
+	return CovenantCast{t, node}, true
+}
+
+// Span is where the node starts and ends in the input.
+func (v CovenantCast) Span() (begin, end int) {
+	return v.Tree.Span(v.Node)
+}
+
+// Slice is the part of the input the node matched.
+func (v CovenantCast) Slice() []int {
+	return v.Tree.Slice(v.Node)
+}
+
+// DynType is the dyn_type inside.
+func (v CovenantCast) DynType() CovenantDynType {
+	node, _ := v.Tree.First(v.Node, CovenantRuleDynType)
+
+	return CovenantDynType{v.Tree, node}
 }
 
 // CovenantMulOp is a node of the rule "mul_op", seen through the grammar: the rules that match inside it are its methods.
@@ -5348,6 +5458,10 @@ func (p *CovenantParser) m88(pos int) int {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
+	if q := p.ruleDynType(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
 	if q := p.m87(pos); q >= 0 {
 		return q
 	}
@@ -5375,7 +5489,7 @@ func (p *CovenantParser) ruleType(pos int) int {
 }
 
 func (p *CovenantParser) m89(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 62 {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 63 {
 		return pos + 1
 	}
 	p.fail(pos, "`Fn`")
@@ -5767,6 +5881,44 @@ func (p *CovenantParser) ruleEffect(pos int) int {
 }
 
 func (p *CovenantParser) m117(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 62 {
+		return pos + 1
+	}
+	p.fail(pos, "`dyn`")
+	return -1
+}
+
+func (p *CovenantParser) m118(pos int) int {
+	q := pos
+	if q = p.m117(q); q < 0 {
+		return -1
+	}
+	if q = p.rulePath(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) ruleDynType(pos int) int {
+	if p.depth >= p.maxDepth {
+		p.tooDeep = true
+		return -1
+	}
+	p.depth++
+	i := len(p.nodes)
+	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleDynType, Begin: int32(pos)})
+	end := p.m118(pos)
+	p.depth--
+	if end < 0 {
+		p.nodes = p.nodes[:i]
+		return -1
+	}
+	p.nodes[i].End = int32(end)
+	p.nodes[i].Size = int32(len(p.nodes) - i)
+	return end
+}
+
+func (p *CovenantParser) m119(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -5774,7 +5926,7 @@ func (p *CovenantParser) m117(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m119(pos int) int {
+func (p *CovenantParser) m121(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -5782,40 +5934,9 @@ func (p *CovenantParser) m119(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m118(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m119(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m121(pos int) int {
-	mark := len(p.nodes)
-	if q := p.ruleRequires(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.ruleExample(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
 func (p *CovenantParser) m120(pos int) int {
 	q, n := pos, 0
-	for {
+	for n < 1 {
 		mark := len(p.nodes)
 		r := p.m121(q)
 		if r < 0 {
@@ -5831,7 +5952,38 @@ func (p *CovenantParser) m120(pos int) int {
 	return q
 }
 
+func (p *CovenantParser) m123(pos int) int {
+	mark := len(p.nodes)
+	if q := p.ruleRequires(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.ruleExample(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
 func (p *CovenantParser) m122(pos int) int {
+	q, n := pos, 0
+	for {
+		mark := len(p.nodes)
+		r := p.m123(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m124(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
@@ -5849,7 +6001,7 @@ func (p *CovenantParser) m122(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m123(pos int) int {
+func (p *CovenantParser) m125(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -5857,12 +6009,9 @@ func (p *CovenantParser) m123(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m124(pos int) int {
+func (p *CovenantParser) m126(pos int) int {
 	q := pos
-	if q = p.m117(q); q < 0 {
-		return -1
-	}
-	if q = p.m118(q); q < 0 {
+	if q = p.m119(q); q < 0 {
 		return -1
 	}
 	if q = p.m120(q); q < 0 {
@@ -5871,7 +6020,10 @@ func (p *CovenantParser) m124(pos int) int {
 	if q = p.m122(q); q < 0 {
 		return -1
 	}
-	if q = p.m123(q); q < 0 {
+	if q = p.m124(q); q < 0 {
+		return -1
+	}
+	if q = p.m125(q); q < 0 {
 		return -1
 	}
 	return q
@@ -5885,7 +6037,7 @@ func (p *CovenantParser) ruleBlock(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleBlock, Begin: int32(pos)})
-	end := p.m124(pos)
+	end := p.m126(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -5896,7 +6048,7 @@ func (p *CovenantParser) ruleBlock(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m125(pos int) int {
+func (p *CovenantParser) m127(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 49 {
 		return pos + 1
 	}
@@ -5904,7 +6056,7 @@ func (p *CovenantParser) m125(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m126(pos int) int {
+func (p *CovenantParser) m128(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -5912,15 +6064,15 @@ func (p *CovenantParser) m126(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m127(pos int) int {
+func (p *CovenantParser) m129(pos int) int {
 	q := pos
-	if q = p.m125(q); q < 0 {
+	if q = p.m127(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m126(q); q < 0 {
+	if q = p.m128(q); q < 0 {
 		return -1
 	}
 	return q
@@ -5934,7 +6086,7 @@ func (p *CovenantParser) ruleRequires(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleRequires, Begin: int32(pos)})
-	end := p.m127(pos)
+	end := p.m129(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -5945,7 +6097,7 @@ func (p *CovenantParser) ruleRequires(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m128(pos int) int {
+func (p *CovenantParser) m130(pos int) int {
 	mark := len(p.nodes)
 	if q := p.ruleClosure(pos); q >= 0 {
 		return q
@@ -5966,7 +6118,7 @@ func (p *CovenantParser) ruleExpr(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleExpr, Begin: int32(pos)})
-	end := p.m128(pos)
+	end := p.m130(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -5977,7 +6129,7 @@ func (p *CovenantParser) ruleExpr(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m129(pos int) int {
+func (p *CovenantParser) m131(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 39 {
 		return pos + 1
 	}
@@ -5985,7 +6137,7 @@ func (p *CovenantParser) m129(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m130(pos int) int {
+func (p *CovenantParser) m132(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 8 {
 		return pos + 1
 	}
@@ -5993,7 +6145,7 @@ func (p *CovenantParser) m130(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m132(pos int) int {
+func (p *CovenantParser) m134(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6001,11 +6153,11 @@ func (p *CovenantParser) m132(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m131(pos int) int {
+func (p *CovenantParser) m133(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m132(q)
+		r := p.m134(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6019,7 +6171,7 @@ func (p *CovenantParser) m131(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m133(pos int) int {
+func (p *CovenantParser) m135(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -6027,7 +6179,7 @@ func (p *CovenantParser) m133(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m135(pos int) int {
+func (p *CovenantParser) m137(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -6035,7 +6187,7 @@ func (p *CovenantParser) m135(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m137(pos int) int {
+func (p *CovenantParser) m139(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6043,43 +6195,11 @@ func (p *CovenantParser) m137(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m136(pos int) int {
+func (p *CovenantParser) m138(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m137(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m138(pos int) int {
-	q := pos
-	if q = p.m135(q); q < 0 {
-		return -1
-	}
-	if q = p.m136(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleClosureParam(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m134(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m138(q)
+		r := p.m139(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6094,16 +6214,22 @@ func (p *CovenantParser) m134(pos int) int {
 }
 
 func (p *CovenantParser) m140(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
+	q := pos
+	if q = p.m137(q); q < 0 {
+		return -1
 	}
-	p.fail(pos, "`end of line`")
-	return -1
+	if q = p.m138(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleClosureParam(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *CovenantParser) m139(pos int) int {
+func (p *CovenantParser) m136(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m140(q)
 		if r < 0 {
@@ -6119,82 +6245,19 @@ func (p *CovenantParser) m139(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m141(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
-		return pos + 1
-	}
-	p.fail(pos, "`)`")
-	return -1
-}
-
 func (p *CovenantParser) m142(pos int) int {
-	q := pos
-	if q = p.ruleClosureParam(q); q < 0 {
-		return -1
-	}
-	if q = p.m134(q); q < 0 {
-		return -1
-	}
-	if q = p.m139(q); q < 0 {
-		return -1
-	}
-	if q = p.m141(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m143(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m133(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m142(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *CovenantParser) m144(pos int) int {
-	q := pos
-	if q = p.m130(q); q < 0 {
-		return -1
-	}
-	if q = p.m131(q); q < 0 {
-		return -1
-	}
-	if q = p.m143(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m146(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 18 {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
-	p.fail(pos, "`->`")
+	p.fail(pos, "`end of line`")
 	return -1
 }
 
-func (p *CovenantParser) m147(pos int) int {
-	q := pos
-	if q = p.m146(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleType(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m145(pos int) int {
+func (p *CovenantParser) m141(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m147(q)
+		r := p.m142(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6208,11 +6271,63 @@ func (p *CovenantParser) m145(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m148(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 19 {
+func (p *CovenantParser) m143(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
-	p.fail(pos, "`=>`")
+	p.fail(pos, "`)`")
+	return -1
+}
+
+func (p *CovenantParser) m144(pos int) int {
+	q := pos
+	if q = p.ruleClosureParam(q); q < 0 {
+		return -1
+	}
+	if q = p.m136(q); q < 0 {
+		return -1
+	}
+	if q = p.m141(q); q < 0 {
+		return -1
+	}
+	if q = p.m143(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m145(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m135(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m144(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *CovenantParser) m146(pos int) int {
+	q := pos
+	if q = p.m132(q); q < 0 {
+		return -1
+	}
+	if q = p.m133(q); q < 0 {
+		return -1
+	}
+	if q = p.m145(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m148(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 18 {
+		return pos + 1
+	}
+	p.fail(pos, "`->`")
 	return -1
 }
 
@@ -6221,15 +6336,52 @@ func (p *CovenantParser) m149(pos int) int {
 	if q = p.m148(q); q < 0 {
 		return -1
 	}
+	if q = p.ruleType(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m147(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m149(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m150(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 19 {
+		return pos + 1
+	}
+	p.fail(pos, "`=>`")
+	return -1
+}
+
+func (p *CovenantParser) m151(pos int) int {
+	q := pos
+	if q = p.m150(q); q < 0 {
+		return -1
+	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) m150(pos int) int {
+func (p *CovenantParser) m152(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m149(pos); q >= 0 {
+	if q := p.m151(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -6240,18 +6392,18 @@ func (p *CovenantParser) m150(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m151(pos int) int {
+func (p *CovenantParser) m153(pos int) int {
 	q := pos
-	if q = p.m129(q); q < 0 {
+	if q = p.m131(q); q < 0 {
 		return -1
 	}
-	if q = p.m144(q); q < 0 {
+	if q = p.m146(q); q < 0 {
 		return -1
 	}
-	if q = p.m145(q); q < 0 {
+	if q = p.m147(q); q < 0 {
 		return -1
 	}
-	if q = p.m150(q); q < 0 {
+	if q = p.m152(q); q < 0 {
 		return -1
 	}
 	return q
@@ -6265,7 +6417,7 @@ func (p *CovenantParser) ruleClosure(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleClosure, Begin: int32(pos)})
-	end := p.m151(pos)
+	end := p.m153(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6276,7 +6428,7 @@ func (p *CovenantParser) ruleClosure(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m152(pos int) int {
+func (p *CovenantParser) m154(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -6287,9 +6439,9 @@ func (p *CovenantParser) m152(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m153(pos int) int {
+func (p *CovenantParser) m155(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m152(pos); q >= 0 {
+	if q := p.m154(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -6308,7 +6460,7 @@ func (p *CovenantParser) ruleClosureParam(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleClosureParam, Begin: int32(pos)})
-	end := p.m153(pos)
+	end := p.m155(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6319,7 +6471,7 @@ func (p *CovenantParser) ruleClosureParam(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m156(pos int) int {
+func (p *CovenantParser) m158(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 32 {
 		return pos + 1
 	}
@@ -6327,7 +6479,7 @@ func (p *CovenantParser) m156(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m158(pos int) int {
+func (p *CovenantParser) m160(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6335,11 +6487,11 @@ func (p *CovenantParser) m158(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m157(pos int) int {
+func (p *CovenantParser) m159(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m158(q)
+		r := p.m160(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6353,12 +6505,12 @@ func (p *CovenantParser) m157(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m159(pos int) int {
+func (p *CovenantParser) m161(pos int) int {
 	q := pos
-	if q = p.m156(q); q < 0 {
+	if q = p.m158(q); q < 0 {
 		return -1
 	}
-	if q = p.m157(q); q < 0 {
+	if q = p.m159(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleNegation(q); q < 0 {
@@ -6367,11 +6519,11 @@ func (p *CovenantParser) m159(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m155(pos int) int {
+func (p *CovenantParser) m157(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m159(q)
+		r := p.m161(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6388,7 +6540,7 @@ func (p *CovenantParser) m155(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m161(pos int) int {
+func (p *CovenantParser) m163(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 47 {
 		return pos + 1
 	}
@@ -6396,7 +6548,7 @@ func (p *CovenantParser) m161(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m163(pos int) int {
+func (p *CovenantParser) m165(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6404,73 +6556,7 @@ func (p *CovenantParser) m163(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m162(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m163(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
 func (p *CovenantParser) m164(pos int) int {
-	q := pos
-	if q = p.m161(q); q < 0 {
-		return -1
-	}
-	if q = p.m162(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleNegation(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m160(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m164(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	if n < 1 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m165(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m155(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m160(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *CovenantParser) m154(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -6490,47 +6576,57 @@ func (p *CovenantParser) m154(pos int) int {
 
 func (p *CovenantParser) m166(pos int) int {
 	q := pos
-	if q = p.ruleNegation(q); q < 0 {
+	if q = p.m163(q); q < 0 {
 		return -1
 	}
-	if q = p.m154(q); q < 0 {
+	if q = p.m164(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleNegation(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) ruleLogic(pos int) int {
-	if p.depth >= p.maxDepth {
-		p.tooDeep = true
+func (p *CovenantParser) m162(pos int) int {
+	q, n := pos, 0
+	for {
+		mark := len(p.nodes)
+		r := p.m166(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	if n < 1 {
 		return -1
 	}
-	p.depth++
-	i := len(p.nodes)
-	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleLogic, Begin: int32(pos)})
-	end := p.m166(pos)
-	p.depth--
-	if end < 0 {
-		p.nodes = p.nodes[:i]
-		return -1
-	}
-	p.nodes[i].End = int32(end)
-	p.nodes[i].Size = int32(len(p.nodes) - i)
-	return end
-}
-
-func (p *CovenantParser) m168(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 46 {
-		return pos + 1
-	}
-	p.fail(pos, "`not`")
-	return -1
+	return q
 }
 
 func (p *CovenantParser) m167(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m157(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m162(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *CovenantParser) m156(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m168(q)
+		r := p.m167(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6544,9 +6640,65 @@ func (p *CovenantParser) m167(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m169(pos int) int {
+func (p *CovenantParser) m168(pos int) int {
 	q := pos
-	if q = p.m167(q); q < 0 {
+	if q = p.ruleNegation(q); q < 0 {
+		return -1
+	}
+	if q = p.m156(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) ruleLogic(pos int) int {
+	if p.depth >= p.maxDepth {
+		p.tooDeep = true
+		return -1
+	}
+	p.depth++
+	i := len(p.nodes)
+	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleLogic, Begin: int32(pos)})
+	end := p.m168(pos)
+	p.depth--
+	if end < 0 {
+		p.nodes = p.nodes[:i]
+		return -1
+	}
+	p.nodes[i].End = int32(end)
+	p.nodes[i].Size = int32(len(p.nodes) - i)
+	return end
+}
+
+func (p *CovenantParser) m170(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 46 {
+		return pos + 1
+	}
+	p.fail(pos, "`not`")
+	return -1
+}
+
+func (p *CovenantParser) m169(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m170(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m171(pos int) int {
+	q := pos
+	if q = p.m169(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleCompare(q); q < 0 {
@@ -6563,7 +6715,7 @@ func (p *CovenantParser) ruleNegation(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleNegation, Begin: int32(pos)})
-	end := p.m169(pos)
+	end := p.m171(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6574,7 +6726,7 @@ func (p *CovenantParser) ruleNegation(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m172(pos int) int {
+func (p *CovenantParser) m174(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6582,11 +6734,11 @@ func (p *CovenantParser) m172(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m171(pos int) int {
+func (p *CovenantParser) m173(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m172(q)
+		r := p.m174(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6600,12 +6752,12 @@ func (p *CovenantParser) m171(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m173(pos int) int {
+func (p *CovenantParser) m175(pos int) int {
 	q := pos
 	if q = p.ruleCmpOp(q); q < 0 {
 		return -1
 	}
-	if q = p.m171(q); q < 0 {
+	if q = p.m173(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleSum(q); q < 0 {
@@ -6614,11 +6766,11 @@ func (p *CovenantParser) m173(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m170(pos int) int {
+func (p *CovenantParser) m172(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m173(q)
+		r := p.m175(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6632,12 +6784,12 @@ func (p *CovenantParser) m170(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m174(pos int) int {
+func (p *CovenantParser) m176(pos int) int {
 	q := pos
 	if q = p.ruleSum(q); q < 0 {
 		return -1
 	}
-	if q = p.m170(q); q < 0 {
+	if q = p.m172(q); q < 0 {
 		return -1
 	}
 	return q
@@ -6651,7 +6803,7 @@ func (p *CovenantParser) ruleCompare(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleCompare, Begin: int32(pos)})
-	end := p.m174(pos)
+	end := p.m176(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6662,7 +6814,7 @@ func (p *CovenantParser) ruleCompare(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m177(pos int) int {
+func (p *CovenantParser) m179(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6670,11 +6822,11 @@ func (p *CovenantParser) m177(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m176(pos int) int {
+func (p *CovenantParser) m178(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m177(q)
+		r := p.m179(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6688,12 +6840,12 @@ func (p *CovenantParser) m176(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m178(pos int) int {
+func (p *CovenantParser) m180(pos int) int {
 	q := pos
 	if q = p.ruleAddOp(q); q < 0 {
 		return -1
 	}
-	if q = p.m176(q); q < 0 {
+	if q = p.m178(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleProduct(q); q < 0 {
@@ -6702,11 +6854,11 @@ func (p *CovenantParser) m178(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m175(pos int) int {
+func (p *CovenantParser) m177(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m178(q)
+		r := p.m180(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6720,12 +6872,12 @@ func (p *CovenantParser) m175(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m179(pos int) int {
+func (p *CovenantParser) m181(pos int) int {
 	q := pos
 	if q = p.ruleProduct(q); q < 0 {
 		return -1
 	}
-	if q = p.m175(q); q < 0 {
+	if q = p.m177(q); q < 0 {
 		return -1
 	}
 	return q
@@ -6739,7 +6891,7 @@ func (p *CovenantParser) ruleSum(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleSum, Begin: int32(pos)})
-	end := p.m179(pos)
+	end := p.m181(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6750,7 +6902,7 @@ func (p *CovenantParser) ruleSum(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m182(pos int) int {
+func (p *CovenantParser) m184(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -6758,11 +6910,11 @@ func (p *CovenantParser) m182(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m181(pos int) int {
+func (p *CovenantParser) m183(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m182(q)
+		r := p.m184(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6776,12 +6928,12 @@ func (p *CovenantParser) m181(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m183(pos int) int {
+func (p *CovenantParser) m185(pos int) int {
 	q := pos
 	if q = p.ruleMulOp(q); q < 0 {
 		return -1
 	}
-	if q = p.m181(q); q < 0 {
+	if q = p.m183(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleUnary(q); q < 0 {
@@ -6790,11 +6942,11 @@ func (p *CovenantParser) m183(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m180(pos int) int {
+func (p *CovenantParser) m182(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m183(q)
+		r := p.m185(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6808,12 +6960,12 @@ func (p *CovenantParser) m180(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m184(pos int) int {
+func (p *CovenantParser) m186(pos int) int {
 	q := pos
 	if q = p.ruleUnary(q); q < 0 {
 		return -1
 	}
-	if q = p.m180(q); q < 0 {
+	if q = p.m182(q); q < 0 {
 		return -1
 	}
 	return q
@@ -6827,7 +6979,7 @@ func (p *CovenantParser) ruleProduct(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleProduct, Begin: int32(pos)})
-	end := p.m184(pos)
+	end := p.m186(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6838,7 +6990,7 @@ func (p *CovenantParser) ruleProduct(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m186(pos int) int {
+func (p *CovenantParser) m188(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 28 {
 		return pos + 1
 	}
@@ -6846,7 +6998,7 @@ func (p *CovenantParser) m186(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m187(pos int) int {
+func (p *CovenantParser) m189(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 56 {
 		return pos + 1
 	}
@@ -6854,24 +7006,24 @@ func (p *CovenantParser) m187(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m188(pos int) int {
+func (p *CovenantParser) m190(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m186(pos); q >= 0 {
+	if q := p.m188(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m187(pos); q >= 0 {
+	if q := p.m189(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *CovenantParser) m185(pos int) int {
+func (p *CovenantParser) m187(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m188(q)
+		r := p.m190(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6885,9 +7037,9 @@ func (p *CovenantParser) m185(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m189(pos int) int {
+func (p *CovenantParser) m191(pos int) int {
 	q := pos
-	if q = p.m185(q); q < 0 {
+	if q = p.m187(q); q < 0 {
 		return -1
 	}
 	if q = p.rulePostfix(q); q < 0 {
@@ -6904,7 +7056,7 @@ func (p *CovenantParser) ruleUnary(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleUnary, Begin: int32(pos)})
-	end := p.m189(pos)
+	end := p.m191(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6915,7 +7067,7 @@ func (p *CovenantParser) ruleUnary(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m191(pos int) int {
+func (p *CovenantParser) m193(pos int) int {
 	mark := len(p.nodes)
 	if q := p.ruleCall(pos); q >= 0 {
 		return q
@@ -6929,14 +7081,18 @@ func (p *CovenantParser) m191(pos int) int {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
+	if q := p.ruleCast(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *CovenantParser) m190(pos int) int {
+func (p *CovenantParser) m192(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m191(q)
+		r := p.m193(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -6950,12 +7106,12 @@ func (p *CovenantParser) m190(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m192(pos int) int {
+func (p *CovenantParser) m194(pos int) int {
 	q := pos
 	if q = p.rulePrimary(q); q < 0 {
 		return -1
 	}
-	if q = p.m190(q); q < 0 {
+	if q = p.m192(q); q < 0 {
 		return -1
 	}
 	return q
@@ -6969,7 +7125,7 @@ func (p *CovenantParser) rulePostfix(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRulePostfix, Begin: int32(pos)})
-	end := p.m192(pos)
+	end := p.m194(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -6980,7 +7136,7 @@ func (p *CovenantParser) rulePostfix(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m193(pos int) int {
+func (p *CovenantParser) m195(pos int) int {
 	mark := len(p.nodes)
 	if q := p.ruleNumber(pos); q >= 0 {
 		return q
@@ -7029,7 +7185,7 @@ func (p *CovenantParser) rulePrimary(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRulePrimary, Begin: int32(pos)})
-	end := p.m193(pos)
+	end := p.m195(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7040,7 +7196,7 @@ func (p *CovenantParser) rulePrimary(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m194(pos int) int {
+func (p *CovenantParser) m196(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 4 {
 		return pos + 1
 	}
@@ -7048,7 +7204,7 @@ func (p *CovenantParser) m194(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m195(pos int) int {
+func (p *CovenantParser) m197(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 5 {
 		return pos + 1
 	}
@@ -7056,13 +7212,13 @@ func (p *CovenantParser) m195(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m196(pos int) int {
+func (p *CovenantParser) m198(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m194(pos); q >= 0 {
+	if q := p.m196(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m195(pos); q >= 0 {
+	if q := p.m197(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -7077,7 +7233,7 @@ func (p *CovenantParser) ruleNumber(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleNumber, Begin: int32(pos)})
-	end := p.m196(pos)
+	end := p.m198(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7088,7 +7244,7 @@ func (p *CovenantParser) ruleNumber(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m197(pos int) int {
+func (p *CovenantParser) m199(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 6 {
 		return pos + 1
 	}
@@ -7104,7 +7260,7 @@ func (p *CovenantParser) ruleText(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleText, Begin: int32(pos)})
-	end := p.m197(pos)
+	end := p.m199(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7115,7 +7271,7 @@ func (p *CovenantParser) ruleText(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m198(pos int) int {
+func (p *CovenantParser) m200(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 54 {
 		return pos + 1
 	}
@@ -7123,7 +7279,7 @@ func (p *CovenantParser) m198(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m199(pos int) int {
+func (p *CovenantParser) m201(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 55 {
 		return pos + 1
 	}
@@ -7131,13 +7287,13 @@ func (p *CovenantParser) m199(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m200(pos int) int {
+func (p *CovenantParser) m202(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m198(pos); q >= 0 {
+	if q := p.m200(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m199(pos); q >= 0 {
+	if q := p.m201(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -7152,7 +7308,7 @@ func (p *CovenantParser) ruleBool(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleBool, Begin: int32(pos)})
-	end := p.m200(pos)
+	end := p.m202(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7163,7 +7319,7 @@ func (p *CovenantParser) ruleBool(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m201(pos int) int {
+func (p *CovenantParser) m203(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 12 {
 		return pos + 1
 	}
@@ -7171,7 +7327,7 @@ func (p *CovenantParser) m201(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m203(pos int) int {
+func (p *CovenantParser) m205(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7179,11 +7335,11 @@ func (p *CovenantParser) m203(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m202(pos int) int {
+func (p *CovenantParser) m204(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m203(q)
+		r := p.m205(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7197,7 +7353,7 @@ func (p *CovenantParser) m202(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m204(pos int) int {
+func (p *CovenantParser) m206(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 13 {
 		return pos + 1
 	}
@@ -7205,7 +7361,7 @@ func (p *CovenantParser) m204(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m206(pos int) int {
+func (p *CovenantParser) m208(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -7213,7 +7369,7 @@ func (p *CovenantParser) m206(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m208(pos int) int {
+func (p *CovenantParser) m210(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7221,43 +7377,11 @@ func (p *CovenantParser) m208(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m207(pos int) int {
+func (p *CovenantParser) m209(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m208(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m209(pos int) int {
-	q := pos
-	if q = p.m206(q); q < 0 {
-		return -1
-	}
-	if q = p.m207(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleExpr(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m205(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m209(q)
+		r := p.m210(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7272,16 +7396,22 @@ func (p *CovenantParser) m205(pos int) int {
 }
 
 func (p *CovenantParser) m211(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
+	q := pos
+	if q = p.m208(q); q < 0 {
+		return -1
 	}
-	p.fail(pos, "`end of line`")
-	return -1
+	if q = p.m209(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleExpr(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *CovenantParser) m210(pos int) int {
+func (p *CovenantParser) m207(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m211(q)
 		if r < 0 {
@@ -7297,7 +7427,33 @@ func (p *CovenantParser) m210(pos int) int {
 	return q
 }
 
+func (p *CovenantParser) m213(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
 func (p *CovenantParser) m212(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m213(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m214(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 13 {
 		return pos + 1
 	}
@@ -7305,45 +7461,45 @@ func (p *CovenantParser) m212(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m213(pos int) int {
+func (p *CovenantParser) m215(pos int) int {
 	q := pos
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m205(q); q < 0 {
-		return -1
-	}
-	if q = p.m210(q); q < 0 {
+	if q = p.m207(q); q < 0 {
 		return -1
 	}
 	if q = p.m212(q); q < 0 {
 		return -1
 	}
+	if q = p.m214(q); q < 0 {
+		return -1
+	}
 	return q
 }
 
-func (p *CovenantParser) m214(pos int) int {
+func (p *CovenantParser) m216(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m204(pos); q >= 0 {
+	if q := p.m206(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m213(pos); q >= 0 {
+	if q := p.m215(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *CovenantParser) m215(pos int) int {
+func (p *CovenantParser) m217(pos int) int {
 	q := pos
-	if q = p.m201(q); q < 0 {
+	if q = p.m203(q); q < 0 {
 		return -1
 	}
-	if q = p.m202(q); q < 0 {
+	if q = p.m204(q); q < 0 {
 		return -1
 	}
-	if q = p.m214(q); q < 0 {
+	if q = p.m216(q); q < 0 {
 		return -1
 	}
 	return q
@@ -7357,7 +7513,7 @@ func (p *CovenantParser) ruleList(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleList, Begin: int32(pos)})
-	end := p.m215(pos)
+	end := p.m217(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7368,7 +7524,7 @@ func (p *CovenantParser) ruleList(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m216(pos int) int {
+func (p *CovenantParser) m218(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -7376,7 +7532,7 @@ func (p *CovenantParser) m216(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m218(pos int) int {
+func (p *CovenantParser) m220(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7384,11 +7540,11 @@ func (p *CovenantParser) m218(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m217(pos int) int {
+func (p *CovenantParser) m219(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m218(q)
+		r := p.m220(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7402,7 +7558,7 @@ func (p *CovenantParser) m217(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m219(pos int) int {
+func (p *CovenantParser) m221(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 15 {
 		return pos + 1
 	}
@@ -7410,7 +7566,7 @@ func (p *CovenantParser) m219(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m221(pos int) int {
+func (p *CovenantParser) m223(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -7418,7 +7574,7 @@ func (p *CovenantParser) m221(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m223(pos int) int {
+func (p *CovenantParser) m225(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7426,11 +7582,11 @@ func (p *CovenantParser) m223(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m222(pos int) int {
+func (p *CovenantParser) m224(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m223(q)
+		r := p.m225(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7440,79 +7596,29 @@ func (p *CovenantParser) m222(pos int) int {
 			break
 		}
 		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m224(pos int) int {
-	q := pos
-	if q = p.m221(q); q < 0 {
-		return -1
-	}
-	if q = p.m222(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleEntry(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m220(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m224(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m225(pos int) int {
-	q := pos
-	if q = p.ruleEntry(q); q < 0 {
-		return -1
-	}
-	if q = p.m220(q); q < 0 {
-		return -1
 	}
 	return q
 }
 
 func (p *CovenantParser) m226(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m219(pos); q >= 0 {
-		return q
+	q := pos
+	if q = p.m223(q); q < 0 {
+		return -1
 	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m225(pos); q >= 0 {
-		return q
+	if q = p.m224(q); q < 0 {
+		return -1
 	}
-	p.nodes = p.nodes[:mark]
-	return -1
+	if q = p.ruleEntry(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *CovenantParser) m228(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
-	}
-	p.fail(pos, "`end of line`")
-	return -1
-}
-
-func (p *CovenantParser) m227(pos int) int {
+func (p *CovenantParser) m222(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
-		r := p.m228(q)
+		r := p.m226(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7526,7 +7632,57 @@ func (p *CovenantParser) m227(pos int) int {
 	return q
 }
 
+func (p *CovenantParser) m227(pos int) int {
+	q := pos
+	if q = p.ruleEntry(q); q < 0 {
+		return -1
+	}
+	if q = p.m222(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m228(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m221(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m227(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *CovenantParser) m230(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
 func (p *CovenantParser) m229(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m230(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m231(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -7534,21 +7690,21 @@ func (p *CovenantParser) m229(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m230(pos int) int {
+func (p *CovenantParser) m232(pos int) int {
 	q := pos
-	if q = p.m216(q); q < 0 {
+	if q = p.m218(q); q < 0 {
 		return -1
 	}
-	if q = p.m217(q); q < 0 {
+	if q = p.m219(q); q < 0 {
 		return -1
 	}
-	if q = p.m226(q); q < 0 {
-		return -1
-	}
-	if q = p.m227(q); q < 0 {
+	if q = p.m228(q); q < 0 {
 		return -1
 	}
 	if q = p.m229(q); q < 0 {
+		return -1
+	}
+	if q = p.m231(q); q < 0 {
 		return -1
 	}
 	return q
@@ -7562,7 +7718,7 @@ func (p *CovenantParser) ruleMap(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleMap, Begin: int32(pos)})
-	end := p.m230(pos)
+	end := p.m232(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7573,7 +7729,7 @@ func (p *CovenantParser) ruleMap(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m231(pos int) int {
+func (p *CovenantParser) m233(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -7584,7 +7740,7 @@ func (p *CovenantParser) m231(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m232(pos int) int {
+func (p *CovenantParser) m234(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 15 {
 		return pos + 1
 	}
@@ -7592,12 +7748,12 @@ func (p *CovenantParser) m232(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m233(pos int) int {
+func (p *CovenantParser) m235(pos int) int {
 	q := pos
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m232(q); q < 0 {
+	if q = p.m234(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
@@ -7606,13 +7762,13 @@ func (p *CovenantParser) m233(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m234(pos int) int {
+func (p *CovenantParser) m236(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m231(pos); q >= 0 {
+	if q := p.m233(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m233(pos); q >= 0 {
+	if q := p.m235(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -7627,7 +7783,7 @@ func (p *CovenantParser) ruleEntry(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleEntry, Begin: int32(pos)})
-	end := p.m234(pos)
+	end := p.m236(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7638,38 +7794,12 @@ func (p *CovenantParser) ruleEntry(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m235(pos int) int {
+func (p *CovenantParser) m237(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 8 {
 		return pos + 1
 	}
 	p.fail(pos, "`(`")
 	return -1
-}
-
-func (p *CovenantParser) m237(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
-	}
-	p.fail(pos, "`end of line`")
-	return -1
-}
-
-func (p *CovenantParser) m236(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m237(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
 }
 
 func (p *CovenantParser) m239(pos int) int {
@@ -7698,70 +7828,7 @@ func (p *CovenantParser) m238(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m240(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
-		return pos + 1
-	}
-	p.fail(pos, "`)`")
-	return -1
-}
-
 func (p *CovenantParser) m241(pos int) int {
-	q := pos
-	if q = p.m235(q); q < 0 {
-		return -1
-	}
-	if q = p.m236(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleExpr(q); q < 0 {
-		return -1
-	}
-	if q = p.m238(q); q < 0 {
-		return -1
-	}
-	if q = p.m240(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) ruleParen(pos int) int {
-	if p.depth >= p.maxDepth {
-		p.tooDeep = true
-		return -1
-	}
-	p.depth++
-	i := len(p.nodes)
-	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleParen, Begin: int32(pos)})
-	end := p.m241(pos)
-	p.depth--
-	if end < 0 {
-		p.nodes = p.nodes[:i]
-		return -1
-	}
-	p.nodes[i].End = int32(end)
-	p.nodes[i].Size = int32(len(p.nodes) - i)
-	return end
-}
-
-func (p *CovenantParser) m242(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 45 {
-		return pos + 1
-	}
-	p.fail(pos, "`match`")
-	return -1
-}
-
-func (p *CovenantParser) m243(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
-		return pos + 1
-	}
-	p.fail(pos, "`{`")
-	return -1
-}
-
-func (p *CovenantParser) m245(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7769,11 +7836,11 @@ func (p *CovenantParser) m245(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m244(pos int) int {
+func (p *CovenantParser) m240(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m245(q)
+		r := p.m241(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7787,7 +7854,96 @@ func (p *CovenantParser) m244(pos int) int {
 	return q
 }
 
+func (p *CovenantParser) m242(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
+		return pos + 1
+	}
+	p.fail(pos, "`)`")
+	return -1
+}
+
+func (p *CovenantParser) m243(pos int) int {
+	q := pos
+	if q = p.m237(q); q < 0 {
+		return -1
+	}
+	if q = p.m238(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleExpr(q); q < 0 {
+		return -1
+	}
+	if q = p.m240(q); q < 0 {
+		return -1
+	}
+	if q = p.m242(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) ruleParen(pos int) int {
+	if p.depth >= p.maxDepth {
+		p.tooDeep = true
+		return -1
+	}
+	p.depth++
+	i := len(p.nodes)
+	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleParen, Begin: int32(pos)})
+	end := p.m243(pos)
+	p.depth--
+	if end < 0 {
+		p.nodes = p.nodes[:i]
+		return -1
+	}
+	p.nodes[i].End = int32(end)
+	p.nodes[i].Size = int32(len(p.nodes) - i)
+	return end
+}
+
+func (p *CovenantParser) m244(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 45 {
+		return pos + 1
+	}
+	p.fail(pos, "`match`")
+	return -1
+}
+
+func (p *CovenantParser) m245(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
+		return pos + 1
+	}
+	p.fail(pos, "`{`")
+	return -1
+}
+
+func (p *CovenantParser) m247(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
 func (p *CovenantParser) m246(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m247(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m248(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
@@ -7808,7 +7964,7 @@ func (p *CovenantParser) m246(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m247(pos int) int {
+func (p *CovenantParser) m249(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -7816,24 +7972,24 @@ func (p *CovenantParser) m247(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m248(pos int) int {
+func (p *CovenantParser) m250(pos int) int {
 	q := pos
-	if q = p.m242(q); q < 0 {
+	if q = p.m244(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m243(q); q < 0 {
-		return -1
-	}
-	if q = p.m244(q); q < 0 {
+	if q = p.m245(q); q < 0 {
 		return -1
 	}
 	if q = p.m246(q); q < 0 {
 		return -1
 	}
-	if q = p.m247(q); q < 0 {
+	if q = p.m248(q); q < 0 {
+		return -1
+	}
+	if q = p.m249(q); q < 0 {
 		return -1
 	}
 	return q
@@ -7847,7 +8003,7 @@ func (p *CovenantParser) ruleMatch(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleMatch, Begin: int32(pos)})
-	end := p.m248(pos)
+	end := p.m250(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7858,7 +8014,7 @@ func (p *CovenantParser) ruleMatch(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m249(pos int) int {
+func (p *CovenantParser) m251(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 19 {
 		return pos + 1
 	}
@@ -7866,7 +8022,7 @@ func (p *CovenantParser) m249(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m250(pos int) int {
+func (p *CovenantParser) m252(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7874,18 +8030,18 @@ func (p *CovenantParser) m250(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m251(pos int) int {
+func (p *CovenantParser) m253(pos int) int {
 	q := pos
 	if q = p.rulePattern(q); q < 0 {
 		return -1
 	}
-	if q = p.m249(q); q < 0 {
+	if q = p.m251(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m250(q); q < 0 {
+	if q = p.m252(q); q < 0 {
 		return -1
 	}
 	return q
@@ -7899,7 +8055,7 @@ func (p *CovenantParser) ruleArm(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleArm, Begin: int32(pos)})
-	end := p.m251(pos)
+	end := p.m253(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -7910,7 +8066,7 @@ func (p *CovenantParser) ruleArm(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m252(pos int) int {
+func (p *CovenantParser) m254(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 7 {
 		return pos + 1
 	}
@@ -7918,7 +8074,7 @@ func (p *CovenantParser) m252(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m254(pos int) int {
+func (p *CovenantParser) m256(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 8 {
 		return pos + 1
 	}
@@ -7926,7 +8082,7 @@ func (p *CovenantParser) m254(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m256(pos int) int {
+func (p *CovenantParser) m258(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7934,11 +8090,11 @@ func (p *CovenantParser) m256(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m255(pos int) int {
+func (p *CovenantParser) m257(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m256(q)
+		r := p.m258(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -7952,7 +8108,7 @@ func (p *CovenantParser) m255(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m257(pos int) int {
+func (p *CovenantParser) m259(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -7960,7 +8116,7 @@ func (p *CovenantParser) m257(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m259(pos int) int {
+func (p *CovenantParser) m261(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -7968,7 +8124,7 @@ func (p *CovenantParser) m259(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m261(pos int) int {
+func (p *CovenantParser) m263(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -7976,43 +8132,11 @@ func (p *CovenantParser) m261(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m260(pos int) int {
+func (p *CovenantParser) m262(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m261(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m262(pos int) int {
-	q := pos
-	if q = p.m259(q); q < 0 {
-		return -1
-	}
-	if q = p.m260(q); q < 0 {
-		return -1
-	}
-	if q = p.rulePattern(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m258(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m262(q)
+		r := p.m263(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8027,16 +8151,22 @@ func (p *CovenantParser) m258(pos int) int {
 }
 
 func (p *CovenantParser) m264(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
+	q := pos
+	if q = p.m261(q); q < 0 {
+		return -1
 	}
-	p.fail(pos, "`end of line`")
-	return -1
+	if q = p.m262(q); q < 0 {
+		return -1
+	}
+	if q = p.rulePattern(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *CovenantParser) m263(pos int) int {
+func (p *CovenantParser) m260(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m264(q)
 		if r < 0 {
@@ -8052,63 +8182,19 @@ func (p *CovenantParser) m263(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m265(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
+func (p *CovenantParser) m266(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
-	p.fail(pos, "`)`")
+	p.fail(pos, "`end of line`")
 	return -1
 }
 
-func (p *CovenantParser) m266(pos int) int {
-	q := pos
-	if q = p.rulePattern(q); q < 0 {
-		return -1
-	}
-	if q = p.m258(q); q < 0 {
-		return -1
-	}
-	if q = p.m263(q); q < 0 {
-		return -1
-	}
-	if q = p.m265(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m267(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m257(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m266(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *CovenantParser) m268(pos int) int {
-	q := pos
-	if q = p.m254(q); q < 0 {
-		return -1
-	}
-	if q = p.m255(q); q < 0 {
-		return -1
-	}
-	if q = p.m267(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m253(pos int) int {
+func (p *CovenantParser) m265(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m268(q)
+		r := p.m266(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8122,20 +8208,90 @@ func (p *CovenantParser) m253(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m269(pos int) int {
+func (p *CovenantParser) m267(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
+		return pos + 1
+	}
+	p.fail(pos, "`)`")
+	return -1
+}
+
+func (p *CovenantParser) m268(pos int) int {
 	q := pos
-	if q = p.rulePath(q); q < 0 {
+	if q = p.rulePattern(q); q < 0 {
 		return -1
 	}
-	if q = p.m253(q); q < 0 {
+	if q = p.m260(q); q < 0 {
+		return -1
+	}
+	if q = p.m265(q); q < 0 {
+		return -1
+	}
+	if q = p.m267(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) m270(pos int) int {
+func (p *CovenantParser) m269(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m252(pos); q >= 0 {
+	if q := p.m259(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m268(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *CovenantParser) m270(pos int) int {
+	q := pos
+	if q = p.m256(q); q < 0 {
+		return -1
+	}
+	if q = p.m257(q); q < 0 {
+		return -1
+	}
+	if q = p.m269(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m255(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m270(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m271(pos int) int {
+	q := pos
+	if q = p.rulePath(q); q < 0 {
+		return -1
+	}
+	if q = p.m255(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m272(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m254(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -8151,7 +8307,7 @@ func (p *CovenantParser) m270(pos int) int {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m269(pos); q >= 0 {
+	if q := p.m271(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -8166,7 +8322,7 @@ func (p *CovenantParser) rulePattern(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRulePattern, Begin: int32(pos)})
-	end := p.m270(pos)
+	end := p.m272(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8177,7 +8333,7 @@ func (p *CovenantParser) rulePattern(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m271(pos int) int {
+func (p *CovenantParser) m273(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 41 {
 		return pos + 1
 	}
@@ -8185,7 +8341,7 @@ func (p *CovenantParser) m271(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m273(pos int) int {
+func (p *CovenantParser) m275(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 36 {
 		return pos + 1
 	}
@@ -8193,7 +8349,7 @@ func (p *CovenantParser) m273(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m274(pos int) int {
+func (p *CovenantParser) m276(pos int) int {
 	mark := len(p.nodes)
 	if q := p.ruleIf(pos); q >= 0 {
 		return q
@@ -8206,22 +8362,22 @@ func (p *CovenantParser) m274(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m275(pos int) int {
+func (p *CovenantParser) m277(pos int) int {
 	q := pos
-	if q = p.m273(q); q < 0 {
+	if q = p.m275(q); q < 0 {
 		return -1
 	}
-	if q = p.m274(q); q < 0 {
+	if q = p.m276(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) m272(pos int) int {
+func (p *CovenantParser) m274(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m275(q)
+		r := p.m277(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8235,9 +8391,9 @@ func (p *CovenantParser) m272(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m276(pos int) int {
+func (p *CovenantParser) m278(pos int) int {
 	q := pos
-	if q = p.m271(q); q < 0 {
+	if q = p.m273(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
@@ -8246,7 +8402,7 @@ func (p *CovenantParser) m276(pos int) int {
 	if q = p.ruleBlock(q); q < 0 {
 		return -1
 	}
-	if q = p.m272(q); q < 0 {
+	if q = p.m274(q); q < 0 {
 		return -1
 	}
 	return q
@@ -8260,7 +8416,7 @@ func (p *CovenantParser) ruleIf(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleIf, Begin: int32(pos)})
-	end := p.m276(pos)
+	end := p.m278(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8271,7 +8427,7 @@ func (p *CovenantParser) ruleIf(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m277(pos int) int {
+func (p *CovenantParser) m279(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 8 {
 		return pos + 1
 	}
@@ -8279,7 +8435,7 @@ func (p *CovenantParser) m277(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m279(pos int) int {
+func (p *CovenantParser) m281(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -8287,11 +8443,11 @@ func (p *CovenantParser) m279(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m278(pos int) int {
+func (p *CovenantParser) m280(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m279(q)
+		r := p.m281(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8305,7 +8461,7 @@ func (p *CovenantParser) m278(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m280(pos int) int {
+func (p *CovenantParser) m282(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -8313,7 +8469,7 @@ func (p *CovenantParser) m280(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m282(pos int) int {
+func (p *CovenantParser) m284(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -8321,7 +8477,7 @@ func (p *CovenantParser) m282(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m284(pos int) int {
+func (p *CovenantParser) m286(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -8329,43 +8485,11 @@ func (p *CovenantParser) m284(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m283(pos int) int {
+func (p *CovenantParser) m285(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m284(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m285(pos int) int {
-	q := pos
-	if q = p.m282(q); q < 0 {
-		return -1
-	}
-	if q = p.m283(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleArg(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m281(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m285(q)
+		r := p.m286(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8380,16 +8504,22 @@ func (p *CovenantParser) m281(pos int) int {
 }
 
 func (p *CovenantParser) m287(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
+	q := pos
+	if q = p.m284(q); q < 0 {
+		return -1
 	}
-	p.fail(pos, "`end of line`")
-	return -1
+	if q = p.m285(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleArg(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *CovenantParser) m286(pos int) int {
+func (p *CovenantParser) m283(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m287(q)
 		if r < 0 {
@@ -8405,7 +8535,33 @@ func (p *CovenantParser) m286(pos int) int {
 	return q
 }
 
+func (p *CovenantParser) m289(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
 func (p *CovenantParser) m288(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m289(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m290(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -8413,45 +8569,45 @@ func (p *CovenantParser) m288(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m289(pos int) int {
+func (p *CovenantParser) m291(pos int) int {
 	q := pos
 	if q = p.ruleArg(q); q < 0 {
 		return -1
 	}
-	if q = p.m281(q); q < 0 {
-		return -1
-	}
-	if q = p.m286(q); q < 0 {
+	if q = p.m283(q); q < 0 {
 		return -1
 	}
 	if q = p.m288(q); q < 0 {
 		return -1
 	}
+	if q = p.m290(q); q < 0 {
+		return -1
+	}
 	return q
 }
 
-func (p *CovenantParser) m290(pos int) int {
+func (p *CovenantParser) m292(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m280(pos); q >= 0 {
+	if q := p.m282(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m289(pos); q >= 0 {
+	if q := p.m291(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *CovenantParser) m291(pos int) int {
+func (p *CovenantParser) m293(pos int) int {
 	q := pos
-	if q = p.m277(q); q < 0 {
+	if q = p.m279(q); q < 0 {
 		return -1
 	}
-	if q = p.m278(q); q < 0 {
+	if q = p.m280(q); q < 0 {
 		return -1
 	}
-	if q = p.m290(q); q < 0 {
+	if q = p.m292(q); q < 0 {
 		return -1
 	}
 	return q
@@ -8465,7 +8621,7 @@ func (p *CovenantParser) ruleCall(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleCall, Begin: int32(pos)})
-	end := p.m291(pos)
+	end := p.m293(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8476,7 +8632,7 @@ func (p *CovenantParser) ruleCall(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m292(pos int) int {
+func (p *CovenantParser) m294(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -8487,9 +8643,9 @@ func (p *CovenantParser) m292(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m293(pos int) int {
+func (p *CovenantParser) m295(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m292(pos); q >= 0 {
+	if q := p.m294(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -8508,7 +8664,7 @@ func (p *CovenantParser) ruleArg(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleArg, Begin: int32(pos)})
-	end := p.m293(pos)
+	end := p.m295(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8519,7 +8675,7 @@ func (p *CovenantParser) ruleArg(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m294(pos int) int {
+func (p *CovenantParser) m296(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 17 {
 		return pos + 1
 	}
@@ -8527,9 +8683,9 @@ func (p *CovenantParser) m294(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m295(pos int) int {
+func (p *CovenantParser) m297(pos int) int {
 	q := pos
-	if q = p.m294(q); q < 0 {
+	if q = p.m296(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleName(q); q < 0 {
@@ -8546,7 +8702,7 @@ func (p *CovenantParser) ruleMember(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleMember, Begin: int32(pos)})
-	end := p.m295(pos)
+	end := p.m297(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8557,7 +8713,7 @@ func (p *CovenantParser) ruleMember(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m296(pos int) int {
+func (p *CovenantParser) m298(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 61 {
 		return pos + 1
 	}
@@ -8565,7 +8721,7 @@ func (p *CovenantParser) m296(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m297(pos int) int {
+func (p *CovenantParser) m299(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -8573,7 +8729,7 @@ func (p *CovenantParser) m297(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m299(pos int) int {
+func (p *CovenantParser) m301(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -8581,11 +8737,11 @@ func (p *CovenantParser) m299(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m298(pos int) int {
+func (p *CovenantParser) m300(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m299(q)
+		r := p.m301(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8599,7 +8755,7 @@ func (p *CovenantParser) m298(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m300(pos int) int {
+func (p *CovenantParser) m302(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -8607,7 +8763,7 @@ func (p *CovenantParser) m300(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m302(pos int) int {
+func (p *CovenantParser) m304(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -8615,7 +8771,7 @@ func (p *CovenantParser) m302(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m304(pos int) int {
+func (p *CovenantParser) m306(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -8623,43 +8779,11 @@ func (p *CovenantParser) m304(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m303(pos int) int {
+func (p *CovenantParser) m305(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m304(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m305(pos int) int {
-	q := pos
-	if q = p.m302(q); q < 0 {
-		return -1
-	}
-	if q = p.m303(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleFieldInit(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m301(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m305(q)
+		r := p.m306(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -8674,16 +8798,22 @@ func (p *CovenantParser) m301(pos int) int {
 }
 
 func (p *CovenantParser) m307(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
+	q := pos
+	if q = p.m304(q); q < 0 {
+		return -1
 	}
-	p.fail(pos, "`end of line`")
-	return -1
+	if q = p.m305(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleFieldInit(q); q < 0 {
+		return -1
+	}
+	return q
 }
 
-func (p *CovenantParser) m306(pos int) int {
+func (p *CovenantParser) m303(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m307(q)
 		if r < 0 {
@@ -8699,7 +8829,33 @@ func (p *CovenantParser) m306(pos int) int {
 	return q
 }
 
+func (p *CovenantParser) m309(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
 func (p *CovenantParser) m308(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m309(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m310(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -8707,42 +8863,15 @@ func (p *CovenantParser) m308(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m309(pos int) int {
+func (p *CovenantParser) m311(pos int) int {
 	q := pos
 	if q = p.ruleFieldInit(q); q < 0 {
 		return -1
 	}
-	if q = p.m301(q); q < 0 {
-		return -1
-	}
-	if q = p.m306(q); q < 0 {
+	if q = p.m303(q); q < 0 {
 		return -1
 	}
 	if q = p.m308(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m310(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m300(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m309(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *CovenantParser) m311(pos int) int {
-	q := pos
-	if q = p.m297(q); q < 0 {
-		return -1
-	}
-	if q = p.m298(q); q < 0 {
 		return -1
 	}
 	if q = p.m310(q); q < 0 {
@@ -8752,11 +8881,38 @@ func (p *CovenantParser) m311(pos int) int {
 }
 
 func (p *CovenantParser) m312(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m302(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m311(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *CovenantParser) m313(pos int) int {
 	q := pos
-	if q = p.m296(q); q < 0 {
+	if q = p.m299(q); q < 0 {
 		return -1
 	}
-	if q = p.m311(q); q < 0 {
+	if q = p.m300(q); q < 0 {
+		return -1
+	}
+	if q = p.m312(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m314(pos int) int {
+	q := pos
+	if q = p.m298(q); q < 0 {
+		return -1
+	}
+	if q = p.m313(q); q < 0 {
 		return -1
 	}
 	return q
@@ -8770,7 +8926,7 @@ func (p *CovenantParser) ruleUpdate(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleUpdate, Begin: int32(pos)})
-	end := p.m312(pos)
+	end := p.m314(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8781,7 +8937,7 @@ func (p *CovenantParser) ruleUpdate(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m313(pos int) int {
+func (p *CovenantParser) m315(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -8800,7 +8956,7 @@ func (p *CovenantParser) ruleFieldInit(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleFieldInit, Begin: int32(pos)})
-	end := p.m313(pos)
+	end := p.m315(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8811,7 +8967,45 @@ func (p *CovenantParser) ruleFieldInit(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m314(pos int) int {
+func (p *CovenantParser) m316(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 33 {
+		return pos + 1
+	}
+	p.fail(pos, "`as`")
+	return -1
+}
+
+func (p *CovenantParser) m317(pos int) int {
+	q := pos
+	if q = p.m316(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleDynType(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) ruleCast(pos int) int {
+	if p.depth >= p.maxDepth {
+		p.tooDeep = true
+		return -1
+	}
+	p.depth++
+	i := len(p.nodes)
+	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleCast, Begin: int32(pos)})
+	end := p.m317(pos)
+	p.depth--
+	if end < 0 {
+		p.nodes = p.nodes[:i]
+		return -1
+	}
+	p.nodes[i].End = int32(end)
+	p.nodes[i].Size = int32(len(p.nodes) - i)
+	return end
+}
+
+func (p *CovenantParser) m318(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 29 {
 		return pos + 1
 	}
@@ -8819,7 +9013,7 @@ func (p *CovenantParser) m314(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m315(pos int) int {
+func (p *CovenantParser) m319(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 30 {
 		return pos + 1
 	}
@@ -8827,7 +9021,7 @@ func (p *CovenantParser) m315(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m316(pos int) int {
+func (p *CovenantParser) m320(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 31 {
 		return pos + 1
 	}
@@ -8835,17 +9029,17 @@ func (p *CovenantParser) m316(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m317(pos int) int {
+func (p *CovenantParser) m321(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m314(pos); q >= 0 {
+	if q := p.m318(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m315(pos); q >= 0 {
+	if q := p.m319(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m316(pos); q >= 0 {
+	if q := p.m320(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -8860,7 +9054,7 @@ func (p *CovenantParser) ruleMulOp(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleMulOp, Begin: int32(pos)})
-	end := p.m317(pos)
+	end := p.m321(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8871,7 +9065,7 @@ func (p *CovenantParser) ruleMulOp(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m318(pos int) int {
+func (p *CovenantParser) m322(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 27 {
 		return pos + 1
 	}
@@ -8879,7 +9073,7 @@ func (p *CovenantParser) m318(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m319(pos int) int {
+func (p *CovenantParser) m323(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 28 {
 		return pos + 1
 	}
@@ -8887,13 +9081,13 @@ func (p *CovenantParser) m319(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m320(pos int) int {
+func (p *CovenantParser) m324(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m318(pos); q >= 0 {
+	if q := p.m322(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m319(pos); q >= 0 {
+	if q := p.m323(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -8908,7 +9102,7 @@ func (p *CovenantParser) ruleAddOp(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleAddOp, Begin: int32(pos)})
-	end := p.m320(pos)
+	end := p.m324(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -8919,7 +9113,7 @@ func (p *CovenantParser) ruleAddOp(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m321(pos int) int {
+func (p *CovenantParser) m325(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 21 {
 		return pos + 1
 	}
@@ -8927,7 +9121,7 @@ func (p *CovenantParser) m321(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m322(pos int) int {
+func (p *CovenantParser) m326(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 22 {
 		return pos + 1
 	}
@@ -8935,7 +9129,7 @@ func (p *CovenantParser) m322(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m323(pos int) int {
+func (p *CovenantParser) m327(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 24 {
 		return pos + 1
 	}
@@ -8943,7 +9137,7 @@ func (p *CovenantParser) m323(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m324(pos int) int {
+func (p *CovenantParser) m328(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 26 {
 		return pos + 1
 	}
@@ -8951,7 +9145,7 @@ func (p *CovenantParser) m324(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m325(pos int) int {
+func (p *CovenantParser) m329(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 23 {
 		return pos + 1
 	}
@@ -8959,7 +9153,7 @@ func (p *CovenantParser) m325(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m326(pos int) int {
+func (p *CovenantParser) m330(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 25 {
 		return pos + 1
 	}
@@ -8967,29 +9161,29 @@ func (p *CovenantParser) m326(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m327(pos int) int {
+func (p *CovenantParser) m331(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m321(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m322(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m323(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m324(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
 	if q := p.m325(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	if q := p.m326(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m327(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m328(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m329(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m330(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -9004,7 +9198,7 @@ func (p *CovenantParser) ruleCmpOp(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleCmpOp, Begin: int32(pos)})
-	end := p.m327(pos)
+	end := p.m331(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9015,7 +9209,7 @@ func (p *CovenantParser) ruleCmpOp(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m328(pos int) int {
+func (p *CovenantParser) m332(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 38 {
 		return pos + 1
 	}
@@ -9023,7 +9217,7 @@ func (p *CovenantParser) m328(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m329(pos int) int {
+func (p *CovenantParser) m333(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9031,15 +9225,15 @@ func (p *CovenantParser) m329(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m330(pos int) int {
+func (p *CovenantParser) m334(pos int) int {
 	q := pos
-	if q = p.m328(q); q < 0 {
+	if q = p.m332(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m329(q); q < 0 {
+	if q = p.m333(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9053,7 +9247,7 @@ func (p *CovenantParser) ruleExample(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleExample, Begin: int32(pos)})
-	end := p.m330(pos)
+	end := p.m334(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9064,7 +9258,7 @@ func (p *CovenantParser) ruleExample(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m331(pos int) int {
+func (p *CovenantParser) m335(pos int) int {
 	mark := len(p.nodes)
 	if q := p.ruleLet(pos); q >= 0 {
 		return q
@@ -9101,7 +9295,7 @@ func (p *CovenantParser) ruleStmt(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleStmt, Begin: int32(pos)})
-	end := p.m331(pos)
+	end := p.m335(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9112,7 +9306,7 @@ func (p *CovenantParser) ruleStmt(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m332(pos int) int {
+func (p *CovenantParser) m336(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 44 {
 		return pos + 1
 	}
@@ -9120,7 +9314,7 @@ func (p *CovenantParser) m332(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m333(pos int) int {
+func (p *CovenantParser) m337(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -9131,9 +9325,9 @@ func (p *CovenantParser) m333(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m334(pos int) int {
+func (p *CovenantParser) m338(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m333(pos); q >= 0 {
+	if q := p.m337(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -9144,7 +9338,7 @@ func (p *CovenantParser) m334(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m335(pos int) int {
+func (p *CovenantParser) m339(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
 		return pos + 1
 	}
@@ -9152,7 +9346,7 @@ func (p *CovenantParser) m335(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m336(pos int) int {
+func (p *CovenantParser) m340(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9160,21 +9354,21 @@ func (p *CovenantParser) m336(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m337(pos int) int {
+func (p *CovenantParser) m341(pos int) int {
 	q := pos
-	if q = p.m332(q); q < 0 {
+	if q = p.m336(q); q < 0 {
 		return -1
 	}
-	if q = p.m334(q); q < 0 {
+	if q = p.m338(q); q < 0 {
 		return -1
 	}
-	if q = p.m335(q); q < 0 {
+	if q = p.m339(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m336(q); q < 0 {
+	if q = p.m340(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9188,7 +9382,7 @@ func (p *CovenantParser) ruleLet(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleLet, Begin: int32(pos)})
-	end := p.m337(pos)
+	end := p.m341(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9199,7 +9393,7 @@ func (p *CovenantParser) ruleLet(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m338(pos int) int {
+func (p *CovenantParser) m342(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 59 {
 		return pos + 1
 	}
@@ -9207,7 +9401,7 @@ func (p *CovenantParser) m338(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m339(pos int) int {
+func (p *CovenantParser) m343(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -9218,9 +9412,9 @@ func (p *CovenantParser) m339(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m340(pos int) int {
+func (p *CovenantParser) m344(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m339(pos); q >= 0 {
+	if q := p.m343(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
@@ -9231,7 +9425,7 @@ func (p *CovenantParser) m340(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m341(pos int) int {
+func (p *CovenantParser) m345(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
 		return pos + 1
 	}
@@ -9239,7 +9433,7 @@ func (p *CovenantParser) m341(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m342(pos int) int {
+func (p *CovenantParser) m346(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9247,21 +9441,21 @@ func (p *CovenantParser) m342(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m343(pos int) int {
+func (p *CovenantParser) m347(pos int) int {
 	q := pos
-	if q = p.m338(q); q < 0 {
+	if q = p.m342(q); q < 0 {
 		return -1
 	}
-	if q = p.m340(q); q < 0 {
+	if q = p.m344(q); q < 0 {
 		return -1
 	}
-	if q = p.m341(q); q < 0 {
+	if q = p.m345(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m342(q); q < 0 {
+	if q = p.m346(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9275,7 +9469,7 @@ func (p *CovenantParser) ruleVar(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleVar, Begin: int32(pos)})
-	end := p.m343(pos)
+	end := p.m347(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9286,7 +9480,7 @@ func (p *CovenantParser) ruleVar(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m344(pos int) int {
+func (p *CovenantParser) m348(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 50 {
 		return pos + 1
 	}
@@ -9294,7 +9488,7 @@ func (p *CovenantParser) m344(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m345(pos int) int {
+func (p *CovenantParser) m349(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -9312,7 +9506,7 @@ func (p *CovenantParser) m345(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m346(pos int) int {
+func (p *CovenantParser) m350(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9320,15 +9514,15 @@ func (p *CovenantParser) m346(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m347(pos int) int {
+func (p *CovenantParser) m351(pos int) int {
 	q := pos
-	if q = p.m344(q); q < 0 {
+	if q = p.m348(q); q < 0 {
 		return -1
 	}
-	if q = p.m345(q); q < 0 {
+	if q = p.m349(q); q < 0 {
 		return -1
 	}
-	if q = p.m346(q); q < 0 {
+	if q = p.m350(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9342,7 +9536,7 @@ func (p *CovenantParser) ruleReturn(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleReturn, Begin: int32(pos)})
-	end := p.m347(pos)
+	end := p.m351(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9353,7 +9547,7 @@ func (p *CovenantParser) ruleReturn(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m348(pos int) int {
+func (p *CovenantParser) m352(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 40 {
 		return pos + 1
 	}
@@ -9361,7 +9555,7 @@ func (p *CovenantParser) m348(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m350(pos int) int {
+func (p *CovenantParser) m354(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -9369,9 +9563,9 @@ func (p *CovenantParser) m350(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m351(pos int) int {
+func (p *CovenantParser) m355(pos int) int {
 	q := pos
-	if q = p.m350(q); q < 0 {
+	if q = p.m354(q); q < 0 {
 		return -1
 	}
 	if q = p.rulePattern(q); q < 0 {
@@ -9380,11 +9574,11 @@ func (p *CovenantParser) m351(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m349(pos int) int {
+func (p *CovenantParser) m353(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m351(q)
+		r := p.m355(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -9398,7 +9592,7 @@ func (p *CovenantParser) m349(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m352(pos int) int {
+func (p *CovenantParser) m356(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 43 {
 		return pos + 1
 	}
@@ -9406,7 +9600,7 @@ func (p *CovenantParser) m352(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m353(pos int) int {
+func (p *CovenantParser) m357(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9414,18 +9608,18 @@ func (p *CovenantParser) m353(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m354(pos int) int {
+func (p *CovenantParser) m358(pos int) int {
 	q := pos
-	if q = p.m348(q); q < 0 {
+	if q = p.m352(q); q < 0 {
 		return -1
 	}
 	if q = p.rulePattern(q); q < 0 {
 		return -1
 	}
-	if q = p.m349(q); q < 0 {
+	if q = p.m353(q); q < 0 {
 		return -1
 	}
-	if q = p.m352(q); q < 0 {
+	if q = p.m356(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
@@ -9434,7 +9628,7 @@ func (p *CovenantParser) m354(pos int) int {
 	if q = p.ruleBlock(q); q < 0 {
 		return -1
 	}
-	if q = p.m353(q); q < 0 {
+	if q = p.m357(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9448,7 +9642,7 @@ func (p *CovenantParser) ruleFor(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleFor, Begin: int32(pos)})
-	end := p.m354(pos)
+	end := p.m358(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9459,7 +9653,7 @@ func (p *CovenantParser) ruleFor(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m355(pos int) int {
+func (p *CovenantParser) m359(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 60 {
 		return pos + 1
 	}
@@ -9467,7 +9661,7 @@ func (p *CovenantParser) m355(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m356(pos int) int {
+func (p *CovenantParser) m360(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9475,9 +9669,9 @@ func (p *CovenantParser) m356(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m357(pos int) int {
+func (p *CovenantParser) m361(pos int) int {
 	q := pos
-	if q = p.m355(q); q < 0 {
+	if q = p.m359(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
@@ -9486,7 +9680,7 @@ func (p *CovenantParser) m357(pos int) int {
 	if q = p.ruleBlock(q); q < 0 {
 		return -1
 	}
-	if q = p.m356(q); q < 0 {
+	if q = p.m360(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9500,7 +9694,7 @@ func (p *CovenantParser) ruleWhile(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleWhile, Begin: int32(pos)})
-	end := p.m357(pos)
+	end := p.m361(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9511,7 +9705,7 @@ func (p *CovenantParser) ruleWhile(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m358(pos int) int {
+func (p *CovenantParser) m362(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -9529,7 +9723,7 @@ func (p *CovenantParser) m358(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m359(pos int) int {
+func (p *CovenantParser) m363(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9537,15 +9731,15 @@ func (p *CovenantParser) m359(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m360(pos int) int {
+func (p *CovenantParser) m364(pos int) int {
 	q := pos
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m358(q); q < 0 {
+	if q = p.m362(q); q < 0 {
 		return -1
 	}
-	if q = p.m359(q); q < 0 {
+	if q = p.m363(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9559,7 +9753,7 @@ func (p *CovenantParser) ruleExprStmt(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleExprStmt, Begin: int32(pos)})
-	end := p.m360(pos)
+	end := p.m364(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9570,7 +9764,7 @@ func (p *CovenantParser) ruleExprStmt(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m361(pos int) int {
+func (p *CovenantParser) m365(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
 		return pos + 1
 	}
@@ -9578,9 +9772,9 @@ func (p *CovenantParser) m361(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m362(pos int) int {
+func (p *CovenantParser) m366(pos int) int {
 	q := pos
-	if q = p.m361(q); q < 0 {
+	if q = p.m365(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
@@ -9597,7 +9791,7 @@ func (p *CovenantParser) ruleAssign(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleAssign, Begin: int32(pos)})
-	end := p.m362(pos)
+	end := p.m366(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9608,7 +9802,7 @@ func (p *CovenantParser) ruleAssign(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m363(pos int) int {
+func (p *CovenantParser) m367(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 52 {
 		return pos + 1
 	}
@@ -9616,7 +9810,7 @@ func (p *CovenantParser) m363(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m364(pos int) int {
+func (p *CovenantParser) m368(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -9634,7 +9828,7 @@ func (p *CovenantParser) m364(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m365(pos int) int {
+func (p *CovenantParser) m369(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -9642,7 +9836,7 @@ func (p *CovenantParser) m365(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m367(pos int) int {
+func (p *CovenantParser) m371(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9650,11 +9844,11 @@ func (p *CovenantParser) m367(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m366(pos int) int {
+func (p *CovenantParser) m370(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m367(q)
+		r := p.m371(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -9668,7 +9862,7 @@ func (p *CovenantParser) m366(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m368(pos int) int {
+func (p *CovenantParser) m372(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -9676,7 +9870,7 @@ func (p *CovenantParser) m368(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m370(pos int) int {
+func (p *CovenantParser) m374(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -9684,7 +9878,7 @@ func (p *CovenantParser) m370(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m372(pos int) int {
+func (p *CovenantParser) m376(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9692,11 +9886,11 @@ func (p *CovenantParser) m372(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m371(pos int) int {
+func (p *CovenantParser) m375(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m372(q)
+		r := p.m376(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -9710,12 +9904,12 @@ func (p *CovenantParser) m371(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m373(pos int) int {
+func (p *CovenantParser) m377(pos int) int {
 	q := pos
-	if q = p.m370(q); q < 0 {
+	if q = p.m374(q); q < 0 {
 		return -1
 	}
-	if q = p.m371(q); q < 0 {
+	if q = p.m375(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleField(q); q < 0 {
@@ -9724,11 +9918,11 @@ func (p *CovenantParser) m373(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m369(pos int) int {
+func (p *CovenantParser) m373(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m373(q)
+		r := p.m377(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -9742,7 +9936,7 @@ func (p *CovenantParser) m369(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m375(pos int) int {
+func (p *CovenantParser) m379(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9750,11 +9944,11 @@ func (p *CovenantParser) m375(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m374(pos int) int {
+func (p *CovenantParser) m378(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m375(q)
+		r := p.m379(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -9768,7 +9962,7 @@ func (p *CovenantParser) m374(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m376(pos int) int {
+func (p *CovenantParser) m380(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -9776,51 +9970,51 @@ func (p *CovenantParser) m376(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m377(pos int) int {
+func (p *CovenantParser) m381(pos int) int {
 	q := pos
 	if q = p.ruleField(q); q < 0 {
 		return -1
 	}
-	if q = p.m369(q); q < 0 {
+	if q = p.m373(q); q < 0 {
 		return -1
 	}
-	if q = p.m374(q); q < 0 {
+	if q = p.m378(q); q < 0 {
 		return -1
 	}
-	if q = p.m376(q); q < 0 {
+	if q = p.m380(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) m378(pos int) int {
+func (p *CovenantParser) m382(pos int) int {
 	mark := len(p.nodes)
-	if q := p.m368(pos); q >= 0 {
+	if q := p.m372(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
-	if q := p.m377(pos); q >= 0 {
+	if q := p.m381(pos); q >= 0 {
 		return q
 	}
 	p.nodes = p.nodes[:mark]
 	return -1
 }
 
-func (p *CovenantParser) m379(pos int) int {
+func (p *CovenantParser) m383(pos int) int {
 	q := pos
-	if q = p.m365(q); q < 0 {
+	if q = p.m369(q); q < 0 {
 		return -1
 	}
-	if q = p.m366(q); q < 0 {
+	if q = p.m370(q); q < 0 {
 		return -1
 	}
-	if q = p.m378(q); q < 0 {
+	if q = p.m382(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) m380(pos int) int {
+func (p *CovenantParser) m384(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9828,21 +10022,21 @@ func (p *CovenantParser) m380(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m381(pos int) int {
+func (p *CovenantParser) m385(pos int) int {
 	q := pos
-	if q = p.m363(q); q < 0 {
+	if q = p.m367(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleName(q); q < 0 {
 		return -1
 	}
-	if q = p.m364(q); q < 0 {
+	if q = p.m368(q); q < 0 {
 		return -1
 	}
-	if q = p.m379(q); q < 0 {
+	if q = p.m383(q); q < 0 {
 		return -1
 	}
-	if q = p.m380(q); q < 0 {
+	if q = p.m384(q); q < 0 {
 		return -1
 	}
 	return q
@@ -9856,7 +10050,7 @@ func (p *CovenantParser) ruleStruct(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleStruct, Begin: int32(pos)})
-	end := p.m381(pos)
+	end := p.m385(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9867,7 +10061,7 @@ func (p *CovenantParser) ruleStruct(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m382(pos int) int {
+func (p *CovenantParser) m386(pos int) int {
 	q := pos
 	if q = p.ruleLabel(q); q < 0 {
 		return -1
@@ -9886,7 +10080,7 @@ func (p *CovenantParser) ruleField(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleField, Begin: int32(pos)})
-	end := p.m382(pos)
+	end := p.m386(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -9897,7 +10091,7 @@ func (p *CovenantParser) ruleField(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m383(pos int) int {
+func (p *CovenantParser) m387(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 37 {
 		return pos + 1
 	}
@@ -9905,7 +10099,7 @@ func (p *CovenantParser) m383(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m384(pos int) int {
+func (p *CovenantParser) m388(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -9923,7 +10117,7 @@ func (p *CovenantParser) m384(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m385(pos int) int {
+func (p *CovenantParser) m389(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -9931,7 +10125,7 @@ func (p *CovenantParser) m385(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m387(pos int) int {
+func (p *CovenantParser) m391(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9939,11 +10133,11 @@ func (p *CovenantParser) m387(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m386(pos int) int {
+func (p *CovenantParser) m390(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m387(q)
+		r := p.m391(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -9957,7 +10151,7 @@ func (p *CovenantParser) m386(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m388(pos int) int {
+func (p *CovenantParser) m392(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
@@ -9978,7 +10172,7 @@ func (p *CovenantParser) m388(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m389(pos int) int {
+func (p *CovenantParser) m393(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -9986,7 +10180,7 @@ func (p *CovenantParser) m389(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m390(pos int) int {
+func (p *CovenantParser) m394(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -9994,21 +10188,12 @@ func (p *CovenantParser) m390(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m391(pos int) int {
+func (p *CovenantParser) m395(pos int) int {
 	q := pos
-	if q = p.m383(q); q < 0 {
+	if q = p.m387(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleName(q); q < 0 {
-		return -1
-	}
-	if q = p.m384(q); q < 0 {
-		return -1
-	}
-	if q = p.m385(q); q < 0 {
-		return -1
-	}
-	if q = p.m386(q); q < 0 {
 		return -1
 	}
 	if q = p.m388(q); q < 0 {
@@ -10018,6 +10203,15 @@ func (p *CovenantParser) m391(pos int) int {
 		return -1
 	}
 	if q = p.m390(q); q < 0 {
+		return -1
+	}
+	if q = p.m392(q); q < 0 {
+		return -1
+	}
+	if q = p.m393(q); q < 0 {
+		return -1
+	}
+	if q = p.m394(q); q < 0 {
 		return -1
 	}
 	return q
@@ -10031,7 +10225,7 @@ func (p *CovenantParser) ruleEnum(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleEnum, Begin: int32(pos)})
-	end := p.m391(pos)
+	end := p.m395(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -10042,7 +10236,7 @@ func (p *CovenantParser) ruleEnum(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m393(pos int) int {
+func (p *CovenantParser) m397(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 8 {
 		return pos + 1
 	}
@@ -10050,7 +10244,7 @@ func (p *CovenantParser) m393(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m395(pos int) int {
+func (p *CovenantParser) m399(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10058,11 +10252,11 @@ func (p *CovenantParser) m395(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m394(pos int) int {
+func (p *CovenantParser) m398(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m395(q)
+		r := p.m399(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10076,7 +10270,7 @@ func (p *CovenantParser) m394(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m396(pos int) int {
+func (p *CovenantParser) m400(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -10084,7 +10278,7 @@ func (p *CovenantParser) m396(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m398(pos int) int {
+func (p *CovenantParser) m402(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -10092,7 +10286,7 @@ func (p *CovenantParser) m398(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m400(pos int) int {
+func (p *CovenantParser) m404(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10100,11 +10294,11 @@ func (p *CovenantParser) m400(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m399(pos int) int {
+func (p *CovenantParser) m403(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m400(q)
+		r := p.m404(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10114,29 +10308,29 @@ func (p *CovenantParser) m399(pos int) int {
 			break
 		}
 		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m405(pos int) int {
+	q := pos
+	if q = p.m402(q); q < 0 {
+		return -1
+	}
+	if q = p.m403(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleField(q); q < 0 {
+		return -1
 	}
 	return q
 }
 
 func (p *CovenantParser) m401(pos int) int {
-	q := pos
-	if q = p.m398(q); q < 0 {
-		return -1
-	}
-	if q = p.m399(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleField(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m397(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m401(q)
+		r := p.m405(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10150,7 +10344,7 @@ func (p *CovenantParser) m397(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m403(pos int) int {
+func (p *CovenantParser) m407(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10158,77 +10352,7 @@ func (p *CovenantParser) m403(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m402(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m403(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m404(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
-		return pos + 1
-	}
-	p.fail(pos, "`)`")
-	return -1
-}
-
-func (p *CovenantParser) m405(pos int) int {
-	q := pos
-	if q = p.ruleField(q); q < 0 {
-		return -1
-	}
-	if q = p.m397(q); q < 0 {
-		return -1
-	}
-	if q = p.m402(q); q < 0 {
-		return -1
-	}
-	if q = p.m404(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
 func (p *CovenantParser) m406(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m396(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m405(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *CovenantParser) m407(pos int) int {
-	q := pos
-	if q = p.m393(q); q < 0 {
-		return -1
-	}
-	if q = p.m394(q); q < 0 {
-		return -1
-	}
-	if q = p.m406(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m392(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -10247,6 +10371,76 @@ func (p *CovenantParser) m392(pos int) int {
 }
 
 func (p *CovenantParser) m408(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
+		return pos + 1
+	}
+	p.fail(pos, "`)`")
+	return -1
+}
+
+func (p *CovenantParser) m409(pos int) int {
+	q := pos
+	if q = p.ruleField(q); q < 0 {
+		return -1
+	}
+	if q = p.m401(q); q < 0 {
+		return -1
+	}
+	if q = p.m406(q); q < 0 {
+		return -1
+	}
+	if q = p.m408(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m410(pos int) int {
+	mark := len(p.nodes)
+	if q := p.m400(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	if q := p.m409(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
+}
+
+func (p *CovenantParser) m411(pos int) int {
+	q := pos
+	if q = p.m397(q); q < 0 {
+		return -1
+	}
+	if q = p.m398(q); q < 0 {
+		return -1
+	}
+	if q = p.m410(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m396(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m411(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m412(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10254,15 +10448,15 @@ func (p *CovenantParser) m408(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m409(pos int) int {
+func (p *CovenantParser) m413(pos int) int {
 	q := pos
 	if q = p.ruleName(q); q < 0 {
 		return -1
 	}
-	if q = p.m392(q); q < 0 {
+	if q = p.m396(q); q < 0 {
 		return -1
 	}
-	if q = p.m408(q); q < 0 {
+	if q = p.m412(q); q < 0 {
 		return -1
 	}
 	return q
@@ -10276,7 +10470,7 @@ func (p *CovenantParser) ruleVariant(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleVariant, Begin: int32(pos)})
-	end := p.m409(pos)
+	end := p.m413(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -10287,7 +10481,7 @@ func (p *CovenantParser) ruleVariant(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m410(pos int) int {
+func (p *CovenantParser) m414(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 53 {
 		return pos + 1
 	}
@@ -10295,7 +10489,7 @@ func (p *CovenantParser) m410(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m411(pos int) int {
+func (p *CovenantParser) m415(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -10313,7 +10507,7 @@ func (p *CovenantParser) m411(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m412(pos int) int {
+func (p *CovenantParser) m416(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -10321,7 +10515,7 @@ func (p *CovenantParser) m412(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m414(pos int) int {
+func (p *CovenantParser) m418(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10329,11 +10523,11 @@ func (p *CovenantParser) m414(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m413(pos int) int {
+func (p *CovenantParser) m417(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m414(q)
+		r := p.m418(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10347,7 +10541,7 @@ func (p *CovenantParser) m413(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m415(pos int) int {
+func (p *CovenantParser) m419(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
@@ -10365,7 +10559,7 @@ func (p *CovenantParser) m415(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m416(pos int) int {
+func (p *CovenantParser) m420(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
@@ -10373,7 +10567,7 @@ func (p *CovenantParser) m416(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m417(pos int) int {
+func (p *CovenantParser) m421(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10381,21 +10575,12 @@ func (p *CovenantParser) m417(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m418(pos int) int {
+func (p *CovenantParser) m422(pos int) int {
 	q := pos
-	if q = p.m410(q); q < 0 {
+	if q = p.m414(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleName(q); q < 0 {
-		return -1
-	}
-	if q = p.m411(q); q < 0 {
-		return -1
-	}
-	if q = p.m412(q); q < 0 {
-		return -1
-	}
-	if q = p.m413(q); q < 0 {
 		return -1
 	}
 	if q = p.m415(q); q < 0 {
@@ -10405,6 +10590,15 @@ func (p *CovenantParser) m418(pos int) int {
 		return -1
 	}
 	if q = p.m417(q); q < 0 {
+		return -1
+	}
+	if q = p.m419(q); q < 0 {
+		return -1
+	}
+	if q = p.m420(q); q < 0 {
+		return -1
+	}
+	if q = p.m421(q); q < 0 {
 		return -1
 	}
 	return q
@@ -10418,7 +10612,7 @@ func (p *CovenantParser) ruleTrait(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleTrait, Begin: int32(pos)})
-	end := p.m418(pos)
+	end := p.m422(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -10429,7 +10623,7 @@ func (p *CovenantParser) ruleTrait(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m419(pos int) int {
+func (p *CovenantParser) m423(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 39 {
 		return pos + 1
 	}
@@ -10437,7 +10631,7 @@ func (p *CovenantParser) m419(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m420(pos int) int {
+func (p *CovenantParser) m424(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -10455,7 +10649,7 @@ func (p *CovenantParser) m420(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m421(pos int) int {
+func (p *CovenantParser) m425(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 8 {
 		return pos + 1
 	}
@@ -10463,7 +10657,7 @@ func (p *CovenantParser) m421(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m423(pos int) int {
+func (p *CovenantParser) m427(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10471,11 +10665,11 @@ func (p *CovenantParser) m423(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m422(pos int) int {
+func (p *CovenantParser) m426(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m423(q)
+		r := p.m427(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10489,7 +10683,7 @@ func (p *CovenantParser) m422(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m424(pos int) int {
+func (p *CovenantParser) m428(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -10497,7 +10691,7 @@ func (p *CovenantParser) m424(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m426(pos int) int {
+func (p *CovenantParser) m430(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 14 {
 		return pos + 1
 	}
@@ -10505,7 +10699,7 @@ func (p *CovenantParser) m426(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m428(pos int) int {
+func (p *CovenantParser) m432(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10513,11 +10707,11 @@ func (p *CovenantParser) m428(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m427(pos int) int {
+func (p *CovenantParser) m431(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m428(q)
+		r := p.m432(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10531,12 +10725,12 @@ func (p *CovenantParser) m427(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m429(pos int) int {
+func (p *CovenantParser) m433(pos int) int {
 	q := pos
-	if q = p.m426(q); q < 0 {
+	if q = p.m430(q); q < 0 {
 		return -1
 	}
-	if q = p.m427(q); q < 0 {
+	if q = p.m431(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleParam(q); q < 0 {
@@ -10545,11 +10739,11 @@ func (p *CovenantParser) m429(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m425(pos int) int {
+func (p *CovenantParser) m429(pos int) int {
 	q, n := pos, 0
 	for {
 		mark := len(p.nodes)
-		r := p.m429(q)
+		r := p.m433(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10563,7 +10757,7 @@ func (p *CovenantParser) m425(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m431(pos int) int {
+func (p *CovenantParser) m435(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10571,11 +10765,11 @@ func (p *CovenantParser) m431(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m430(pos int) int {
+func (p *CovenantParser) m434(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m431(q)
+		r := p.m435(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10589,7 +10783,7 @@ func (p *CovenantParser) m430(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m432(pos int) int {
+func (p *CovenantParser) m436(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 9 {
 		return pos + 1
 	}
@@ -10597,130 +10791,42 @@ func (p *CovenantParser) m432(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m433(pos int) int {
+func (p *CovenantParser) m437(pos int) int {
 	q := pos
 	if q = p.ruleParam(q); q < 0 {
 		return -1
 	}
-	if q = p.m425(q); q < 0 {
-		return -1
-	}
-	if q = p.m430(q); q < 0 {
-		return -1
-	}
-	if q = p.m432(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m434(pos int) int {
-	mark := len(p.nodes)
-	if q := p.m424(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	if q := p.m433(pos); q >= 0 {
-		return q
-	}
-	p.nodes = p.nodes[:mark]
-	return -1
-}
-
-func (p *CovenantParser) m435(pos int) int {
-	q := pos
-	if q = p.m421(q); q < 0 {
-		return -1
-	}
-	if q = p.m422(q); q < 0 {
+	if q = p.m429(q); q < 0 {
 		return -1
 	}
 	if q = p.m434(q); q < 0 {
 		return -1
 	}
-	return q
-}
-
-func (p *CovenantParser) m437(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 61 {
-		return pos + 1
-	}
-	p.fail(pos, "`with`")
-	return -1
-}
-
-func (p *CovenantParser) m439(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 27 {
-		return pos + 1
-	}
-	p.fail(pos, "`+`")
-	return -1
-}
-
-func (p *CovenantParser) m441(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
-	}
-	p.fail(pos, "`end of line`")
-	return -1
-}
-
-func (p *CovenantParser) m440(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m441(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m442(pos int) int {
-	q := pos
-	if q = p.m439(q); q < 0 {
-		return -1
-	}
-	if q = p.m440(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleEffect(q); q < 0 {
+	if q = p.m436(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
 func (p *CovenantParser) m438(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m442(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
+	mark := len(p.nodes)
+	if q := p.m428(pos); q >= 0 {
+		return q
 	}
-	return q
+	p.nodes = p.nodes[:mark]
+	if q := p.m437(pos); q >= 0 {
+		return q
+	}
+	p.nodes = p.nodes[:mark]
+	return -1
 }
 
-func (p *CovenantParser) m443(pos int) int {
+func (p *CovenantParser) m439(pos int) int {
 	q := pos
-	if q = p.m437(q); q < 0 {
+	if q = p.m425(q); q < 0 {
 		return -1
 	}
-	if q = p.ruleEffect(q); q < 0 {
+	if q = p.m426(q); q < 0 {
 		return -1
 	}
 	if q = p.m438(q); q < 0 {
@@ -10729,11 +10835,35 @@ func (p *CovenantParser) m443(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m436(pos int) int {
+func (p *CovenantParser) m441(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 61 {
+		return pos + 1
+	}
+	p.fail(pos, "`with`")
+	return -1
+}
+
+func (p *CovenantParser) m443(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 27 {
+		return pos + 1
+	}
+	p.fail(pos, "`+`")
+	return -1
+}
+
+func (p *CovenantParser) m445(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
+func (p *CovenantParser) m444(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m443(q)
+		r := p.m445(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10747,28 +10877,23 @@ func (p *CovenantParser) m436(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m445(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 18 {
-		return pos + 1
-	}
-	p.fail(pos, "`->`")
-	return -1
-}
-
 func (p *CovenantParser) m446(pos int) int {
 	q := pos
-	if q = p.m445(q); q < 0 {
+	if q = p.m443(q); q < 0 {
 		return -1
 	}
-	if q = p.ruleType(q); q < 0 {
+	if q = p.m444(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleEffect(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) m444(pos int) int {
+func (p *CovenantParser) m442(pos int) int {
 	q, n := pos, 0
-	for n < 1 {
+	for {
 		mark := len(p.nodes)
 		r := p.m446(q)
 		if r < 0 {
@@ -10786,28 +10911,97 @@ func (p *CovenantParser) m444(pos int) int {
 
 func (p *CovenantParser) m447(pos int) int {
 	q := pos
-	if q = p.m419(q); q < 0 {
+	if q = p.m441(q); q < 0 {
 		return -1
 	}
-	if q = p.ruleName(q); q < 0 {
+	if q = p.ruleEffect(q); q < 0 {
 		return -1
 	}
-	if q = p.m420(q); q < 0 {
+	if q = p.m442(q); q < 0 {
 		return -1
 	}
-	if q = p.m435(q); q < 0 {
+	return q
+}
+
+func (p *CovenantParser) m440(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m447(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m449(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 18 {
+		return pos + 1
+	}
+	p.fail(pos, "`->`")
+	return -1
+}
+
+func (p *CovenantParser) m450(pos int) int {
+	q := pos
+	if q = p.m449(q); q < 0 {
 		return -1
 	}
-	if q = p.m436(q); q < 0 {
-		return -1
-	}
-	if q = p.m444(q); q < 0 {
+	if q = p.ruleType(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
 func (p *CovenantParser) m448(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m450(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m451(pos int) int {
+	q := pos
+	if q = p.m423(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleName(q); q < 0 {
+		return -1
+	}
+	if q = p.m424(q); q < 0 {
+		return -1
+	}
+	if q = p.m439(q); q < 0 {
+		return -1
+	}
+	if q = p.m440(q); q < 0 {
+		return -1
+	}
+	if q = p.m448(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) m452(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10815,12 +11009,12 @@ func (p *CovenantParser) m448(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m449(pos int) int {
+func (p *CovenantParser) m453(pos int) int {
 	q := pos
-	if q = p.m447(q); q < 0 {
+	if q = p.m451(q); q < 0 {
 		return -1
 	}
-	if q = p.m448(q); q < 0 {
+	if q = p.m452(q); q < 0 {
 		return -1
 	}
 	return q
@@ -10834,7 +11028,7 @@ func (p *CovenantParser) ruleFnSig(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleFnSig, Begin: int32(pos)})
-	end := p.m449(pos)
+	end := p.m453(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -10845,7 +11039,7 @@ func (p *CovenantParser) ruleFnSig(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m450(pos int) int {
+func (p *CovenantParser) m454(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 42 {
 		return pos + 1
 	}
@@ -10853,7 +11047,7 @@ func (p *CovenantParser) m450(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m452(pos int) int {
+func (p *CovenantParser) m456(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 40 {
 		return pos + 1
 	}
@@ -10861,9 +11055,9 @@ func (p *CovenantParser) m452(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m453(pos int) int {
+func (p *CovenantParser) m457(pos int) int {
 	q := pos
-	if q = p.m452(q); q < 0 {
+	if q = p.m456(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleType(q); q < 0 {
@@ -10872,11 +11066,11 @@ func (p *CovenantParser) m453(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m451(pos int) int {
+func (p *CovenantParser) m455(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
-		r := p.m453(q)
+		r := p.m457(q)
 		if r < 0 {
 			p.nodes = p.nodes[:mark]
 			break
@@ -10890,7 +11084,7 @@ func (p *CovenantParser) m451(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m454(pos int) int {
+func (p *CovenantParser) m458(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 10 {
 		return pos + 1
 	}
@@ -10898,7 +11092,7 @@ func (p *CovenantParser) m454(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m456(pos int) int {
+func (p *CovenantParser) m460(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -10906,64 +11100,9 @@ func (p *CovenantParser) m456(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m455(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m456(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
 func (p *CovenantParser) m459(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 48 {
-		return pos + 1
-	}
-	p.fail(pos, "`pub`")
-	return -1
-}
-
-func (p *CovenantParser) m458(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m459(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m460(pos int) int {
-	q := pos
-	if q = p.m458(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleFn(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m457(pos int) int {
-	q, n := pos, 0
-	for {
 		mark := len(p.nodes)
 		r := p.m460(q)
 		if r < 0 {
@@ -10979,83 +11118,66 @@ func (p *CovenantParser) m457(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m461(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
+func (p *CovenantParser) m463(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 48 {
 		return pos + 1
 	}
-	p.fail(pos, "`}`")
+	p.fail(pos, "`pub`")
 	return -1
 }
 
 func (p *CovenantParser) m462(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m463(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
 	}
-	p.fail(pos, "`end of line`")
-	return -1
+	return q
 }
 
-func (p *CovenantParser) m463(pos int) int {
+func (p *CovenantParser) m464(pos int) int {
 	q := pos
-	if q = p.m450(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleType(q); q < 0 {
-		return -1
-	}
-	if q = p.m451(q); q < 0 {
-		return -1
-	}
-	if q = p.m454(q); q < 0 {
-		return -1
-	}
-	if q = p.m455(q); q < 0 {
-		return -1
-	}
-	if q = p.m457(q); q < 0 {
-		return -1
-	}
-	if q = p.m461(q); q < 0 {
-		return -1
-	}
 	if q = p.m462(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleFn(q); q < 0 {
 		return -1
 	}
 	return q
 }
 
-func (p *CovenantParser) ruleImpl(pos int) int {
-	if p.depth >= p.maxDepth {
-		p.tooDeep = true
-		return -1
+func (p *CovenantParser) m461(pos int) int {
+	q, n := pos, 0
+	for {
+		mark := len(p.nodes)
+		r := p.m464(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
 	}
-	p.depth++
-	i := len(p.nodes)
-	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleImpl, Begin: int32(pos)})
-	end := p.m463(pos)
-	p.depth--
-	if end < 0 {
-		p.nodes = p.nodes[:i]
-		return -1
-	}
-	p.nodes[i].End = int32(end)
-	p.nodes[i].Size = int32(len(p.nodes) - i)
-	return end
-}
-
-func (p *CovenantParser) m464(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 34 {
-		return pos + 1
-	}
-	p.fail(pos, "`const`")
-	return -1
+	return q
 }
 
 func (p *CovenantParser) m465(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 11 {
 		return pos + 1
 	}
-	p.fail(pos, "`=`")
+	p.fail(pos, "`}`")
 	return -1
 }
 
@@ -11069,7 +11191,79 @@ func (p *CovenantParser) m466(pos int) int {
 
 func (p *CovenantParser) m467(pos int) int {
 	q := pos
-	if q = p.m464(q); q < 0 {
+	if q = p.m454(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleType(q); q < 0 {
+		return -1
+	}
+	if q = p.m455(q); q < 0 {
+		return -1
+	}
+	if q = p.m458(q); q < 0 {
+		return -1
+	}
+	if q = p.m459(q); q < 0 {
+		return -1
+	}
+	if q = p.m461(q); q < 0 {
+		return -1
+	}
+	if q = p.m465(q); q < 0 {
+		return -1
+	}
+	if q = p.m466(q); q < 0 {
+		return -1
+	}
+	return q
+}
+
+func (p *CovenantParser) ruleImpl(pos int) int {
+	if p.depth >= p.maxDepth {
+		p.tooDeep = true
+		return -1
+	}
+	p.depth++
+	i := len(p.nodes)
+	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleImpl, Begin: int32(pos)})
+	end := p.m467(pos)
+	p.depth--
+	if end < 0 {
+		p.nodes = p.nodes[:i]
+		return -1
+	}
+	p.nodes[i].End = int32(end)
+	p.nodes[i].Size = int32(len(p.nodes) - i)
+	return end
+}
+
+func (p *CovenantParser) m468(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 34 {
+		return pos + 1
+	}
+	p.fail(pos, "`const`")
+	return -1
+}
+
+func (p *CovenantParser) m469(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
+		return pos + 1
+	}
+	p.fail(pos, "`=`")
+	return -1
+}
+
+func (p *CovenantParser) m470(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
+func (p *CovenantParser) m471(pos int) int {
+	q := pos
+	if q = p.m468(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleLabel(q); q < 0 {
@@ -11078,13 +11272,13 @@ func (p *CovenantParser) m467(pos int) int {
 	if q = p.ruleType(q); q < 0 {
 		return -1
 	}
-	if q = p.m465(q); q < 0 {
+	if q = p.m469(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleExpr(q); q < 0 {
 		return -1
 	}
-	if q = p.m466(q); q < 0 {
+	if q = p.m470(q); q < 0 {
 		return -1
 	}
 	return q
@@ -11098,7 +11292,7 @@ func (p *CovenantParser) ruleConst(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleConst, Begin: int32(pos)})
-	end := p.m467(pos)
+	end := p.m471(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -11109,7 +11303,7 @@ func (p *CovenantParser) ruleConst(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m468(pos int) int {
+func (p *CovenantParser) m472(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 57 {
 		return pos + 1
 	}
@@ -11117,7 +11311,7 @@ func (p *CovenantParser) m468(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m469(pos int) int {
+func (p *CovenantParser) m473(pos int) int {
 	q, n := pos, 0
 	for n < 1 {
 		mark := len(p.nodes)
@@ -11135,7 +11329,7 @@ func (p *CovenantParser) m469(pos int) int {
 	return q
 }
 
-func (p *CovenantParser) m470(pos int) int {
+func (p *CovenantParser) m474(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
 		return pos + 1
 	}
@@ -11143,7 +11337,7 @@ func (p *CovenantParser) m470(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m471(pos int) int {
+func (p *CovenantParser) m475(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -11151,24 +11345,24 @@ func (p *CovenantParser) m471(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m472(pos int) int {
+func (p *CovenantParser) m476(pos int) int {
 	q := pos
-	if q = p.m468(q); q < 0 {
+	if q = p.m472(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleName(q); q < 0 {
 		return -1
 	}
-	if q = p.m469(q); q < 0 {
+	if q = p.m473(q); q < 0 {
 		return -1
 	}
-	if q = p.m470(q); q < 0 {
+	if q = p.m474(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleType(q); q < 0 {
 		return -1
 	}
-	if q = p.m471(q); q < 0 {
+	if q = p.m475(q); q < 0 {
 		return -1
 	}
 	return q
@@ -11182,7 +11376,7 @@ func (p *CovenantParser) ruleAlias(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleAlias, Begin: int32(pos)})
-	end := p.m472(pos)
+	end := p.m476(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]
@@ -11193,7 +11387,7 @@ func (p *CovenantParser) ruleAlias(pos int) int {
 	return end
 }
 
-func (p *CovenantParser) m473(pos int) int {
+func (p *CovenantParser) m477(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 35 {
 		return pos + 1
 	}
@@ -11201,7 +11395,7 @@ func (p *CovenantParser) m473(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m474(pos int) int {
+func (p *CovenantParser) m478(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 20 {
 		return pos + 1
 	}
@@ -11209,7 +11403,7 @@ func (p *CovenantParser) m474(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m476(pos int) int {
+func (p *CovenantParser) m480(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 27 {
 		return pos + 1
 	}
@@ -11217,65 +11411,7 @@ func (p *CovenantParser) m476(pos int) int {
 	return -1
 }
 
-func (p *CovenantParser) m478(pos int) int {
-	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
-		return pos + 1
-	}
-	p.fail(pos, "`end of line`")
-	return -1
-}
-
-func (p *CovenantParser) m477(pos int) int {
-	q, n := pos, 0
-	for n < 1 {
-		mark := len(p.nodes)
-		r := p.m478(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m479(pos int) int {
-	q := pos
-	if q = p.m476(q); q < 0 {
-		return -1
-	}
-	if q = p.m477(q); q < 0 {
-		return -1
-	}
-	if q = p.ruleEffect(q); q < 0 {
-		return -1
-	}
-	return q
-}
-
-func (p *CovenantParser) m475(pos int) int {
-	q, n := pos, 0
-	for {
-		mark := len(p.nodes)
-		r := p.m479(q)
-		if r < 0 {
-			p.nodes = p.nodes[:mark]
-			break
-		}
-		n++
-		if r == q {
-			break
-		}
-		q = r
-	}
-	return q
-}
-
-func (p *CovenantParser) m480(pos int) int {
+func (p *CovenantParser) m482(pos int) int {
 	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
 		return pos + 1
 	}
@@ -11284,23 +11420,81 @@ func (p *CovenantParser) m480(pos int) int {
 }
 
 func (p *CovenantParser) m481(pos int) int {
+	q, n := pos, 0
+	for n < 1 {
+		mark := len(p.nodes)
+		r := p.m482(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m483(pos int) int {
 	q := pos
-	if q = p.m473(q); q < 0 {
+	if q = p.m480(q); q < 0 {
 		return -1
 	}
-	if q = p.ruleName(q); q < 0 {
-		return -1
-	}
-	if q = p.m474(q); q < 0 {
+	if q = p.m481(q); q < 0 {
 		return -1
 	}
 	if q = p.ruleEffect(q); q < 0 {
 		return -1
 	}
-	if q = p.m475(q); q < 0 {
+	return q
+}
+
+func (p *CovenantParser) m479(pos int) int {
+	q, n := pos, 0
+	for {
+		mark := len(p.nodes)
+		r := p.m483(q)
+		if r < 0 {
+			p.nodes = p.nodes[:mark]
+			break
+		}
+		n++
+		if r == q {
+			break
+		}
+		q = r
+	}
+	return q
+}
+
+func (p *CovenantParser) m484(pos int) int {
+	if pos+1 <= len(p.in) && p.in[pos+0] == 1 {
+		return pos + 1
+	}
+	p.fail(pos, "`end of line`")
+	return -1
+}
+
+func (p *CovenantParser) m485(pos int) int {
+	q := pos
+	if q = p.m477(q); q < 0 {
 		return -1
 	}
-	if q = p.m480(q); q < 0 {
+	if q = p.ruleName(q); q < 0 {
+		return -1
+	}
+	if q = p.m478(q); q < 0 {
+		return -1
+	}
+	if q = p.ruleEffect(q); q < 0 {
+		return -1
+	}
+	if q = p.m479(q); q < 0 {
+		return -1
+	}
+	if q = p.m484(q); q < 0 {
 		return -1
 	}
 	return q
@@ -11314,7 +11508,7 @@ func (p *CovenantParser) ruleEffectGroup(pos int) int {
 	p.depth++
 	i := len(p.nodes)
 	p.nodes = append(p.nodes, CovenantNode{Rule: CovenantRuleEffectGroup, Begin: int32(pos)})
-	end := p.m481(pos)
+	end := p.m485(pos)
 	p.depth--
 	if end < 0 {
 		p.nodes = p.nodes[:i]

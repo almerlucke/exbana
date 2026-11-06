@@ -355,9 +355,23 @@ func (b *builder) group(n int) *Group {
 	return g
 }
 
+func (b *builder) dynType(n int) *TypeDyn {
+	t := &TypeDyn{Span: b.span(n)}
+
+	if p, ok := b.first(n, rPath); ok {
+		t.Path = b.names(p)
+	}
+
+	return t
+}
+
 func (b *builder) typ(n int) Type {
 	if ft, ok := b.first(n, rFnType); ok {
 		return b.fnType(ft)
+	}
+
+	if dt, ok := b.first(n, parser.CovenantRuleDynType); ok {
+		return b.dynType(dt)
 	}
 
 	t := &TypeName{Span: b.span(n)}
@@ -747,6 +761,9 @@ func (b *builder) postfix(n int) Expr {
 			acc = call
 		case parser.CovenantRuleMember:
 			acc = &Member{Span{acc.At().Begin, sp.End}, acc, b.nameChild(c)}
+		case parser.CovenantRuleCast:
+			dt, _ := b.first(c, parser.CovenantRuleDynType)
+			acc = &Cast{Span{acc.At().Begin, sp.End}, acc, b.dynType(dt)}
 		case parser.CovenantRuleUpdate:
 			u := &Update{Span: Span{acc.At().Begin, sp.End}, X: acc}
 

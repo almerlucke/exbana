@@ -749,6 +749,21 @@ func (c *checker) typeOf(t ast.Type, ts *tscope) Type {
 	switch t := t.(type) {
 	case nil:
 		return bad
+	case *ast.TypeDyn:
+		ent, rest, private := c.lookupPath(t.Path)
+
+		if private != "" {
+			c.errorf(t, "private", "%s is not public", private)
+			return bad
+		}
+
+		tr, ok := ent.(*TraitDef)
+		if !ok || len(rest) > 0 {
+			c.errorf(t, "unknown-name", "%s is not a trait: dyn is for a trait", strings.Join(t.Path, "::"))
+			return bad
+		}
+
+		return &Dyn{tr}
 	case *ast.TypeFn:
 		params := make([]Type, len(t.Params))
 		for i, p := range t.Params {

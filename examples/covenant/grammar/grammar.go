@@ -18,6 +18,8 @@
 //   - A value of a struct is made like a call with named arguments, Point(x: 1.0, y: 2.0), and not with braces behind the name,
 //     because in "if ready {" the brace starts the block.
 //   - A name followed by a colon is one token (a label), so that "x: 1" is told from "x" without looking two tokens ahead.
+//   - A value is made into a "dyn Trait" with "as", and a type does not have to be named for that to be wanted: there is no
+//     conversion that is not written.
 //
 // What the grammar leaves to the checker is what it can not say without looking further than a token: that the left side of an
 // assignment is something that can be assigned to, that the labels of a call are the fields of what it makes, and which of the
@@ -97,7 +99,9 @@ func Covenant() pattern {
 	typ := decl("type")
 	typeArgs := conc(tok(token.Lt), nls, typ, many(conc(tok(token.Comma), nls, typ)), nls, tok(token.Gt))
 	fnType := def("fn_type", conc(tok(token.FnType), list(token.LParen, typ, token.RParen), maybe(effects), maybe(conc(tok(token.Arrow), typ))))
-	typ.Define(alt(fnType, conc(path, maybe(typeArgs))))
+	// dyn Area: any value of a type that has the trait Area
+	dynType := def("dyn_type", conc(tok(token.Dyn), path))
+	typ.Define(alt(fnType, dynType, conc(path, maybe(typeArgs))))
 
 	// generics:  <T, U: Area + Show>
 	generic := def("generic", alt(conc(label, path, many(conc(tok(token.Plus), path))), name))
@@ -146,7 +150,9 @@ func Covenant() pattern {
 		alt(conc(tok(token.FatArrow), expr), block)))
 
 	primary := def("primary", alt(number, text, boolean, listValue, mapValue, paren, matchExpr, ifExpr, path))
-	postfix := def("postfix", conc(primary, many(alt(call, member, update))))
+	// a value made into one of any type that has a trait, which is said where it is done:  Circle(radius: 1.0) as dyn Area
+	cast := def("cast", conc(tok(token.As), dynType))
+	postfix := def("postfix", conc(primary, many(alt(call, member, update, cast))))
 	unary := def("unary", conc(maybe(alt(tok(token.Minus), tok(token.Try))), postfix))
 
 	mulOp := def("mul_op", alt(tok(token.Star), tok(token.Slash), tok(token.Percent)))

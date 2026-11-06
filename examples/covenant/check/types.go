@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-// Type is a type in the checker: *Con, *Fn, *Var, *Param or *Bad.
+// Type is a type in the checker: *Con, *Fn, *Dyn, *Var, *Param or *Bad.
 type Type interface{ String() string }
 
 // DefKind says what a Def is.
@@ -87,6 +87,12 @@ type Param struct {
 	id     int
 	Bounds []*TraitDef
 }
+
+// Dyn is a value of any type that has a trait: dyn Area. What it is made from is not known, and only the methods of the trait
+// can be called on it.
+type Dyn struct{ Trait *TraitDef }
+
+func (t *Dyn) String() string { return "dyn " + t.Trait.Name }
 
 // Bad is the type of what has already been reported as wrong, so that one mistake is one message. It goes with every type.
 type Bad struct{}

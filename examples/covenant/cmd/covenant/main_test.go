@@ -103,3 +103,16 @@ func TestBytecode(t *testing.T) {
 		t.Errorf("dis without a function: %d", code)
 	}
 }
+
+func TestObjectsAndData(t *testing.T) {
+	want := "3.0\n6.0\n{\"name\":\"covenant\",\"tags\":[1,2.5,null]}\na map of 2\n2\n"
+
+	for _, flags := range [][]string{nil, {"-bytecode"}} {
+		args := append(append([]string{"run"}, flags...), "testdata/objects.cov", "objects::main")
+
+		code, out, errs := cmd(args...)
+		if code != 0 || out != want {
+			t.Errorf("%v: %d %q %q", flags, code, out, errs)
+		}
+	}
+}

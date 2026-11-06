@@ -306,6 +306,90 @@ fn caller() with fs::read + fs::write + time -> Int {
     return clock()
 }
 `,
+	"trait objects": `
+trait Area {
+    fn area(self) -> Float
+}
+
+trait Named {
+    fn label(self) -> Text
+}
+
+struct Circle { radius: Float }
+struct Rect { w: Float, h: Float }
+struct Holder { item: dyn Area }
+
+impl Area for Circle {
+    fn area(self) -> Float {
+        return 3.0 * self.radius * self.radius
+    }
+}
+
+impl Area for Rect {
+    fn area(self) -> Float {
+        return self.w * self.h
+    }
+}
+
+impl Named for Circle {
+    fn label(self) -> Text {
+        return "circle"
+    }
+}
+
+fn total(items: List<dyn Area>) -> Float {
+    return items.fold(0.0, fn(sum, item) => sum + item.area())
+}
+
+fn generic<T: Area>(x: T) -> Float {
+    return x.area()
+}
+
+fn same(x: dyn Area) -> dyn Area {
+    return x as dyn Area
+}
+
+fn demo() -> Float {
+    let shapes: List<dyn Area> = [Circle(radius: 1.0) as dyn Area, Rect(w: 2.0, h: 3.0) as dyn Area]
+    let named = Circle(radius: 1.0) as dyn Named
+    let holder = Holder(item: Rect(w: 1.0, h: 1.0) as dyn Area)
+    let again = (Circle(radius: 1.0) as dyn Area) == (Circle(radius: 1.0) as dyn Area)
+    return total(shapes) + generic(holder.item) + same(holder.item).area() + named.label().length().to_float()
+}
+`,
+	"the data enum": `
+fn describe(d: Data) -> Text {
+    return match d {
+        Null => "null"
+        Bool(value) => value.to_text()
+        Int(value) => value.to_text()
+        Float(value) => value.to_text()
+        Text(value) => value
+        List(items) => items.length().to_text()
+        Map(entries) => entries.keys().length().to_text()
+    }
+}
+
+fn build() -> Data {
+    return Data::Map({"a": Data::Int(1), "b": Data::List([Data::Null, Data::Text("x")])})
+}
+
+fn parse(text: Text) -> Result<Data, ParseError> {
+    return Data::from_json(text)
+}
+
+fn lookup(d: Data) -> Int {
+    return d.get("a").map(fn(x) => x.as_int().unwrap_or(0)).unwrap_or(-1)
+}
+
+fn kinds(e: ParseError) -> Text {
+    return match e {
+        NotANumber => "number"
+        OutOfRange => "range"
+        Invalid => "invalid"
+    }
+}
+`,
 	"assignment and shadowing": `
 fn f() -> Int {
     var x = 1
@@ -340,6 +424,18 @@ func TestAccepted(t *testing.T) {
 		})
 	}
 }
+
+// dynPrefix is nine lines: a trait, and a struct that has it.
+const dynPrefix = `trait Area {
+    fn area(self) -> Float
+}
+struct Circle { radius: Float }
+impl Area for Circle {
+    fn area(self) -> Float {
+        return self.radius
+    }
+}
+`
 
 type badCase struct {
 	name string
@@ -439,6 +535,18 @@ var rejected = []badCase{
 	{"a closure that returns what the type does not allow", "fn tick() with time -> Int {\n    return 1\n}\nfn f() -> Fn() -> Int {\n    return fn() => tick()\n}\n", 5, "effect", "does not allow them"},
 	{"a match on the wrong enum", "enum A {\n    X\n}\nenum B {\n    X\n}\nfn f(a: A) -> Int {\n    return match a {\n        B::X => 1\n    }\n}\n", 9, "type-mismatch", "this pattern is for B"},
 	{"the same name twice in a pattern", "enum E {\n    A(x: Int, y: Int)\n}\nfn f(e: E) -> Int {\n    return match e {\n        A(v, v) => v\n    }\n}\n", 6, "duplicate", "v is declared twice"},
+
+	// trait objects and data
+	{"a type without the trait made into a dyn", dynPrefix + "fn f() {\n    let a = 1 as dyn Area\n}\n", 11, "trait", "Int does not have the trait Area"},
+	{"a cast to something that is not a trait", dynPrefix + "fn f() {\n    let a = 1 as dyn Circle\n}\n", 11, "unknown-name", "Circle is not a trait"},
+	{"a dyn made into another dyn", dynPrefix + "trait Other {\n    fn other(self)\n}\nfn f(x: dyn Area) {\n    let a = x as dyn Other\n}\n", 14, "type-mismatch", "is not made into a dyn Other"},
+	{"a method the trait does not have", dynPrefix + "fn f(x: dyn Area) -> Float {\n    return x.radius()\n}\n", 11, "no-method", "dyn Area has no method radius"},
+	{"a dyn taken apart", dynPrefix + "fn f(x: dyn Area) -> Int {\n    return match x {\n        Circle(r) => 1\n    }\n}\n", 12, "pattern", "is not taken apart by a pattern"},
+	{"a value that is not made into a dyn", dynPrefix + "fn total(items: List<dyn Area>) -> Int {\n    return items.length()\n}\nfn f() -> Int {\n    return total([Circle(radius: 1.0)])\n}\n", 14, "type-mismatch", "expected dyn Area, found Circle"},
+	{"a dyn as the key of a map", dynPrefix + "fn f(x: dyn Area) {\n    let m = {x: 1}\n}\n", 11, "key", "dyn Area can not be the key"},
+	{"a match on data with a case left out", "fn f(d: Data) -> Int {\n    return match d {\n        Null => 0\n        Int(v) => v\n    }\n}\n", 2, "not-exhaustive", "is left out"},
+	{"a case of data that is not there", "fn f() -> Data {\n    return Data::Number(1)\n}\n", 2, "unknown-name", "Data has no variant or function Number"},
+	{"a case of data written without the enum", "fn f() -> Data {\n    return Int(1)\n}\n", 2, "type-as-value", "Int is not made with Int(...)"},
 
 	// numbers and examples
 	{"an Int that is too large", "fn f() -> Int {\n    return 9223372036854775808\n}\n", 2, "number", "does not fit in an Int"},

@@ -453,6 +453,10 @@ func init() {
 			return noneOf(m), nil
 		},
 	}
+
+	for name, f := range dataLibrary() {
+		stdlib[name] = f
+	}
 }
 
 // toIntOf turns a Float with no fraction into an Int, and it is a fault if it does not fit.

@@ -48,6 +48,10 @@ func (c *checker) unify(want, got Type) bool {
 	switch w := want.(type) {
 	case *Param:
 		return false // the same parameter was caught by ==
+	case *Dyn:
+		g, ok := got.(*Dyn)
+
+		return ok && g.Trait == w.Trait
 	case *Con:
 		g, ok := got.(*Con)
 		if !ok || g.Def != w.Def || len(g.Args) != len(w.Args) {

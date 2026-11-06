@@ -147,6 +147,12 @@ type TypeFn struct {
 	Ret     Type // nil if there is none, which is Unit
 }
 
+// TypeDyn is dyn Area: any value of a type that has the trait.
+type TypeDyn struct {
+	Span
+	Path []string
+}
+
 // Path is a name or names with :: between them, for a value, a type, an effect or a module.
 type Path struct {
 	Span
@@ -279,6 +285,13 @@ type Member struct {
 	Span
 	X    Expr
 	Name string
+}
+
+// Cast is "x as dyn Area": the value, made into one that is known by a trait.
+type Cast struct {
+	Span
+	X    Expr
+	Type *TypeDyn
 }
 
 // FieldInit is a field in "x with { field: value }".

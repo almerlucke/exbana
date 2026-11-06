@@ -7,6 +7,7 @@
 //	covenant describe app.cov [more.cov ...]                        the public functions as JSON for an agent: the manifest
 //	covenant call     app.cov [more.cov ...] app::name '{"a": 1}'   call a public function with arguments in JSON, and get JSON
 //	covenant dis      app.cov [more.cov ...] app::name              the bytecode of a function
+//	covenant fmt      app.cov                                       the source, written the one way it is written (-w to rewrite the files)
 //
 // # Modules
 //
@@ -163,11 +164,15 @@ func main() { os.Exit(command(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func command(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: covenant check|test|run|describe|call|dis [flags] files... [what to run]")
+		fmt.Fprintln(stderr, "usage: covenant check|test|run|describe|call|dis [flags] files... [what to run]\n       covenant fmt [-w] [-l] [-check] files...")
 		return 2
 	}
 
 	name := args[0]
+
+	if name == "fmt" {
+		return formatCommand(args[1:], stdout, stderr)
+	}
 
 	switch name {
 	case "check", "test", "run", "dis", "describe", "call":

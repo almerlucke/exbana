@@ -64,6 +64,7 @@ The program is a directory (`covenant run myapp/ args...`), or the `.cov` files 
 | `covenant describe files...` | writes the public functions as JSON, for an agent to read |
 | `covenant call files... module::function '{"a": 1}'` | calls a public function with arguments in JSON, and writes JSON |
 | `covenant dis files... module::function` | writes the bytecode of a function |
+| `covenant fmt files...` | writes the source the one way it is written (see [Formatting](#formatting)) |
 
 `-bytecode` runs the program as bytecode and not by walking the tree (it gives the same, faster), and `-max-steps n` and
 `-timeout d` end a call that goes on too long.
@@ -1430,6 +1431,60 @@ trait Data {
     fn at(self, index: Int) -> Option<Data>
 }
 ```
+
+## Formatting
+
+There is one way to write a Covenant program down, and `covenant fmt` writes it. It reads the source and writes the tree of it
+again, so the layout of the lines, the spaces and the blank lines are the formatter's, and so are the parentheses: the ones an
+expression needs stay, and the others go.
+
+```covenant-format
+// Adds   two numbers.
+fn  add(a:Int,b:Int)->Int{
+requires a>=0
+
+
+
+    return (a+b)*(1)   // the sum
+}
+const  limit:Int=((100))
+--- formatted
+// Adds   two numbers.
+fn add(a: Int, b: Int) -> Int {
+    requires a >= 0
+
+    return (a + b) * 1 // the sum
+}
+
+const limit: Int = 100
+```
+
+What it does not do is change what the program says, or lose a word of what is written in it:
+
+- **Comments stay where they are.** A comment on a line of its own goes in front of what follows it, one at the end of a line stays
+  at the end of it, and its text is not touched (but for the spaces at the end). A comment that is in the middle of an expression,
+  where no line can hold it, goes in front of the line the expression is on.
+- **A blank line is kept, once,** between two statements, and between two declarations that are small. Between a function, an `impl`,
+  a `trait` or an `enum` and what is next to it there is always one, and there is none at the start or at the end of a block.
+- **A list that is on several lines stays so,** one item to a line, and so does an expression that goes over several lines after an
+  operator. One that is on one line stays so if it fits in 100 columns, and if not it is broken after the opening bracket, at the commas
+  and before the closing bracket, or after the operators. A closure with a block that is the last argument of a call stays on the line
+  of the call: `items.map(fn(x) {`.
+- **It checks itself.** Before the formatter gives back what it wrote, it reads it again, and gives it only if the tree is the same
+  and so are the comments. If it ever is not, the answer is an error that says it is the formatter's, and the file is left as it was.
+
+The command:
+
+```text
+$ covenant fmt app.cov          the formatted source, on the standard output
+$ covenant fmt -                the same for the standard input, which is what an editor wants
+$ covenant fmt -w app/          rewrite the files in the directory (the .cov files below it, but not the names that start with . or _)
+$ covenant fmt -l app/          list the files that are not formatted
+$ covenant fmt -check app/      the same, and the exit code is 1 if there are any: for a build to ask
+```
+
+A file that is not Covenant is an error with the line and the column, and it is not written. From Go, `format.Source(src)` does the
+same: it gives the formatted source, or the error.
 
 ## Running programs from Go
 

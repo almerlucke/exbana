@@ -315,6 +315,20 @@ What you give the analysis decides what it can do:
 - **Put whitespace after tokens**, not before. With `ws "[" ...` and `ws digits` two alternatives both start with whitespace and the
   choice can not be made by looking at the next element; with `"[" ws ...` and `digits ws` it can. The report names the overlap.
 - The elements have to be integers (runes, bytes, integer tokens).
+- **Optimize changes the grammar.** `Optimize` is `Analyze` followed by `Apply`, and `Apply` rewrites the patterns the grammar is made of, so
+  do it once, on the grammar you are going to use. If you also want the original (to compare the two, as the tests do), build the grammar
+  with a function and call it twice; `Analyze` alone only reports.
+- **See the report before generating.** `codegen.Generate` refuses a grammar that still backtracks and lists the places, but a generator
+  can ask first: `fmt.Print(result)` is the report above, and `result.Blocked()` are the places that were left alone (fail the build when it is
+  not empty, so that a change to the grammar that brings back the backtracking is seen where it is made).
+- **When places stay blocked because of the text, split out the lexer.** A grammar over characters has to decide with one element of
+  look-ahead, and words and signs that start alike (`trait` and `type`, `=` and `==` and `=>`, a name and a keyword, `1` and `1.5`) make that
+  impossible. The report names them one by one, and the way out is not more rules but two stages: a lexer that makes tokens (and so decides
+  which word is a keyword, which `=` is which sign, where whitespace and comments are) and a grammar over the kinds of the tokens, where
+  one token decides. See "Two stages" below, and `examples/tokens` for the shape of it. The same goes for a construct that is only told from
+  another after several tokens: rewrite it so that the first token tells them apart (a struct value is made like a call with labels,
+  `Point(x: 1)`, because `Point { x: 1 }` can not be told from a block), or let the lexer make that one token (a name directly followed by a colon
+  is one `Label` token).
 
 On a JSON grammar written the natural way, with 29 repetitions and alternations all found safe, parsing 2,000 objects takes 122 ms
 instead of 208 ms with 21% fewer allocations. That is what removing the backtracking is worth; a faster engine would need to stop
@@ -350,8 +364,11 @@ fmt.Print(tree.Dump())                                      // the whole tree, i
 generated file is out of date and that fuzz the generated parser against the grammar it was made from.
 
 **What you get.** A `Parser` that reuses its buffers, and a flat tree of the rules that matched: a node is followed by its children, so
-walking it needs no pointers. The tree has `Walk`, `Children`, `Find` and `First` (and a `Find` and `First` for each rule by name),
-`Span`, `Text`, `Position` (line and column, counted in characters) and `Dump`. Errors are a `SyntaxError` with the same message as
+walking it needs no pointers. The tree has `Walk`, `Children`, `Find`, `First` and `Nth` (and a `Find` and `First` for each rule by name),
+`Rule` (the rule of a node), `Span`, `Text`, `Position` (line and column, counted in characters) and `Dump`. The first argument of `Children`,
+`Find`, `First` and `Nth` is the node whose children are meant, and `-1` means the top level of the tree: `tree.First(-1, parser.JSONRuleValue)`
+is the first top-level node of that rule, while `tree.FirstObject(0)` looks below the node numbered 0. `Nth(parent, rule, n)` is the `n`-th
+child of a rule, counted from 0, which is how a rule that matches twice inside another (`pair = value ":" value`) is read without `Positions`. Errors are a `SyntaxError` with the same message as
 `FarthestLog`: `syntax error at 1:4: unexpected '2', expected "," or "]"` (a leaf without a name or print text is left out of the expected
 list, as it is with `FarthestLog`: give it one with `.Printed`). Evaluation is yours: walk the tree and build what you need.
 
@@ -405,6 +422,25 @@ declarative (`entity.Between`, `In`, `Equals`, `vector.Text` and the like) so th
 not matter, and nothing of the library is needed at run time. Runes, bytes, integers, strings and floats work out of the box. For another type, like a
 struct for a token, set `Config.ElemType` and give `Config.Class` the Go expression for each leaf that is a function (`x.Kind == KindPlus`). The
 `optimize` analysis works on integer elements, so for other types you mark the possessive and orthogonal places yourself or set `Commit`.
+
+**Two stages: a lexer, and a grammar over tokens.** The usual non-text input is a slice of tokens. Make the grammar over the *kinds* of the
+tokens (integers, so `optimize` works on it and `ElemType` can stay `int`), and keep the tokens, with where each starts and ends in the text, on the side:
+
+```go
+tokens, err := lex(src)                                    // []Token{Kind, Begin, End}
+kinds := make([]int, len(tokens))                          // what the parser reads
+for i, t := range tokens { kinds[i] = int(t.Kind) }
+
+tree, err := parser.NewLangParser().Parse(kinds)
+first, end := tree.Span(node)                              // numbers of tokens, end is not in the node
+text := src[tokens[first].Begin:tokens[end-1].End]         // back to the text
+```
+
+Everything a parser reports is then in tokens: `Span`, and `SyntaxError.Pos`, which is the number of the token where the parse went
+farthest. `SyntaxError` has `Line` and `Col` only for a parser of text, so make them from `tokens[err.Pos].Begin` (or the end of the source if
+`err.AtEnd`), and use `err.Expected` for the message; `err.Found` is the token itself. Nothing in the grammar says anything about spaces and
+comments: the lexer drops them, and can keep them on the side if a formatter or a language server needs them.
+
 
 ## EBNF Printing
 

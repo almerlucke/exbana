@@ -1,5 +1,8 @@
 # Covenant
 
+The language is described, with examples, in [LANGUAGE.md](LANGUAGE.md). Every program in it is type-checked and every `example`
+in it is run by the tests, so what it says is true. This note is about how it is built, and the decisions behind it.
+
 A small language meant to be read by people and by agents alike, and to be embedded in Go programs as a scripting language.
 So far there is a lexer (`token/`), a grammar over its tokens (`grammar/`), a parser generated from the grammar (`parser/`,
 regenerate it with `go generate` here), `covenant.Parse`, the program as plain Go values (`ast/`), a type and effect checker

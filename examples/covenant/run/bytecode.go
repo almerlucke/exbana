@@ -63,6 +63,7 @@ const (
 	opIsVariant // a: the *check.Variant. Pop a value, push whether it is of the variant.
 	opIsStruct  // a: the *check.Def. Pop a value, push whether it is of the struct.
 	opFieldN    // a: the number of the field. Pop a variant or a struct, push the field.
+	opBox       // a: the trait in the constants. Make the value on top into one that is known by it.
 	opNoMatch   // a: the local with the value no case of the match fits.
 	opFault     // a: the kind in the constants, b: the message in the constants. End the program with a fault.
 
@@ -77,7 +78,7 @@ var opNames = [...]string{
 	opJmpFalseK: "jmpfalsek", opJmpTrueK: "jmptruek", opRet: "ret", opRetUnit: "retunit", opTry: "try", opCall: "call",
 	opCallDef: "calldef", opCallMethod: "callmethod", opMkList: "mklist", opMkMap: "mkmap", opMkStruct: "mkstruct",
 	opMkVariant: "mkvariant", opField: "field", opUpdate: "update", opClosure: "closure", opIsVariant: "isvariant",
-	opIsStruct: "isstruct", opFieldN: "fieldn", opNoMatch: "nomatch", opFault: "fault", opIter: "iter", opIterNext: "iternext",
+	opIsStruct: "isstruct", opFieldN: "fieldn", opNoMatch: "nomatch", opBox: "box", opFault: "fault", opIter: "iter", opIterNext: "iternext",
 }
 
 func (o opcode) String() string { return opNames[o] }
@@ -159,6 +160,8 @@ func (pr *proto) operands(in instr) string {
 			return c.Name
 		case *check.ConstDef:
 			return "const " + c.Name
+		case *check.TraitDef:
+			return "dyn " + c.Name
 		case []int, []string:
 			return fmt.Sprintf("%v", c)
 		case *Func:
@@ -169,7 +172,7 @@ func (pr *proto) operands(in instr) string {
 	}
 
 	switch in.op {
-	case opConst, opLoadConst, opField, opIsVariant, opIsStruct, opUpdate:
+	case opConst, opLoadConst, opField, opIsVariant, opIsStruct, opUpdate, opBox:
 		return " " + konst(in.a)
 	case opLoad, opStore, opLoadCap, opFieldN, opNoMatch, opMkList, opMkMap, opCall:
 		return fmt.Sprintf(" %d", in.a)

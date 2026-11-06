@@ -486,6 +486,139 @@ fn f() -> Int {
     return g(4)
 }
 `, "f", "8", nil},
+		{"trait objects", `
+trait Area {
+    fn area(self) -> Float
+}
+trait Name {
+    fn name(self) -> Text
+}
+trait Other {
+    fn name(self) -> Text
+}
+struct Circle { radius: Float }
+struct Rect { w: Float, h: Float }
+struct Holder { item: dyn Area }
+impl Area for Circle {
+    fn area(self) -> Float {
+        return 3.0 * self.radius * self.radius
+    }
+}
+impl Area for Rect {
+    fn area(self) -> Float {
+        return self.w * self.h
+    }
+}
+impl Name for Circle {
+    fn name(self) -> Text {
+        return "circle"
+    }
+}
+impl Other for Circle {
+    fn name(self) -> Text {
+        return "other circle"
+    }
+}
+fn total(items: List<dyn Area>) -> Float {
+    return items.fold(0.0, fn(sum, item) => sum + item.area())
+}
+fn generic<T: Area>(x: T) -> Float {
+    return x.area()
+}
+fn f() -> List<Text> {
+    let shapes = [Circle(radius: 1.0) as dyn Area, Rect(w: 2.0, h: 3.0) as dyn Area]
+    let a = Circle(radius: 1.0) as dyn Name
+    let b = Circle(radius: 1.0) as dyn Other
+    let holder = Holder(item: Rect(w: 4.0, h: 5.0) as dyn Area)
+    return [total(shapes).to_text(), generic(shapes.first().unwrap_or(Rect(w: 0.0, h: 0.0) as dyn Area)).to_text(), a.name(), b.name(),
+        (a == a).to_text(), (a == (Circle(radius: 2.0) as dyn Name)).to_text(), holder.item.area().to_text(), generic(holder.item).to_text()]
+}
+fn shown() -> dyn Area {
+    return Circle(radius: 1.0) as dyn Area
+}
+`, "f", `["9.0", "3.0", "circle", "other circle", "true", "false", "20.0", "20.0"]`, nil},
+		{"a dyn is shown as what it is made from", `
+trait Area {
+    fn area(self) -> Float
+}
+struct Circle { radius: Float }
+impl Area for Circle {
+    fn area(self) -> Float {
+        return self.radius
+    }
+}
+fn f() -> dyn Area {
+    return Circle(radius: 1.5) as dyn Area
+}
+`, "f", "Circle(radius: 1.5)", nil},
+		{"trait objects of the types of the library", `
+trait Describe {
+    fn describe(self) -> Text
+}
+impl Describe for Int {
+    fn describe(self) -> Text {
+        return "int " + self.to_text()
+    }
+}
+impl Describe for Text {
+    fn describe(self) -> Text {
+        return "text " + self
+    }
+}
+fn f() -> List<Text> {
+    let items = [1 as dyn Describe, "a" as dyn Describe, 22 as dyn Describe]
+    return items.map(fn(x) => x.describe())
+}
+`, "f", `["int 1", "text a", "int 22"]`, nil},
+		{"data is taken apart with match", `
+fn describe(d: Data) -> Text {
+    return match d {
+        Null => "null"
+        Bool(value) => value.to_text()
+        Int(value) => value.to_text()
+        Float(value) => value.to_text()
+        Text(value) => "text " + value
+        List(items) => "list of " + items.length().to_text()
+        Map(entries) => "map of " + entries.keys().length().to_text()
+    }
+}
+fn f() -> List<Text> {
+    let items = [Data::Null, Data::Bool(true), Data::Int(7), Data::Float(2.5), Data::Text("x"), Data::List([Data::Null]), Data::Map({"a": Data::Null, "b": Data::Null})]
+    return items.map(describe)
+}
+`, "f", `["null", "true", "7", "2.5", "text x", "list of 1", "map of 2"]`, nil},
+		{"data from JSON and back", `
+fn f() -> List<Text> {
+    let doc = Data::from_json("{\"name\": \"x\", \"n\": 3, \"pi\": 3.5, \"ok\": true, \"tags\": [1, \"a\", null], \"nest\": {\"k\": []}}").unwrap_or(Data::Null)
+    let name = doc.get("name").map(fn(x) => x.as_text().unwrap_or("?")).unwrap_or("none")
+    let n = doc.get("n").map(fn(x) => x.as_int().unwrap_or(0)).unwrap_or(-1)
+    let second = doc.get("tags").map(fn(t) => t.at(1).map(fn(x) => x.as_text().unwrap_or("?")).unwrap_or("none")).unwrap_or("no tags")
+    let missing = doc.get("nothing").is_none()
+    return [name, n.to_text(), second, missing.to_text(), doc.to_json()]
+}
+`, "f", `["x", "3", "a", "true", "{\"name\":\"x\",\"n\":3,\"pi\":3.5,\"ok\":true,\"tags\":[1,\"a\",null],\"nest\":{\"k\":[]}}"]`, nil},
+		{"data keeps floats as floats and keys in order", `
+fn f() -> List<Text> {
+    let a = Data::from_json("[1, 1.0, 1e2, -0.5, 12345678901234567]").unwrap_or(Data::Null)
+    let b = Data::from_json("{\"b\": 1, \"a\": 2, \"b\": 3}").unwrap_or(Data::Null)
+    return [a.to_json(), b.to_json()]
+}
+`, "f", `["[1,1.0,100.0,-0.5,12345678901234567]", "{\"b\":3,\"a\":2}"]`, nil},
+		{"data that is not JSON", `
+fn kind(text: Text) -> Text {
+    return match Data::from_json(text) {
+        Ok(_) => "ok"
+        Err(e) => match e {
+            NotANumber => "number"
+            OutOfRange => "range"
+            Invalid => "invalid"
+        }
+    }
+}
+fn f() -> List<Text> {
+    return [kind("{"), kind("[1,]"), kind("tru"), kind(""), kind("1 2"), kind("{\"a\":1,}"), kind("[1e999]"), kind("99999999999999999999"), kind(" [ ] "), kind("\"\\u00e9\"")]
+}
+`, "f", `["invalid", "invalid", "invalid", "invalid", "invalid", "invalid", "range", "range", "ok", "ok"]`, nil},
 		{"a promise that holds", `
 fn clamp(n: Int, lo: Int, hi: Int) -> Int {
     requires lo <= hi
@@ -542,6 +675,7 @@ var faultCases = []faultCase{
 	{"a promise that fails inside", "fn g(n: Int) -> Int {\n    requires n > 0\n    return n\n}\nfn f() -> Int {\n    return g(0)\n}\n", "f", "requires", "for the call of g", 2, nil},
 	{"calls nested too deep", "fn f(n: Int) -> Int {\n    return f(n + 1)\n}\n", "f", "stack", "too deep", 2, []run.Value{int64(0)}},
 	{"a Float that is not an Int", "fn f(x: Float) -> Int {\n    return x.floor()\n}\n", "f", "range", "does not fit", 2, []run.Value{1e30}},
+	{"a Float that is not a number in JSON", "fn f(x: Float) -> Text {\n    return Data::Float(x / 0.0 - x / 0.0).to_json()\n}\n", "f", "range", "is not a number that JSON has", 2, []run.Value{1.0}},
 	{"abs of the smallest", "fn f(n: Int) -> Int {\n    return n.abs()\n}\n", "f", "overflow", "does not fit", 2, []run.Value{int64(-9223372036854775808)}},
 }
 

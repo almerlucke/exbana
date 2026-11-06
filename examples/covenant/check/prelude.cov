@@ -14,6 +14,19 @@ enum Result<T, E> {
 enum ParseError {
     NotANumber
     OutOfRange
+    Invalid
+}
+
+// Data is a value whose shape is not known when the program is written: JSON, a configuration, what the host gives. It is taken
+// apart with match, as any enum is, and the cases of it are written with the name of the enum: Data::Int(3).
+enum Data {
+    Null
+    Bool(value: Bool)
+    Int(value: Int)
+    Float(value: Float)
+    Text(value: Text)
+    List(items: List<Data>)
+    Map(entries: Map<Text, Data>)
 }
 
 trait Functions {
@@ -104,4 +117,18 @@ trait Result<T, E> {
     fn unwrap_or(self, fallback: T) -> T
     fn map_error<X, F>(self, f: Fn(E) with F -> X) with F -> Result<T, X>
     fn ok(self) -> Option<T>
+}
+
+trait Data {
+    fn from_json(text: Text) -> Result<Data, ParseError>
+    fn to_json(self) -> Text
+    fn is_null(self) -> Bool
+    fn as_bool(self) -> Option<Bool>
+    fn as_int(self) -> Option<Int>
+    fn as_float(self) -> Option<Float>
+    fn as_text(self) -> Option<Text>
+    fn as_list(self) -> Option<List<Data>>
+    fn as_map(self) -> Option<Map<Text, Data>>
+    fn get(self, key: Text) -> Option<Data>
+    fn at(self, index: Int) -> Option<Data>
 }

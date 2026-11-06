@@ -392,10 +392,12 @@ outer:
 				sp := len(v.stack)
 				name := fr.pr.consts[in.a].(string)
 
-				fd := v.p.method(v.stack[sp-n], name)
+				fd, self := v.p.dispatch(v.stack[sp-n], name)
 				if fd == nil {
 					return nil, v.faultHere(fr, "internal", "no method "+name)
 				}
+
+				v.stack[sp-n] = self
 
 				if fd.Decl.Body == nil {
 					args := append([]Value(nil), v.stack[sp-n:]...)
@@ -529,6 +531,9 @@ outer:
 				case *Struct:
 					v.stack[n] = x.Fields[in.a]
 				}
+			case opBox:
+				n := len(v.stack) - 1
+				v.stack[n] = boxed(v.stack[n], fr.pr.consts[in.a].(*check.TraitDef))
 			case opNoMatch:
 				return nil, v.faultHere(fr, "internal", "no case of the match fits "+Format(v.stack[fr.base+int(in.a)]))
 			case opFault:

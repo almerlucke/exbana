@@ -116,7 +116,7 @@ the names `A` and `B` that are not types are parameters of the impl.
 
 **Not checked yet.**
 - The sized number types (`Int32`, `UInt8`, ...) and the range of literals: there are `Int` and `Float`.
-- Traits with parameters (the checker says so), and traits as types: a trait is only a bound.
+- Traits with parameters (the checker says so), and a `dyn` of more than one trait (`dyn A + B`).
 - Whether an `example` is true (it is only checked to be a `Bool` that does nothing), and whether `requires` can hold.
 - Faults (overflow, division by zero): they happen when the program runs.
 - Unused names, unreachable code, a name that shadows another.
@@ -176,3 +176,37 @@ by field.
   times). What is left in the loops is the library and the boxing of `Int`s in Go values, which both ways pay.
 - **Not done.** No optimisation: there is no folding of constants, no specialised instructions for `Int` and `Float` beyond a fast
   path for `Int` addition, subtraction and comparison, and no inlining.
+
+## Any type
+
+There is no `Any`: a value that could be anything is either one of a few known things, or it is known by what it can do, or it
+is data. Two of these are built in.
+
+**Trait objects.** `dyn Area` is the type of any value whose type has the trait `Area`. A value is made into one where that is
+written, `Circle(radius: 1.0) as dyn Area`, and nowhere else: there is no conversion that is not in the source. That makes a
+list of things that are different types and have a behaviour in common, `List<dyn Area>`, and the methods of the trait can be
+called on each of them.
+
+- The cast checks that the type has the trait (an `Int` can be made into a `dyn Describe` if there is an `impl Describe for Int`).
+- A `dyn Area` has the methods of `Area` and no others, and a pattern can not take it apart. It is equal to another `dyn Area` if
+  what it was made from is.
+- It also has the trait itself, so it can be given to `fn total<T: Area>(x: T)`.
+- A value carries the trait it was made for, so a type that has two traits with a method of the same name is called the right
+  way: `x as dyn Name` and `x as dyn Other` call different methods.
+- Only one trait, `dyn A`, is supported. A map can not have a `dyn` as a key.
+
+**The `Data` enum.** For values whose shape is not known when the program is written: JSON, a configuration, what the host
+gives. It is an enum of the prelude, `Null`, `Bool`, `Int`, `Float`, `Text`, `List` and `Map`, which is taken apart with a `match`
+like any enum, and made with the name of the enum: `Data::Int(3)`, `Data::Map({"a": Data::Null})`. For the moment of not wanting
+a `match` there are `as_bool`, `as_int`, `as_float`, `as_text`, `as_list` and `as_map` (each gives an `Option`), `get(key)` for a
+map, `at(index)` for a list, and `is_null`.
+
+- `Data::from_json(text)` is a `Result<Data, ParseError>`: `Invalid` if the text is not JSON (or nests more than 1,000 deep, or
+  has anything after the document), `OutOfRange` if a number does not fit (an integer past `Int`, a float past `Float`).
+- `data.to_json()` writes it with nothing in it that is not needed. A `Float` is written so that it reads back as a `Float`
+  (`1.0` and not `1`), and the keys of a map are in the order they were added, so what is written is read back as the same
+  value, and written the same. A `Float` that is not a number (NaN, infinity) is a fault.
+- A number in JSON is an `Int` if it is written without a point and without an exponent, and a `Float` if not. A key that is
+  written twice keeps its first place and its last value.
+- From Go, `program.DataFromGo` makes a `Data` of `nil`, bool, the integers and floats, string, `[]any` and `map[string]any`, and
+  `run.DataToGo` gives them back. The keys of a Go map are in order of the keys, since Go has no other order.

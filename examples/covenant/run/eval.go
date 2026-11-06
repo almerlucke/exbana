@@ -223,6 +223,13 @@ func (m *machine) eval(e ast.Expr, en *env) (Value, error) {
 		return m.match(e, en)
 	case *ast.If:
 		return m.ifExpr(e, en)
+	case *ast.Cast:
+		x, err := m.eval(e.X, en)
+		if err != nil {
+			return nil, err
+		}
+
+		return boxed(x, m.p.res.Refs[e].Entity.(*check.TraitDef)), nil
 	}
 
 	return nil, m.fault(e, "internal", "an expression the interpreter does not know")
@@ -387,12 +394,12 @@ func (m *machine) call(e *ast.Call, en *env) (Value, error) {
 			return nil, err
 		}
 
-		fd := m.p.method(recv, f.Name)
+		fd, self := m.p.dispatch(recv, f.Name)
 		if fd == nil {
 			return nil, m.fault(f, "internal", "no method "+f.Name)
 		}
 
-		return m.callDef(fd, append([]Value{recv}, args...), e)
+		return m.callDef(fd, append([]Value{self}, args...), e)
 	case *ast.Name:
 		if ref, ok := m.p.res.Refs[f]; ok {
 			switch ent := ref.Entity.(type) {
@@ -849,9 +856,59 @@ func (m *machine) matchPat(p ast.Pattern, v Value, en *env) bool {
 	return false
 }
 
+// boxed is a value known by a trait; one that is already is not wrapped again.
+func boxed(v Value, tr *check.TraitDef) Value {
+	if o, ok := v.(*Obj); ok && o.Trait == tr {
+		return o
+	}
+
+	return &Obj{tr, v}
+}
+
+// dispatch finds the method to call on a value, and the value to call it on. A value that is known by a trait has the method of
+// that trait, of the type that it was made from; any other has the method of its type.
+func (p *Program) dispatch(recv Value, name string) (*check.FnDef, Value) {
+	o, ok := recv.(*Obj)
+	if !ok {
+		return p.method(recv, name), recv
+	}
+
+	if def := p.defOf(o.V); def != nil {
+		for _, impl := range def.Impls {
+			if impl.Trait == o.Trait {
+				if fd, ok := impl.Methods[name]; ok {
+					return fd, o.V
+				}
+			}
+		}
+	}
+
+	return nil, recv
+}
+
 // method finds the method of a value: the type of the value decides, which is how a method of a trait is found for a value
 // whose type is a parameter.
 func (p *Program) method(recv Value, name string) *check.FnDef {
+	def := p.defOf(recv)
+	if def == nil {
+		return nil
+	}
+
+	if fd, ok := def.Methods[name]; ok {
+		return fd
+	}
+
+	for _, impl := range def.Impls {
+		if fd, ok := impl.Methods[name]; ok {
+			return fd
+		}
+	}
+
+	return nil
+}
+
+// defOf is the type a value is a value of.
+func (p *Program) defOf(recv Value) *check.Def {
 	var def *check.Def
 
 	switch v := recv.(type) {
@@ -877,21 +934,7 @@ func (p *Program) method(recv Value, name string) *check.FnDef {
 		def = v.Def
 	}
 
-	if def == nil {
-		return nil
-	}
-
-	if fd, ok := def.Methods[name]; ok {
-		return fd
-	}
-
-	for _, impl := range def.Impls {
-		if fd, ok := impl.Methods[name]; ok {
-			return fd
-		}
-	}
-
-	return nil
+	return def
 }
 
 func (m *machine) unary(e *ast.Unary, en *env) (Value, error) {

@@ -102,6 +102,13 @@ func (c *checker) namePattern(p *ast.PatName, t Type, bind func(string, Type, as
 		return wildPat
 	}
 
+	if d, isDyn := prune(t).(*Dyn); isDyn {
+		c.errorf(p, "pattern", "a %s is not taken apart by a pattern: call the methods of %s on it", d, d.Trait.Name)
+		c.bindAll(p.Args, bind)
+
+		return wildPat
+	}
+
 	def, v, ok := c.ctorOf(p.Path, t)
 	if !ok {
 		name := strings.Join(p.Path, "::")

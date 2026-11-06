@@ -530,6 +530,9 @@ func (c *compiler) expr(e ast.Expr) {
 		c.binary(e)
 	case *ast.Closure:
 		c.closure(e)
+	case *ast.Cast:
+		c.expr(e.X)
+		c.emit(opBox, c.konst(c.p.res.Refs[e].Entity), 0, pos)
 	case *ast.Match:
 		c.match(e)
 	case *ast.If:

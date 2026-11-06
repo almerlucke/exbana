@@ -172,6 +172,13 @@ func (s *Set) Add(v Value) *Set {
 // Remove is the set without the item.
 func (s *Set) Remove(v Value) *Set { return &Set{s.m.Remove(v)} }
 
+// Obj is a value that is known by a trait: what "as dyn Area" makes, with the trait it was made for. A method is found from that
+// trait, so a type that has two traits with a method of the same name is called the right way.
+type Obj struct {
+	Trait *check.TraitDef
+	V     Value
+}
+
 // Struct is a value of a struct. Host is for the host to keep what a type that it provides stands for.
 type Struct struct {
 	Def    *check.Def
@@ -217,6 +224,10 @@ func writeKey(sb *strings.Builder, v Value) {
 		sb.WriteString(map[bool]string{true: "T;", false: "F;"}[v])
 	case Unit:
 		sb.WriteString("u;")
+	case *Obj:
+		sb.WriteString("O" + v.Trait.Name + "(")
+		writeKey(sb, v.V)
+		sb.WriteString(")")
 	case *Struct:
 		sb.WriteString("S" + v.Def.Module + "." + v.Def.Name + "(")
 
@@ -284,6 +295,9 @@ func Equal(a, b Value) bool {
 		}
 
 		return true
+	case *Obj:
+		b, ok := b.(*Obj)
+		return ok && a.Trait == b.Trait && Equal(a.V, b.V)
 	case *Struct:
 		b, ok := b.(*Struct)
 		return ok && a.Def == b.Def && equalAll(a.Fields, b.Fields)
@@ -406,14 +420,16 @@ func format(sb *strings.Builder, v Value) {
 		sb.WriteString(v.Def.Name)
 		formatFields(sb, v.Def.Fields, v.Fields, true)
 	case *Enum:
-		// Some(1) and Ok(1) are written without the name of what they hold, as they are made
-		plain := v.Def.Module == "prelude" && (v.Def.Name == "Option" || v.Def.Name == "Result")
-		if !plain {
+		// the enums of the prelude are written as a program writes them, with what they hold by position: Some(1), Data::Int(7)
+		prelude := v.Def.Module == "prelude"
+		if !prelude || (v.Def.Name != "Option" && v.Def.Name != "Result") {
 			sb.WriteString(v.Def.Name + "::")
 		}
 
 		sb.WriteString(v.Variant.Name)
-		formatFields(sb, v.Variant.Fields, v.Fields, !plain)
+		formatFields(sb, v.Variant.Fields, v.Fields, !prelude)
+	case *Obj:
+		format(sb, v.V)
 	case *Func:
 		sb.WriteString("<function " + v.name + ">")
 	default:

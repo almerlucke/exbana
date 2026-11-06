@@ -253,6 +253,29 @@ fn describe(n: Int, s: Text) -> Text {
     }
 }
 `,
+	"trait objects": `
+trait Area {
+    fn area(self) -> Float
+}
+
+fn total(items: List<dyn Area>) -> Float {
+    return items.fold(0.0, fn(sum, item) => sum + item.area())
+}
+
+fn one(x: dyn Area) -> dyn Area {
+    return x
+}
+
+fn demo() -> Float {
+    let shapes = [Circle(radius: 1.0) as dyn Area, Rect(2.0, 3.0) as dyn Area]
+    let again = one(shapes.first().unwrap_or(Circle(radius: 2.0) as dyn Area))
+    return total(shapes) + (again.area() as dyn Area).area() + Circle(radius: 1.0).wider() as dyn Area
+}
+
+fn closure_over(f: Fn(dyn Area) -> dyn Area) -> Fn(dyn Area) -> dyn Area {
+    return f
+}
+`,
 	"assignments": `
 fn f() {
     var x = 1
@@ -264,41 +287,45 @@ fn f() {
 
 // Rejected are sources that are not Covenant, by what is wrong with them.
 var Rejected = map[string]string{
-	"two statements on a line":        "fn f() {\n    let a = 1 let b = 2\n}\n",
-	"a semicolon":                     "fn f() {\n    let a = 1;\n}\n",
-	"a keyword as a name":             "fn f() {\n    let match = 1\n}\n",
-	"chained comparison":              "fn f() -> Bool {\n    return 1 < 2 < 3\n}\n",
-	"and mixed with or":               "fn f() -> Bool {\n    return a and b or c\n}\n",
-	"a line break before an operator": "fn f() -> Int {\n    return a\n        + b\n}\n",
-	"a promise after a statement":     "fn f() {\n    let a = 1\n    requires a > 0\n}\n",
-	"a missing block":                 "fn f() -> Int\n",
-	"a statement outside a function":  "let a = 1\n",
-	"an enum without variants":        "enum E {\n}\n",
-	"a use after an item":             "fn f() {\n}\nuse a::b\n",
-	"a keyword as a function name":    "fn with() {\n}\n",
-	"effects after the result":        "fn f() -> Int with fs::read {\n}\n",
-	"effects after a function type":   "fn f(g: Fn(Int) -> Int with fs::read) {\n}\n",
-	"a group without members":         "effects Empty =\n",
-	"a group inside a function":       "fn f() {\n    effects A = fs::read\n}\n",
-	"effects as a name":               "fn effects() {\n}\n",
-	"an index":                        "fn f() {\n    let a = xs[0]\n}\n",
-	"an empty brace as a value":       "fn f() {\n    let a = {}\n}\n",
-	"a closure without a body":        "fn f() {\n    let a = fn(x)\n}\n",
-	"a closure with a semicolon":      "fn f() {\n    let a = fn(x) => x;\n}\n",
-	"a map entry without a value":     "fn f() {\n    let a = {\"a\"}\n}\n",
-	"a function type without parens":  "fn f(g: Fn -> Int) {\n}\n",
-	"a trailing comma in a call":      "fn f() {\n    g(a, b,)\n}\n",
-	"a trailing comma in a list":      "fn f() {\n    let a = [1, 2,]\n}\n",
-	"a trailing comma in parameters":  "fn f(a: Int,) {\n}\n",
-	"a closure as an operand":         "fn f() {\n    let a = 1 + fn(x) => x\n}\n",
-	"a space before a colon":          "fn f() {\n    let a : Int = 1\n}\n",
-	"braces behind a name":            "fn f() {\n    let p = Point { x: 1 }\n}\n",
-	"effects separated by commas":     "fn f() with a, b {\n}\n",
-	"a field without a type":          "struct P {\n    x\n}\n",
-	"a method without a body":         "impl P {\n    fn f(self)\n}\n",
-	"a number with a leading zero":    "fn f() {\n    let a = 007\n}\n",
-	"a hex number in capitals":        "fn f() {\n    let a = 0xFF\n}\n",
-	"a number as a word":              "fn f() {\n    let a = 12abc\n}\n",
-	"a text that is not closed":       "fn f() {\n    let a = \"abc\n}\n",
-	"a character that is not ASCII":   "fn f() {\n    let é = 1\n}\n",
+	"two statements on a line":         "fn f() {\n    let a = 1 let b = 2\n}\n",
+	"a semicolon":                      "fn f() {\n    let a = 1;\n}\n",
+	"a keyword as a name":              "fn f() {\n    let match = 1\n}\n",
+	"chained comparison":               "fn f() -> Bool {\n    return 1 < 2 < 3\n}\n",
+	"and mixed with or":                "fn f() -> Bool {\n    return a and b or c\n}\n",
+	"a line break before an operator":  "fn f() -> Int {\n    return a\n        + b\n}\n",
+	"a promise after a statement":      "fn f() {\n    let a = 1\n    requires a > 0\n}\n",
+	"a missing block":                  "fn f() -> Int\n",
+	"a statement outside a function":   "let a = 1\n",
+	"an enum without variants":         "enum E {\n}\n",
+	"a use after an item":              "fn f() {\n}\nuse a::b\n",
+	"a keyword as a function name":     "fn with() {\n}\n",
+	"effects after the result":         "fn f() -> Int with fs::read {\n}\n",
+	"effects after a function type":    "fn f(g: Fn(Int) -> Int with fs::read) {\n}\n",
+	"a group without members":          "effects Empty =\n",
+	"a group inside a function":        "fn f() {\n    effects A = fs::read\n}\n",
+	"effects as a name":                "fn effects() {\n}\n",
+	"an index":                         "fn f() {\n    let a = xs[0]\n}\n",
+	"an empty brace as a value":        "fn f() {\n    let a = {}\n}\n",
+	"a closure without a body":         "fn f() {\n    let a = fn(x)\n}\n",
+	"a closure with a semicolon":       "fn f() {\n    let a = fn(x) => x;\n}\n",
+	"a map entry without a value":      "fn f() {\n    let a = {\"a\"}\n}\n",
+	"a function type without parens":   "fn f(g: Fn -> Int) {\n}\n",
+	"a trailing comma in a call":       "fn f() {\n    g(a, b,)\n}\n",
+	"a trailing comma in a list":       "fn f() {\n    let a = [1, 2,]\n}\n",
+	"a trailing comma in parameters":   "fn f(a: Int,) {\n}\n",
+	"a closure as an operand":          "fn f() {\n    let a = 1 + fn(x) => x\n}\n",
+	"a space before a colon":           "fn f() {\n    let a : Int = 1\n}\n",
+	"braces behind a name":             "fn f() {\n    let p = Point { x: 1 }\n}\n",
+	"effects separated by commas":      "fn f() with a, b {\n}\n",
+	"a field without a type":           "struct P {\n    x\n}\n",
+	"a method without a body":          "impl P {\n    fn f(self)\n}\n",
+	"a cast to a type that is not dyn": "fn f() {\n    let a = 1 as Int\n}\n",
+	"a cast with nothing after as":     "fn f() {\n    let a = 1 as dyn\n}\n",
+	"two traits in a dyn":              "fn f(x: dyn A + B) {\n}\n",
+	"dyn as a name":                    "fn f() {\n    let dyn = 1\n}\n",
+	"a number with a leading zero":     "fn f() {\n    let a = 007\n}\n",
+	"a hex number in capitals":         "fn f() {\n    let a = 0xFF\n}\n",
+	"a number as a word":               "fn f() {\n    let a = 12abc\n}\n",
+	"a text that is not closed":        "fn f() {\n    let a = \"abc\n}\n",
+	"a character that is not ASCII":    "fn f() {\n    let é = 1\n}\n",
 }

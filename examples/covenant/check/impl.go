@@ -216,6 +216,10 @@ func sameType(a, b Type) bool {
 	}
 
 	switch a := a.(type) {
+	case *Dyn:
+		b, ok := b.(*Dyn)
+
+		return ok && a.Trait == b.Trait
 	case *Con:
 		b, ok := b.(*Con)
 		if !ok || a.Def != b.Def || len(a.Args) != len(b.Args) {
@@ -265,6 +269,8 @@ func (c *checker) instantiate(fd *FnDef) (*Fn, *subst) {
 // implements says whether a type has a trait.
 func (c *checker) implements(t Type, tr *TraitDef) bool {
 	switch t := prune(t).(type) {
+	case *Dyn:
+		return t.Trait == tr
 	case *Param:
 		for _, b := range t.Bounds {
 			if b == tr {
@@ -342,6 +348,10 @@ func (c *checker) findMethod(t Type, name string) (*FnDef, bool) {
 				return fd, true
 			}
 		}
+	case *Dyn:
+		fd, ok := t.Trait.Methods[name]
+
+		return fd, ok
 	}
 
 	return nil, false

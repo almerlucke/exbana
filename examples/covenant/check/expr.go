@@ -101,6 +101,8 @@ func (c *checker) exprOf(e ast.Expr, want Type) Type {
 		return c.binary(e)
 	case *ast.Closure:
 		return c.closure(e, want)
+	case *ast.Cast:
+		return c.cast(e)
 	case *ast.Match:
 		return c.matchExpr(e, want)
 	case *ast.If:
@@ -601,6 +603,10 @@ func (c *checker) methodNames(t Type) []string {
 				out = append(out, n)
 			}
 		}
+	case *Dyn:
+		for n := range t.Trait.Methods {
+			out = append(out, n)
+		}
 	}
 
 	return out
@@ -677,6 +683,36 @@ func (c *checker) construct(e *ast.Call, def *Def, name string, fields []*FieldI
 	}
 
 	return result
+}
+
+// cast makes a value into a dyn: one that is only known by a trait. It is where that is written, and it checks that the type of
+// the value has the trait.
+func (c *checker) cast(e *ast.Cast) Type {
+	target := c.typeOf(e.Type, c.ts)
+	xt := prune(c.expr(e.X, nil))
+
+	d, ok := target.(*Dyn)
+	if !ok {
+		return bad
+	}
+
+	c.refs[e] = Ref{Entity: d.Trait}
+
+	switch t := xt.(type) {
+	case *Bad:
+	case *Var:
+		c.errorf(e.X, "cannot-infer", "the type of this is not known yet, so it can not be made into a %s: say what it is", target)
+	case *Dyn:
+		if t.Trait != d.Trait {
+			c.errorf(e.X, "type-mismatch", "a %s is not made into a %s: it is only known by %s", t, d, t.Trait.Name)
+		}
+	default:
+		if !c.implements(xt, d.Trait) {
+			c.errorf(e.X, "trait", "%s does not have the trait %s, and can not be made into a %s", xt, d.Trait.Name, d)
+		}
+	}
+
+	return target
 }
 
 func (c *checker) member(e *ast.Member) Type {

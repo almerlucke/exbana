@@ -62,6 +62,8 @@ func TestExpressions(t *testing.T) {
 		"fn(x) => x":             `(Closure Params:[(ClosureParam Name:x)] Value:(Name Path:[x]))`,
 		"fn(x: Int) -> Int => x": `(Closure Params:[(ClosureParam Name:x Type:(TypeName Path:[Int]))] Ret:(TypeName Path:[Int]) Value:(Name Path:[x]))`,
 		"fn(x) {\n return x\n }": `(Closure Params:[(ClosureParam Name:x)] Body:(Block Stmts:[(Return Value:(Name Path:[x]))]))`,
+		"x as dyn Area":          `(Cast X:(Name Path:[x]) Type:(TypeDyn Path:[Area]))`,
+		"f(x).y as dyn a::B":     `(Cast X:(Member X:(Call Fun:(Name Path:[f]) Args:[(Arg Value:(Name Path:[x]))]) Name:y) Type:(TypeDyn Path:[a B]))`,
 		"(fn(x) => x)(1)":        `(Call Fun:(Closure Params:[(ClosureParam Name:x)] Value:(Name Path:[x])) Args:[(Arg Value:(Lit Text:1))])`,
 	} {
 		if got := expression(t, src); got != want {
@@ -183,6 +185,23 @@ fn g<T, U: Area + Show>(x: T, self) with G -> Int {
 
 	if got := ast.Dump(b.Stmts[4]); got != `(Assign Target:(Name Path:[n]) Value:(Lit Text:1))` {
 		t.Errorf("assign %s", got)
+	}
+}
+
+func TestDynTypes(t *testing.T) {
+	f := build(t, "fn f(a: List<dyn Area>, b: Fn(dyn A) -> dyn B) -> dyn C {\n}\n")
+	fn := f.Items[0].Decl.(*ast.Fn)
+
+	if got := ast.Dump(fn.Params[0].Type); got != `(TypeName Path:[List] Args:[(TypeDyn Path:[Area])])` {
+		t.Errorf("%s", got)
+	}
+
+	if got := ast.Dump(fn.Params[1].Type); got != `(TypeFn Params:[(TypeDyn Path:[A])] Ret:(TypeDyn Path:[B]))` {
+		t.Errorf("%s", got)
+	}
+
+	if got := ast.Dump(fn.Ret); got != `(TypeDyn Path:[C])` {
+		t.Errorf("%s", got)
 	}
 }
 

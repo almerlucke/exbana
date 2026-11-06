@@ -90,6 +90,7 @@ const (
 	Var
 	While
 	With
+	Dyn    // dyn, a value of any type that has a trait
 	FnType // Fn, the type of functions
 
 	numKinds
@@ -107,7 +108,7 @@ var keywords = map[string]Kind{
 	"and": And, "as": As, "const": Const, "effects": Effects, "else": Else, "enum": Enum, "example": Example, "fn": Fn,
 	"for": For, "if": If, "impl": Impl, "in": In, "let": Let, "match": Match, "not": Not, "or": Or, "pub": Pub,
 	"requires": Requires, "return": Return, "self": Self, "struct": Struct, "trait": Trait, "true": True, "false": False,
-	"try": Try, "type": Type, "use": Use, "var": Var, "while": While, "with": With, "Fn": FnType,
+	"try": Try, "type": Type, "use": Use, "var": Var, "while": While, "with": With, "dyn": Dyn, "Fn": FnType,
 }
 
 func init() {

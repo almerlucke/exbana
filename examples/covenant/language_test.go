@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
+	"github.com/almerlucke/exbana/v3/examples/covenant/format"
 	"github.com/almerlucke/exbana/v3/examples/covenant/run"
 	"github.com/almerlucke/exbana/v3/examples/covenant/std"
 	"github.com/almerlucke/exbana/v3/examples/covenant/token"
@@ -22,6 +23,7 @@ import (
 //	covenant-modules         modules, each after a line "--- name", that have to check together
 //	covenant-modules-error   modules that have to have a problem, as for covenant-error
 //	covenant-prelude         the prelude, which has to be the file check/prelude.cov
+//	covenant-format          a source, a line "--- formatted", and what covenant fmt makes of it
 //	json-for-previous        the manifest of the covenant block just before it, exactly as covenant describe writes it
 
 type block struct {
@@ -125,6 +127,21 @@ func TestLanguageExamplesAreTrue(t *testing.T) {
 			}
 
 			manifests++
+
+			continue
+		case "covenant-format":
+			before, after, ok := strings.Cut(b.text, "--- formatted\n")
+			if !ok {
+				t.Errorf("line %d: an example of the formatter has a line --- formatted", b.line)
+				continue
+			}
+
+			got, err := format.Source(before)
+			if err != nil {
+				t.Errorf("line %d: %v", b.line, err)
+			} else if got != after {
+				t.Errorf("line %d: the formatter does not make this of it:\n%s", b.line, got)
+			}
 
 			continue
 		case "covenant":

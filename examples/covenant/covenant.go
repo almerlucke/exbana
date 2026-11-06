@@ -16,9 +16,10 @@ import (
 // File is a parsed source file: the tokens and the tree of them. The positions in the tree are the numbers of tokens, and
 // Tokens says where in the source each of them is.
 type File struct {
-	Source string
-	Tokens []token.Token
-	Tree   *parser.CovenantTree
+	Source   string
+	Tokens   []token.Token
+	Comments []token.Comment // the comments are not tokens: this is where they are, in order
+	Tree     *parser.CovenantTree
 }
 
 // AST is the file as plain values: see the ast package.
@@ -38,7 +39,7 @@ func (e *Error) Error() string { return fmt.Sprintf("%d:%d: %s", e.Line, e.Col, 
 
 // Parse reads the source.
 func Parse(src string) (*File, error) {
-	tokens, err := token.Lex(src)
+	tokens, comments, err := token.LexComments(src)
 	if err != nil {
 		if lex, ok := err.(*token.Error); ok {
 			line, col := token.Position(src, lex.Pos)
@@ -77,5 +78,5 @@ func Parse(src string) (*File, error) {
 		return nil, &Error{line, col, fmt.Sprintf("unexpected %s, expected %s", found, strings.Join(syn.Expected, ", "))}
 	}
 
-	return &File{src, tokens, tree}, nil
+	return &File{src, tokens, comments, tree}, nil
 }

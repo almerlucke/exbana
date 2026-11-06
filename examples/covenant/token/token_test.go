@@ -236,3 +236,27 @@ func TestRandomSources(t *testing.T) {
 		checkTokens(t, sb.String())
 	}
 }
+
+func TestCommentsAreReportedAndTokensAreTheSame(t *testing.T) {
+	src := "// a  \nlet x = 1 // b\t\r\n\n  //c\n// \"not text\"\nlet s = \"// not a comment\"\n"
+
+	tokens, comments, err := LexComments(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, c := range comments {
+		got = append(got, src[c.Begin:c.End])
+	}
+
+	want := []string{"// a", "// b", "//c", `// "not text"`}
+	if !slices.Equal(got, want) {
+		t.Errorf("comments %q, want %q", got, want)
+	}
+
+	plain, err := Lex(src)
+	if err != nil || !slices.Equal(plain, tokens) {
+		t.Errorf("Lex gives other tokens than LexComments: %v", err)
+	}
+}

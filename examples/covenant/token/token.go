@@ -190,11 +190,25 @@ func isHex(c byte) bool    { return isDigit(c) || c >= 'a' && c <= 'f' }
 // What is not part of the language is an error: a semicolon, a character that is not ASCII outside a text, a text that
 // is not closed or that has an escape other than \" \\ \n \t \r.
 func Lex(src string) ([]Token, error) {
+	tokens, _, err := LexComments(src)
+
+	return tokens, err
+}
+
+// Comment is a comment: the bytes from Begin up to End, from the two slashes to the end of the line, not including the line end
+// or the spaces and the carriage return before it.
+type Comment struct {
+	Begin, End int
+}
+
+// LexComments is Lex, and it also says where the comments are, in order. The tokens are not different for them: a comment is not in
+// the grammar, but a program that rewrites the source, as the formatter does, must not lose one.
+func LexComments(src string) ([]Token, []Comment, error) {
 	l := &lexer{src: src}
 
 	for l.pos < len(src) {
 		if err := l.next(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -203,13 +217,14 @@ func Lex(src string) ([]Token, error) {
 		l.emit(NL, len(src), len(src))
 	}
 
-	return l.out, nil
+	return l.out, l.comments, nil
 }
 
 type lexer struct {
-	src string
-	pos int
-	out []Token
+	src      string
+	pos      int
+	out      []Token
+	comments []Comment
 }
 
 func (l *lexer) emit(kind Kind, begin, end int) {
@@ -260,6 +275,13 @@ func (l *lexer) next() error {
 		for l.pos < len(src) && src[l.pos] != '\n' {
 			l.pos++
 		}
+
+		end := l.pos
+		for end > i && (src[end-1] == ' ' || src[end-1] == '\t' || src[end-1] == '\r') {
+			end--
+		}
+
+		l.comments = append(l.comments, Comment{i, end})
 	case isLetter(c):
 		return l.word()
 	case isDigit(c):

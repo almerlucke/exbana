@@ -8,7 +8,7 @@ So far there is a lexer (`token/`), a grammar over its tokens (`grammar/`), a pa
 regenerate it with `go generate` here), `covenant.Parse`, the program as plain Go values (`ast/`), a type and effect checker
 (`check/`), an interpreter for checked programs that walks the tree or runs bytecode (`run/`), a standard library for programs that
 do things in the world, behind a policy (`std/`), the public functions of a program as tools for an agent (`tool/`), a command
-(`cmd/covenant`), and this note, which records the
+(`cmd/covenant`), a formatter (`format/`), and this note, which records the
 decisions the grammar does not show.
 
 ## Syntax the parser needed
@@ -167,6 +167,26 @@ program can print with `io::print`.
 
 **Not there yet.** Memory is not limited, only steps and depth; the standard library is what `check/prelude.cov` lists; and
 `Map.set` of a key that is already there, `Map.remove` and `List.concat` copy.
+
+## The formatter
+
+`covenant fmt` (and `format.Source`) writes a program the one way it is written. It is the tree written out again, by a printer
+that builds a *document*, which is text, groups, indentation and the lines between: a group is on one line if it fits in 100 columns, and
+has every line in it broken if not (`format/doc.go`, the algorithm of Wadler and of prettier). What is not in the tree is kept by
+position: the lexer reports the comments (`token.LexComments`), and the printer puts each in front of the line that follows it, or at the end
+of the line it was on. A list, or a row of operators, that has a line end in the source keeps it.
+
+- **Idempotent.** Formatting the result changes nothing. That is why the blank lines between declarations follow the *kind* of a
+  declaration and not how long it was in the source, and why a row of operators that is broken makes the brackets around it break: the
+  second reading sees the line ends the first one wrote.
+- **It checks itself.** `Source` parses its output, and compares the tree (`ast.Dump`) and the comments with the input's. A mistake in
+  the formatter is an error (`format.ErrBug`), never a changed program.
+- **Tested by layouts.** Besides the cases with the output written out, a test writes the programs of the repository again with other
+  spaces, line ends where the grammar allows them, and comments in all of them, and holds the formatter to the check, to keeping all the
+  comments, and to being idempotent (`LAYOUTS=3000 go test -run AnyLayout ./format` looks harder), and `FuzzFormat` does so for
+  any text. A map key that is not a name or a literal is put between parentheses, as `(x % y): 1` read without them is `x % y:` and a label.
+- **Where it gives.** A comment inside an expression, where no line can end, goes to the front of its line; a long chain of calls
+  (`a.b().c()`) is not broken, since the grammar has no place for a line end in front of a dot.
 
 ## Bytecode
 

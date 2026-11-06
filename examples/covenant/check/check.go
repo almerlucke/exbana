@@ -5,9 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/almerlucke/exbana/v3/examples/covenant"
 	"github.com/almerlucke/exbana/v3/examples/covenant/ast"
-	"github.com/almerlucke/exbana/v3/examples/covenant/token"
 )
 
 // Config is what the host tells the checker.
@@ -23,8 +21,10 @@ type Config struct {
 }
 
 // Diagnostic is something wrong in the program. It is data: the code says what kind of thing it is, so that a tool can act on it.
+// Line and Col are in the file, and Span is in the text of the module (see Module.Source).
 type Diagnostic struct {
 	Module    string
+	File      string
 	Span      ast.Span
 	Line, Col int
 	Code      string
@@ -32,7 +32,18 @@ type Diagnostic struct {
 }
 
 func (d Diagnostic) String() string {
-	return fmt.Sprintf("%s:%d:%d: %s", d.Module, d.Line, d.Col, d.Msg)
+	where := d.File
+	if where == "" {
+		where = d.Module
+	}
+
+	return fmt.Sprintf("%s:%d:%d: %s", where, d.Line, d.Col, d.Msg)
+}
+
+// Source is a file of a module.
+type Source struct {
+	Name string // as it is called in messages: the path
+	Text string
 }
 
 // Result is what the checker found.
@@ -93,7 +104,6 @@ type checker struct {
 	known   map[string]bool
 	types   map[ast.Node]Type
 	refs    map[ast.Node]Ref
-	sources map[*Module]*covenant.File
 	implOf  map[*ast.Impl]*Impl
 	ts      *tscope // the type parameters of the function that is being checked
 
@@ -104,11 +114,23 @@ type checker struct {
 	fn    *fnCtx
 }
 
-// Check checks a program: its modules, by name, as source. The prelude (Option, Result, the methods of the types that are built
-// in) is part of every program.
+// Check checks a program of modules that are a file each: their names, and their source. The prelude (Option, Result, the methods
+// of the types that are built in) is part of every program.
 func Check(cfg Config, sources map[string]string) *Result {
+	modules := make(map[string][]Source, len(sources))
+
+	for name, text := range sources {
+		modules[name] = []Source{{Name: name + ".cov", Text: text}}
+	}
+
+	return CheckModules(cfg, modules)
+}
+
+// CheckModules checks a program of modules that are one or more files each: the files of a module share their names, whatever
+// is private in one of them can be used in the others, and what a module uses (with use) is for all of its files.
+func CheckModules(cfg Config, sources map[string][]Source) *Result {
 	c := &checker{
-		cfg: cfg, mods: map[string]*Module{}, known: map[string]bool{}, types: map[ast.Node]Type{}, refs: map[ast.Node]Ref{}, sources: map[*Module]*covenant.File{}, implOf: map[*ast.Impl]*Impl{},
+		cfg: cfg, mods: map[string]*Module{}, known: map[string]bool{}, types: map[ast.Node]Type{}, refs: map[ast.Node]Ref{}, implOf: map[*ast.Impl]*Impl{},
 	}
 
 	for _, e := range cfg.Effects {
@@ -144,7 +166,7 @@ func (c *checker) errorSpan(sp ast.Span, code, format string, args ...any) {
 
 	if c.cur != nil {
 		d.Module = c.cur.Name
-		d.Line, d.Col = token.Position(c.cur.Source, sp.Begin)
+		d.File, d.Line, d.Col = c.cur.Locate(sp.Begin)
 	}
 
 	c.diags = append(c.diags, d)

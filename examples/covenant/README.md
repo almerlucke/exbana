@@ -6,8 +6,9 @@ in it is run by the tests, so what it says is true. This note is about how it is
 A small language meant to be read by people and by agents alike, and to be embedded in Go programs as a scripting language.
 So far there is a lexer (`token/`), a grammar over its tokens (`grammar/`), a parser generated from the grammar (`parser/`,
 regenerate it with `go generate` here), `covenant.Parse`, the program as plain Go values (`ast/`), a type and effect checker
-(`check/`), an interpreter for checked programs that walks the tree or runs bytecode (`run/`), a command (`cmd/covenant`), and
-this note, which records the
+(`check/`), an interpreter for checked programs that walks the tree or runs bytecode (`run/`), a standard library for programs that
+do things in the world, behind a policy (`std/`), the public functions of a program as tools for an agent (`tool/`), a command
+(`cmd/covenant`), and this note, which records the
 decisions the grammar does not show.
 
 ## Syntax the parser needed
@@ -112,6 +113,17 @@ nothing, and a name can not be made of it. A module is used by name (`use geomet
 (`use geometry::Point`); only `pub` things can be used from another module, and an inherent method has to be `pub` to be called
 from another module. Modules can not use each other in a circle.
 
+**Modules are directories.** The files of a directory are one module: they share their names, so what is private is private to
+all of them, and a `use` is for all of them. A directory in a directory is another module, `myapp::util` for `myapp/util`, and a
+`.cov` file on its own is a module of one file. There is no line in a file that says what module it is in, so what a file says can
+not be different from where it is. Inside, a module is the text of its files one after the other, with a blank line between them,
+and each file is parsed on its own and put at its place (`ast.BuildAt`): every position in the tree, in a diagnostic, in a fault
+and in the bytecode is an offset in that text, and `Module.Locate` gives the file, the line and the column it stands for. That is
+why a problem is reported with the path of its file and a line in it, and why a program can be as many files as it needs.
+`check.CheckModules` takes the files of each module; `check.LoadDir` and `check.LoadFiles` read them from disk. The name of a module
+comes from where it is, which can be wrong (a checkout called `myapp-main`), so a program can be given a name by whoever loads it:
+`name=dir` (`check.LoadDirAs`, `-lib name=dir`) and `name=file.cov`. Nothing is in the files for that.
+
 **Traits.** A trait is a set of signatures. `impl Trait for Type` has to have all of them, with the same types and with at most
 the effects the trait gives (the check names what differs). A generic function can ask for a trait of a type parameter,
 `fn total<T: Area>(...)`, and the call checks it; inside, the methods of the trait are the methods of `T`. In `impl Pair<A, B>`
@@ -150,7 +162,7 @@ the names `A` and `B` that are not types are parameters of the impl.
 - The order of a map and of a set is the order things were added, so a program that goes over one gives the same result every
   time.
 
-`go run ./examples/covenant/cmd/covenant check|test|run files...` does this from the command line. Every file is a module, and a
+`go run ./examples/covenant/cmd/covenant check|test|run program...` does this from the command line, with a directory or some files as the program, and a
 program can print with `io::print`.
 
 **Not there yet.** Memory is not limited, only steps and depth; the standard library is what `check/prelude.cov` lists; and

@@ -51,7 +51,7 @@ func (v *vm) fault(at ast.Node, kind, msg string) *Fault {
 	f := &Fault{Kind: kind, Msg: msg, Module: mod.Name}
 
 	if at != nil {
-		f.Line, f.Col = position(mod, at.At().Begin)
+		f.File, f.Line, f.Col = position(mod, at.At().Begin)
 	}
 
 	for i := len(v.frames) - 1; i >= 0; i-- {

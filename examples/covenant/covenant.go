@@ -24,6 +24,10 @@ type File struct {
 // AST is the file as plain values: see the ast package.
 func (f *File) AST() *ast.File { return ast.Build(f.Source, f.Tokens, f.Tree) }
 
+// ASTAt is AST for a file that is one of the files of a module: the positions in it are as if it started at base in the text of
+// the module.
+func (f *File) ASTAt(base int) *ast.File { return ast.BuildAt(base, f.Source, f.Tokens, f.Tree) }
+
 // Error is a place where the source is not Covenant, with where it is and what would have been right there.
 type Error struct {
 	Line, Col int

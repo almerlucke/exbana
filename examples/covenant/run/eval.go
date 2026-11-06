@@ -9,7 +9,6 @@ import (
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/ast"
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
-	"github.com/almerlucke/exbana/v3/examples/covenant/token"
 )
 
 // env is the names of a block, and the block around it.
@@ -113,7 +112,7 @@ func (m *machine) fault(at ast.Node, kind, msg string) *Fault {
 	f := &Fault{Kind: kind, Msg: msg, Module: m.cur.Name}
 
 	if at != nil {
-		f.Line, f.Col = token.Position(m.cur.Source, at.At().Begin)
+		f.File, f.Line, f.Col = m.cur.Locate(at.At().Begin)
 	}
 
 	for i := len(m.frames) - 1; i >= 0; i-- {
@@ -140,7 +139,7 @@ func publicError(err error) error {
 	return err
 }
 
-func position(m *check.Module, offset int) (line, col int) { return token.Position(m.Source, offset) }
+func position(m *check.Module, offset int) (file string, line, col int) { return m.Locate(offset) }
 
 func (m *machine) text(n ast.Node) string {
 	sp := n.At()

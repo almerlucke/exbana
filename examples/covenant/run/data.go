@@ -2,6 +2,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -367,4 +368,40 @@ func DataToGo(v Value) (any, error) {
 	}
 
 	return e.Fields[0], nil
+}
+
+// progRT is a program seen as what the library needs, for what is done outside a run: reading JSON, for one.
+type progRT struct{ p *Program }
+
+func (r progRT) program() *Program        { return r.p }
+func (r progRT) context() context.Context { return context.Background() }
+func (r progRT) callback(Value, ast.Node, ...Value) (Value, error) {
+	return nil, fmt.Errorf("no program is running")
+}
+
+func (r progRT) fault(at ast.Node, kind, msg string) *Fault { return &Fault{Kind: kind, Msg: msg} }
+
+// DataFromJSON reads JSON text as a Data, in the way Data::from_json does.
+func (p *Program) DataFromJSON(text string) (Value, error) {
+	v, kind := parseJSON(progRT{p}, text)
+	if kind != "" {
+		return nil, fmt.Errorf("not JSON that a Data can hold (%s)", kind)
+	}
+
+	return v, nil
+}
+
+// DataJSON writes a Data as JSON, in the way to_json does.
+func DataJSON(v Value) (string, error) {
+	e, ok := v.(*Enum)
+	if !ok || e.Def.Name != "Data" {
+		return "", fmt.Errorf("%s is not a Data", Format(v))
+	}
+
+	var sb strings.Builder
+	if err := writeJSON(&sb, e); err != nil {
+		return "", err
+	}
+
+	return sb.String(), nil
 }

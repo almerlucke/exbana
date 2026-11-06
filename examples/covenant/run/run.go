@@ -9,7 +9,6 @@ import (
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/ast"
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
-	"github.com/almerlucke/exbana/v3/examples/covenant/token"
 )
 
 // HostFunc is a function the host provides, for a signature of a native module. It is given the arguments, with self first for a
@@ -111,12 +110,18 @@ type Fault struct {
 	Kind      string // "overflow", "division", "requires", "stack", "range", "host"
 	Msg       string
 	Module    string
+	File      string // the file in the module, as it was given to the checker
 	Line, Col int
 	Stack     []string // the functions that were running, the innermost first
 }
 
 func (f *Fault) Error() string {
-	s := fmt.Sprintf("fault (%s) at %s:%d:%d: %s", f.Kind, f.Module, f.Line, f.Col, f.Msg)
+	where := f.File
+	if where == "" {
+		where = f.Module
+	}
+
+	s := fmt.Sprintf("fault (%s) at %s:%d:%d: %s", f.Kind, where, f.Line, f.Col, f.Msg)
 	if len(f.Stack) > 0 {
 		s += "\n  in " + strings.Join(f.Stack, "\n  in ")
 	}
@@ -207,10 +212,10 @@ func (p *Program) Call(ctx context.Context, module, function string, args ...Val
 
 // ExampleResult is the outcome of an example of a function.
 type ExampleResult struct {
-	Module, Function string
-	Line             int
-	Text             string // the example as it is written
-	Err              error  // nil if it is true
+	Module, File, Function string
+	Line                   int
+	Text                   string // the example as it is written
+	Err                    error  // nil if it is true
 }
 
 // Examples runs all the examples of the program, and says which of them are true. An example is a fact about a function, and
@@ -230,8 +235,8 @@ func (p *Program) Examples(ctx context.Context) []ExampleResult {
 			}
 
 			for _, ex := range b.Examples {
-				line, _ := token.Position(m.Source, ex.At().Begin)
-				r := ExampleResult{Module: m.Name, Function: fn, Line: line, Text: m.Source[ex.At().Begin:ex.At().End]}
+				file, line, _ := m.Locate(ex.At().Begin)
+				r := ExampleResult{Module: m.Name, File: file, Function: fn, Line: line, Text: m.Source[ex.At().Begin:ex.At().End]}
 
 				v, err := p.example(ctx, m, ex)
 
@@ -329,6 +334,31 @@ func (p *Program) variant(enum, name string, fields ...Value) Value {
 	}
 
 	panic("the prelude has no " + enum + "::" + name)
+}
+
+// Variant makes a value of an enum of a module, with the fields of the variant by position.
+func (p *Program) Variant(module, enum, variant string, fields ...Value) (Value, error) {
+	m := p.res.Modules[module]
+	if m == nil {
+		return nil, fmt.Errorf("there is no module %s", module)
+	}
+
+	d, ok := m.Decls[enum]
+	if !ok {
+		return nil, fmt.Errorf("module %s has no %s", module, enum)
+	}
+
+	def, ok := d.Entity.(*check.Def)
+	if !ok || def.Kind != check.DefEnum {
+		return nil, fmt.Errorf("%s::%s is not an enum", module, enum)
+	}
+
+	v := variantOf(def, variant)
+	if v == nil || len(v.Fields) != len(fields) {
+		return nil, fmt.Errorf("%s::%s has no variant %s with %d fields", module, enum, variant, len(fields))
+	}
+
+	return &Enum{def, v, fields}, nil
 }
 
 // Struct makes a value of a struct of a module, with its fields by position. Host is for what the host keeps in it.

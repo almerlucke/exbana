@@ -2,6 +2,7 @@ package check
 
 import (
 	_ "embed"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -43,7 +44,7 @@ func (s *tscope) effNamed(name string) (string, bool) {
 	return "", false
 }
 
-func (c *checker) run(sources map[string]string) {
+func (c *checker) run(sources map[string][]Source) {
 	c.initPrelude()
 
 	names := make([]string, 0, len(sources)+len(c.cfg.Native))
@@ -54,23 +55,30 @@ func (c *checker) run(sources map[string]string) {
 		native[n] = true
 	}
 
-	for n := range sources {
-		if !native[n] {
-			names = append(names, n)
+	for n, files := range sources {
+		if native[n] {
+			// the host's module is the one that would be used, and the program would not be the one that was written
+			name := ""
+			if len(files) > 0 {
+				name = files[0].Name
+			}
+
+			c.diags = append(c.diags, Diagnostic{Module: n, File: name, Code: "duplicate", Msg: fmt.Sprintf("the module %s is one the host provides: give the module another name", n)})
+
+			continue
 		}
+
+		names = append(names, n)
 	}
 
 	sort.Strings(names)
 
 	for _, name := range names {
-		src, ok := sources[name]
 		if native[name] {
-			src = c.cfg.Native[name]
-		} else if !ok {
-			continue
+			c.load(name, []Source{{Name: "host/" + name + ".cov", Text: c.cfg.Native[name]}}, true)
+		} else {
+			c.load(name, sources[name], false)
 		}
-
-		c.load(name, src, native[name])
 	}
 
 	order := c.order(names)
@@ -90,27 +98,61 @@ func (c *checker) run(sources map[string]string) {
 	}
 }
 
-// load parses a module. A module that does not parse is left out, and says why.
-func (c *checker) load(name, src string, native bool) *Module {
-	m := &Module{Name: name, Native: native, Source: src, Decls: map[string]*Decl{}, Imports: map[string]any{}}
+// fileSeparator is what is between the files in the text of a module: a blank line, so that the comment at the end of one is not
+// taken for the comment on what begins the next.
+const fileSeparator = "\n\n"
+
+// load parses the files of a module. A module that has a file that does not parse is left out, and says why.
+func (c *checker) load(name string, files []Source, native bool) *Module {
+	files = append([]Source(nil), files...)
+	sort.SliceStable(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+
+	m := &Module{Name: name, Native: native, Decls: map[string]*Decl{}, Imports: map[string]any{}}
 	c.mods[name] = m
 	c.cur = m
 
-	f, err := covenant.Parse(src)
-	if err != nil {
-		if e, ok := err.(*covenant.Error); ok {
-			c.diags = append(c.diags, Diagnostic{Module: name, Line: e.Line, Col: e.Col, Code: "syntax", Msg: e.Msg})
-		} else {
-			c.diags = append(c.diags, Diagnostic{Module: name, Code: "syntax", Msg: err.Error()})
+	var (
+		text   strings.Builder
+		uses   []*ast.Use
+		items  []*ast.Item
+		failed bool
+	)
+
+	for i, src := range files {
+		if i > 0 {
+			text.WriteString(fileSeparator)
 		}
 
+		base := text.Len()
+		m.Files = append(m.Files, SourceFile{Name: src.Name, Base: base, Text: src.Text})
+		text.WriteString(src.Text)
+
+		f, err := covenant.Parse(src.Text)
+		if err != nil {
+			failed = true
+
+			if e, ok := err.(*covenant.Error); ok {
+				c.diags = append(c.diags, Diagnostic{Module: name, File: src.Name, Line: e.Line, Col: e.Col, Code: "syntax", Msg: e.Msg})
+			} else {
+				c.diags = append(c.diags, Diagnostic{Module: name, File: src.Name, Code: "syntax", Msg: err.Error()})
+			}
+
+			continue
+		}
+
+		a := f.ASTAt(base)
+		uses = append(uses, a.Uses...)
+		items = append(items, a.Items...)
+	}
+
+	m.Source = text.String()
+	m.File = &ast.File{Span: ast.Span{Begin: 0, End: len(m.Source)}, Uses: uses, Items: items}
+
+	if failed {
 		delete(c.mods, name)
 
 		return nil
 	}
-
-	m.File = f.AST()
-	c.sources[m] = f
 
 	return m
 }
@@ -179,7 +221,10 @@ func (c *checker) order(names []string) []*Module {
 }
 
 func (c *checker) initPrelude() {
-	m := &Module{Name: "prelude", Native: true, Source: preludeSource, Decls: map[string]*Decl{}, Imports: map[string]any{}}
+	m := &Module{
+		Name: "prelude", Native: true, Source: preludeSource, Files: []SourceFile{{Name: "prelude.cov", Text: preludeSource}},
+		Decls: map[string]*Decl{}, Imports: map[string]any{},
+	}
 	c.mods["prelude"] = m
 	c.prelude = m
 
@@ -212,7 +257,6 @@ func (c *checker) initPrelude() {
 	}
 
 	m.File = f.AST()
-	c.sources[m] = f
 }
 
 // lookup finds a name from inside a module: what it declares, what it brought in, what the prelude has.
@@ -328,8 +372,10 @@ func sortedDecls(m *Module) []*Decl {
 }
 
 func (c *checker) add(m *Module, name string, pub bool, ent any, sp ast.Span) {
-	if _, dup := m.Decls[name]; dup {
-		c.errorSpan(sp, "duplicate", "%s is declared twice", name)
+	if prev, dup := m.Decls[name]; dup {
+		file, line, _ := m.Locate(prev.Span.Begin)
+		c.errorSpan(sp, "duplicate", "%s is declared twice (the first is at %s:%d)", name, file, line)
+
 		return
 	}
 
@@ -417,8 +463,12 @@ func (c *checker) imports(m *Module) {
 			continue
 		}
 
-		if _, dup := m.Imports[name]; dup {
-			c.errorf(u, "duplicate", "%s is already used", name)
+		if have, dup := m.Imports[name]; dup {
+			// two files of a module that bring in the same thing is not a problem: it is what the files of a module do
+			if have != ent {
+				c.errorf(u, "duplicate", "%s is already used for something else in this module", name)
+			}
+
 			continue
 		}
 

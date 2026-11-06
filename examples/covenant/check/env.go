@@ -2,16 +2,41 @@ package check
 
 import (
 	"github.com/almerlucke/exbana/v3/examples/covenant/ast"
+	"github.com/almerlucke/exbana/v3/examples/covenant/token"
 )
 
-// Module is a file of the program: what it declares, and what it brought in with use.
+// Module is a part of the program: what it declares, and what it brought in with use. A module is the files of a directory, or a
+// file on its own; they share one set of names, so what is private to a module is private to all its files.
 type Module struct {
 	Name    string
 	Native  bool // the host's: its signatures have no bodies
 	File    *ast.File
-	Source  string
+	Source  string       // the text of the files, one after the other: the positions in the tree are in it
+	Files   []SourceFile // where each of the files is in Source
 	Decls   map[string]*Decl
 	Imports map[string]any
+}
+
+// SourceFile is a file of a module, and where it starts in the text of the module.
+type SourceFile struct {
+	Name string
+	Base int
+	Text string
+}
+
+// Locate is the file, and the line and column in it (both counted from 1), of a position in the text of the module.
+func (m *Module) Locate(offset int) (file string, line, col int) {
+	for i := len(m.Files) - 1; i >= 0; i-- {
+		if f := m.Files[i]; offset >= f.Base {
+			line, col = token.Position(f.Text, offset-f.Base)
+
+			return f.Name, line, col
+		}
+	}
+
+	line, col = token.Position(m.Source, offset)
+
+	return "", line, col
 }
 
 // Decl is a name a module declares.

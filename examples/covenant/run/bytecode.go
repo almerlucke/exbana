@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
-	"github.com/almerlucke/exbana/v3/examples/covenant/token"
 )
 
 // The bytecode is for a machine with a stack. Each function and each closure is a proto: a list of instructions, the values the
@@ -135,7 +134,7 @@ func (pr *proto) disassemble(sb *strings.Builder, indent string) {
 	for i, in := range pr.code {
 		line := ""
 		if pr.module != nil {
-			l, _ := token.Position(pr.module.Source, int(pr.pos[i]))
+			_, l, _ := pr.module.Locate(int(pr.pos[i]))
 			line = fmt.Sprintf("%d", l)
 		}
 

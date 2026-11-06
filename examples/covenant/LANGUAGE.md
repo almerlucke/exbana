@@ -25,13 +25,17 @@ because an `example` says so, and the example is true.
 - [Faults and limits](#faults-and-limits)
 - [Modules](#modules)
 - [Data and JSON](#data-and-json)
+- [The standard library](#the-standard-library)
+- [Programs: main and permissions](#programs-main-and-permissions)
+- [Tools for agents](#tools-for-agents)
 - [The prelude](#the-prelude)
 - [Running programs from Go](#running-programs-from-go)
 - [What Covenant does not have](#what-covenant-does-not-have)
 
 ## Getting started
 
-A program is one or more files that end in `.cov`. Each file is a module, named by the file without the ending.
+A program is a directory of `.cov` files, or a `.cov` file on its own. A directory is a module (see [Modules](#modules)), and so
+is a file on its own, named by the file without the ending.
 
 ```covenant
 use io
@@ -48,20 +52,25 @@ $ go run ./examples/covenant/cmd/covenant run hello.cov hello::main
 hello, covenant
 ```
 
-The command has four ways to look at a program:
+The program is a directory (`covenant run myapp/ args...`), or the `.cov` files at the start (`covenant run app.cov args...`), and
+`-lib DIR` adds the modules of another directory to it. The command has these ways to look at a program and to run it:
 
 | Command | What it does |
 |---|---|
 | `covenant check files...` | checks the types and the effects, and says what is wrong |
 | `covenant test files...` | checks, and then runs every `example` of every function |
-| `covenant run files... module::function args...` | calls a function; the arguments are numbers, `true`, `false`, or text |
+| `covenant run program args...` | runs `main` of the program (a directory, files, or `name=directory`), with the arguments |
+| `covenant run program module::function args...` | calls another function; the arguments are numbers, `true`, `false`, or text |
+| `covenant describe files...` | writes the public functions as JSON, for an agent to read |
+| `covenant call files... module::function '{"a": 1}'` | calls a public function with arguments in JSON, and writes JSON |
 | `covenant dis files... module::function` | writes the bytecode of a function |
 
-`-bytecode` runs the program as bytecode and not by walking the tree (it gives the same, faster), `-grant effects` grants
-effects (the effect `io::print` is always granted), `-max-steps n` and `-timeout d` end a call that goes on too long.
+`-bytecode` runs the program as bytecode and not by walking the tree (it gives the same, faster), and `-max-steps n` and
+`-timeout d` end a call that goes on too long.
 
-The module `io` is what the command provides: `io::print(text)` writes a line. A program does nothing else to the world unless
-the host that runs it provides more; see [Effects](#effects).
+A program does nothing to the world unless it is given the permission to: it can print, and that is all. What more it can do is
+[in its signatures](#effects), and what it gets is in flags such as `-allow-read=DIR`; see
+[Programs: main and permissions](#programs-main-and-permissions).
 
 ## The shape of a program
 
@@ -741,24 +750,22 @@ time, or writes to the screen says so, between its parameters and its result:
 ```covenant
 use clock
 use fs
-use fs::Path
-use fs::IoError
 
 effects Storage = fs::read + fs::write
 
-fn load(path: Path) with fs::read -> Result<Text, IoError> {
-    return fs::read_all(path)
+fn load(path: Text) with fs::read -> Result<Text, fs::IoError> {
+    return fs::read(path)
 }
 
-fn stamp(path: Path) with Storage + time -> Result<Unit, IoError> {
+fn stamp(path: Text) with Storage + time -> Result<Unit, fs::IoError> {
     let text = try load(path)
-    return fs::write_all(path, text + clock::now().to_text())
+    return fs::write(path, text + clock::now().to_text())
 }
 ```
 
-The effects `fs::read`, `fs::write` and `time` are the ones **the host provides** with the modules `fs` and `clock` (here the
-tests provide stand-ins; the command provides only `io`). A group, `effects Storage = fs::read + fs::write`, is a name for a set
-of effects; it grants nothing, and can be used wherever an effect can. Effects are separated by `+`.
+The effects `fs::read`, `fs::write` and `time` are the ones of [the standard library](#the-standard-library), which has the modules
+`fs` and `clock`. A group, `effects Storage = fs::read + fs::write`, is a name for a set of effects; it grants nothing, and can
+be used wherever an effect can. Effects are separated by `+`.
 
 The checker sees every call and what it needs:
 
@@ -850,7 +857,7 @@ catch one. The host gets a `*run.Fault` with the kind, the place, and the functi
 
 ```text
 $ go run ./examples/covenant/cmd/covenant run demo.cov demo::factorial 25
-fault (overflow) at demo:32:12: 21 * 2432902008176640000 does not fit in an Int
+fault (overflow) at demo.cov:32:12: 21 * 2432902008176640000 does not fit in an Int
   in demo::factorial
   in demo::factorial
   ...
@@ -864,56 +871,97 @@ granted is a `*run.Denied`.
 
 ## Modules
 
-A file is a module. `use` brings in another module by name, or one thing from it; only what is `pub` can be used from outside.
+**A directory is a module.** All the `.cov` files in it are one set of names: what one of them declares, the others can use, and
+what is private is private to all of them and to nothing outside. That is how a module is split into parts that are easy to
+handle. A directory in a directory is another module, named after where it is:
+
+```text
+myapp/
+    main.cov          the module myapp
+    greet.cov         the module myapp, too
+    util/
+        util.cov      the module myapp::util
+```
+
+There is no line in a file that says what module it is in, so what a file says can not be different from where it is. A `.cov` file
+that is given on its own is a module of one file, named after it.
+
+Where the files are is not always what they are called by: a project that is checked out as `myapp-main`, or a library that is kept
+in a directory with another name than the one it is used by. Whoever runs the program can name them, as `name=directory`, and
+nothing is in the files for it:
+
+```text
+$ covenant run app=./myapp-main args...
+$ covenant run -lib mathx=./vendor/math-utils app=./myapp-main
+```
+
+The modules in a directory are under the name that it is given, so `app=./myapp-main` has `app` and `app::util`.
+
+`use` brings in another module by its name, or one thing from it; only what is `pub` can be used from outside. A `use` is for the
+whole module, not for the file it is in: two files that bring in the same thing is not a problem, and two that bring in different
+things by one name is.
 
 ```covenant-modules
---- geometry
+--- geometry types.cov
 pub struct Point { x: Float, y: Float }
 
 pub fn origin() -> Point {
     return Point(x: 0.0, y: 0.0)
 }
 
+fn square(n: Float) -> Float {
+    return n * n
+}
+--- geometry distance.cov
 pub fn distance(a: Point, b: Point) -> Float {
     example distance(origin(), Point(x: 3.0, y: 4.0)) == 5.0
-    let dx = a.x - b.x
-    let dy = a.y - b.y
-    return (dx * dx + dy * dy).sqrt()
+    return (square(a.x - b.x) + square(a.y - b.y)).sqrt()
 }
-
-fn helper() -> Int {
-    return 1
-}
---- app
+--- geometry::shapes shapes.cov
 use geometry
-use geometry::Point
+
+pub fn corners() -> List<geometry::Point> {
+    example corners().length() == 2
+    return [geometry::origin(), geometry::Point(x: 1.0, y: 1.0)]
+}
+--- app app.cov
+use geometry
+use geometry::shapes
 
 fn far() -> Float {
     example far() == 5.0
-    return geometry::distance(geometry::origin(), Point(x: 3.0, y: 4.0))
+    return geometry::distance(geometry::origin(), geometry::Point(x: 3.0, y: 4.0))
+}
+
+fn count() -> Int {
+    example count() == 2
+    return shapes::corners().length()
 }
 ```
 
+`square` is private, and it is in `types.cov`; `distance.cov` is another file of the same module and uses it, while `app` can not:
+
 ```covenant-modules-error
-// error: helper is not public
---- geometry
+// error: square is not public
+--- geometry types.cov
 pub fn origin() -> Int {
     return 0
 }
-
-fn helper() -> Int {
-    return 1
+--- geometry other.cov
+fn square(n: Int) -> Int {
+    return n * n
 }
---- app
+--- app app.cov
 use geometry
 
 fn f() -> Int {
-    return geometry::helper()
+    return geometry::square(2)
 }
 ```
 
-A module that is used has to be there, and modules can not use each other in a circle. On the command line a file is a module
-named after it, so `geometry.cov` and `app.cov` together are the program above.
+A name that is declared twice in a module is a problem even if it is in two files, and the message says where the first is. A module
+that is used has to be there, and modules can not use each other in a circle. A problem is reported with the path of the file, and
+the line and the column in it, so an editor can open it.
 
 ## Data and JSON
 
@@ -959,6 +1007,287 @@ fn normalized() -> Text {
 - `to_json()` writes it compactly. A number written without a point and an exponent is an `Int`, and the others are `Float`s, and
   a `Float` is written as `1.0` and not `1`, so what is written is read back as the same value. The keys of an object keep the
   order they were written in.
+
+## The standard library
+
+A program does things in the world through the modules of the standard library, which the command and the Go package `std` provide.
+Each of them is behind an effect, so a signature says which of them a function uses, and behind a **policy**, which says how far
+the host lets it go. Nothing is allowed that the policy does not name.
+
+| Module | Functions | Effect | The policy |
+|---|---|---|---|
+| `io` | `print(text)`, `eprint(text)`, `read_line()`, `read_all()` | `io::print`, `io::read` | printing is always allowed; reading stdin is a flag |
+| `fs` | `read`, `exists`, `list`, `write`, `append`, `remove`, `make_dir`; paths are `Text` | `fs::read`, `fs::write` | directories: a file has to be under one |
+| `net` | `get(url)`, `post(url, body, headers)`; a `Response` has `status`, `body`, `headers` | `net::fetch` | hosts: `example.com`, `example.com:8080`, `*.example.com` |
+| `env` | `get(name)` | `env::read` | the names of the variables |
+| `process` | `run(program, args)`; an `Output` has `code`, `stdout`, `stderr` | `process::run` | the programs, by name |
+| `clock` | `now()` (milliseconds since 1970), `sleep(millis)` | `time` | a flag |
+| `random` | `int(low, high)`, `float()` | `random` | a flag |
+
+A function that can fail gives a `Result`, with an error that says what kind of failure it is (`fs::IoError` is `NotFound`,
+`Denied` or `Failed(message)`), and **a place that the policy does not allow is `Denied`**, which a program can see and handle:
+
+```covenant
+use env
+use fs
+use net
+use process
+
+fn token() with env::read -> Text {
+    return env::get("API_TOKEN").unwrap_or("")
+}
+
+fn download(url: Text, path: Text) with net::fetch + fs::write -> Result<Unit, Text> {
+    let response = try net::get(url).map_error(fn(e) => "could not fetch " + url)
+    return fs::write(path, response.body).map_error(fn(e) => "could not write " + path)
+}
+
+fn changed_files() with process::run -> Int {
+    return match process::run("git", ["status", "--short"]) {
+        Ok(output) => output.stdout.split("\n").length()
+        Err(_) => -1
+    }
+}
+
+fn describe_error(e: fs::IoError) -> Text {
+    example describe_error(fs::IoError::NotFound) == "there is no such file"
+    return match e {
+        NotFound => "there is no such file"
+        Denied => "that place is not allowed"
+        Failed(message) => message
+    }
+}
+```
+
+What the policy holds to, besides the effect being granted:
+
+- **Files** are looked at after links are followed, so a link inside a directory that leads out of it does not lead out, and
+  neither does `..`.
+- **Requests** go only to hosts that are listed, and so does a redirect; a scheme other than `http` and `https` is `Denied`; the
+  loopback and private addresses are not reached unless the host says so (a program that can be sent anywhere can be made to talk
+  to what is inside the network); a response is read only up to a limit, and a request ends after a time.
+- **A program that is run** is one that is listed, with no shell, no environment of the caller's but the path, a time, and a limit
+  on what it writes.
+
+## Programs: main and permissions
+
+A program that is run from the command line starts at `main`, in the first file. It may have one parameter, the arguments, and
+may give nothing, an `Int` (the exit code), or a `Result` of those: an `Err` is written to the standard error, and the exit code
+is 1.
+
+```covenant
+use fs
+use io
+
+fn main(args: List<Text>) with fs::read + io::print -> Int {
+    let missing = args.filter(fn(path) => not fs::exists(path).unwrap_or(false))
+    for path in missing {
+        io::print(path + " is missing")
+    }
+    return missing.length()
+}
+```
+
+```text
+$ covenant run check.cov a.txt b.txt
+check::main needs permissions that were not granted:
+  fs::read       -allow-read=DIR
+The signature says what it needs, and the flags say what it gets. -allow-signature grants stdin, time and random.
+
+$ covenant run -allow-read=. check.cov a.txt b.txt
+b.txt is missing
+$ echo $?
+1
+```
+
+**What a program can do is decided by two parties.** The program says what it needs, in the signature of `main`, and the checker
+has proven that nothing it calls needs more. The person who runs it says what it gets, with flags. The program never gives
+itself a permission: that is why nothing is allowed unless a flag says so, and why the message above says which flag to give.
+
+| Flag | Gives |
+|---|---|
+| `-allow-read=DIR,...` `-allow-write=DIR,...` | `fs::read`, `fs::write`, for files under these directories |
+| `-allow-net=HOST,...` | `net::fetch`, for these hosts |
+| `-allow-env=NAME,...` | `env::read`, for these variables |
+| `-allow-run=PROGRAM,...` | `process::run`, for these programs |
+| `-allow-stdin` `-allow-time` `-allow-random` | `io::read`, `time`, `random` |
+| `-allow-private-net` | lets `net` reach loopback and private addresses |
+| `-allow-signature` | the three that have nothing to scope: stdin, time and random |
+| `-allow-all` | everything, anywhere |
+
+A host that embeds a program (see [Running programs from Go](#running-programs-from-go)) does the same with a `std.Policy`.
+
+## Tools for agents
+
+The public functions of a program are tools. `covenant describe` writes them as JSON that an agent can read: for each function its
+name, the comment above it, a JSON Schema for the arguments and for the result, the effects it needs, and its examples.
+
+```covenant
+use fs
+
+// Adds two numbers.
+pub fn add(a: Int, b: Int) -> Int {
+    example add(1, 2) == 3
+    return a + b
+}
+
+// Reads a note from a file, if the host allows it.
+pub fn read_note(path: Text) with fs::read -> Result<Text, fs::IoError> {
+    return fs::read(path)
+}
+```
+
+```json-for-previous
+{
+  "tools": [
+    {
+      "name": "doc.add",
+      "module": "doc",
+      "function": "add",
+      "description": "Adds two numbers.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "a": {
+            "type": "integer"
+          },
+          "b": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "integer"
+      },
+      "effects": [],
+      "examples": [
+        "add(1, 2) == 3"
+      ]
+    },
+    {
+      "name": "doc.read_note",
+      "module": "doc",
+      "function": "read_note",
+      "description": "Reads a note from a file, if the host allows it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "outputSchema": {
+        "$defs": {
+          "fs.IoError": {
+            "oneOf": [
+              {
+                "const": "NotFound"
+              },
+              {
+                "const": "Denied"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "Failed": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "message"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "Failed"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ok": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "err": {
+                "$ref": "#/$defs/fs.IoError"
+              }
+            },
+            "required": [
+              "err"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "effects": [
+        "fs::read"
+      ]
+    }
+  ]
+}
+```
+
+`covenant call` runs one of them, with the arguments as a JSON object by the names of the parameters (or an array), and writes the
+result as JSON. It needs the permissions the function's effects ask for, like any other run:
+
+```text
+$ covenant call notes.cov notes::add '{"a": 20, "b": 22}'
+42
+$ covenant call notes.cov notes::read_note '{"path": "a.txt"}'
+notes::read_note needs permissions that were not granted:
+  fs::read       -allow-read=DIR
+The signature says what it needs, and the flags say what it gets. -allow-signature grants stdin, time and random.
+$ covenant call -allow-read=. notes.cov notes::read_note '{"path": "a.txt"}'
+{"ok":"a note\n"}
+$ covenant call -allow-read=. notes.cov notes::read_note '{"path": "/etc/hostname"}'
+{"err":"Denied"}
+```
+
+The JSON for a type goes by fixed rules, the same for the schema and for the arguments and the results:
+
+| Type | JSON |
+|---|---|
+| `Int`, `Float`, `Text`, `Bool`, `Unit` | a number, a number, a string, a boolean, `null` |
+| `List<T>`, `Set<T>` | an array |
+| `Map<Text, V>` | an object, with the keys in the order they are written; any other `Map<K, V>` is an array of pairs `[key, value]` |
+| `Option<T>` | `null`, or the value |
+| `Result<T, E>` | `{"ok": value}` or `{"err": error}` |
+| a struct | an object with all of its fields, and no others |
+| an enum | `"Name"` for a variant that holds nothing, and `{"Name": {"field": value}}` for one that does |
+| `Data` | any JSON |
+
+A function is not a tool, and `describe` says so under `skipped`, if it is generic, if a parameter or the result is a function or a
+`dyn`, or if it has an `Option` of an `Option` (`Some(None)` could not be told from `None`). Only a public function is a tool: a
+private one can not be called by name. A wrong argument is said with where it is: `items[1].price: expected a number, found a
+string`.
 
 ## The prelude
 
@@ -1121,8 +1450,22 @@ v, err := prog.Call(ctx, "app", "double", int64(21))
 fmt.Println(run.Format(v)) // 42
 ```
 
+With the standard library the host gives the modules to the checker, and the functions and the policy to the runner:
+
+```go
+policy := std.Policy{ReadRoots: []string{"/data"}, NetHosts: []string{"api.example.com"}}
+host := std.New(policy)
+
+res := check.Check(check.Config{Native: std.Natives()}, map[string]string{"app": source})
+prog, err := run.New(res, run.Config{Host: host.Host(), Grant: policy.Granted(), Bytecode: true})
+host.Bind(prog)
+
+manifest, _ := tool.Describe(res)                                                    // what an agent can call
+out, err := tool.Call(ctx, prog, res, "app", "search", []byte(`{"query": "covenant"}`)) // JSON in, JSON out
+```
+
 - `check.Config` says which effects the host knows, and gives the modules it provides (`Native`): source with signatures and no
-  bodies, in which a trait named `Functions` is the functions of the module.
+  bodies, in which a trait named `Functions` is the functions of the module. `std.Natives()` is the standard library's.
 - `run.Config` has the host functions that go with those modules (`Host`), the effects that are granted (`Grant`), the limits
   (`MaxSteps`, `MaxDepth`), and `Bytecode` to run bytecode.
 - A call gives a `run.Value`: a Go `int64`, `float64`, `string`, `bool`, or `run.Unit`, `*run.List`, `*run.Map`, `*run.Set`,
@@ -1140,5 +1483,4 @@ Left out on purpose, because each of them is a way for something to happen that 
 - no assigning a field, and no shared mutable state: values never change;
 - no semicolons, and one way to write a number, a list and a block.
 
-And not there yet: sized integer types (`Int32`, `UInt8`), traits with parameters, a `dyn` of more than one trait, concurrency,
-and a limit on memory.
+And not there yet: a limit on memory, sized integer types (`Int32`, `UInt8`), traits with parameters, a `dyn` of more than one trait, and concurrency.

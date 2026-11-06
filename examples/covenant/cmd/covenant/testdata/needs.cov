@@ -1,0 +1,7 @@
+use fs
+use net
+
+fn main() with fs::read + net::fetch {
+    let _ = fs::exists(".")
+    let _ = net::get("http://127.0.0.1:1/")
+}

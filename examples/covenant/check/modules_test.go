@@ -137,3 +137,11 @@ func TestNativeModulesDeclareEffects(t *testing.T) {
 		t.Fatal("an effect nobody knows was accepted")
 	}
 }
+
+func TestAModuleCanNotTakeTheNameOfOneOfTheHost(t *testing.T) {
+	r := Check(Config{Native: testConfig.Native}, map[string]string{"app": "fn f() {\n}\n", "fs": "pub fn read() -> Int {\n    return 1\n}\n"})
+
+	if r.OK() || len(r.Diagnostics) != 1 || r.Diagnostics[0].Module != "fs" || !strings.Contains(r.Diagnostics[0].Msg, "one the host provides") {
+		t.Errorf("%v", r.Error())
+	}
+}

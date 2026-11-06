@@ -9,7 +9,9 @@ import (
 
 	"github.com/almerlucke/exbana/v3/examples/covenant/check"
 	"github.com/almerlucke/exbana/v3/examples/covenant/run"
+	"github.com/almerlucke/exbana/v3/examples/covenant/std"
 	"github.com/almerlucke/exbana/v3/examples/covenant/token"
+	"github.com/almerlucke/exbana/v3/examples/covenant/tool"
 )
 
 // LANGUAGE.md describes the language with examples, and the examples are true: this checks every program in it, and runs the
@@ -20,6 +22,7 @@ import (
 //	covenant-modules         modules, each after a line "--- name", that have to check together
 //	covenant-modules-error   modules that have to have a problem, as for covenant-error
 //	covenant-prelude         the prelude, which has to be the file check/prelude.cov
+//	json-for-previous        the manifest of the covenant block just before it, exactly as covenant describe writes it
 
 type block struct {
 	kind string
@@ -56,49 +59,39 @@ func blocks(t *testing.T) []block {
 	return out
 }
 
-// the modules of the host that the examples use: io is the one the command has, and the others are what a host can add
-var docConfig = check.Config{
-	Effects: []string{"time", "random"},
-	Native: map[string]string{
-		"io":    "trait Functions {\n    fn print(text: Text) with io::print\n}\n",
-		"clock": "trait Functions {\n    fn now() with time -> Int\n}\n",
-		"fs": `struct Path {}
-struct IoError {}
+// the examples use the standard library: io, fs, net, env, process, clock and random are the modules of the host
+var docConfig = check.Config{Native: std.Natives()}
 
-trait Functions {
-    fn read_all(path: Path) with fs::read -> Result<Text, IoError>
-    fn write_all(path: Path, data: Text) with fs::write -> Result<Unit, IoError>
-}
-`,
-	},
-}
-
-func stubs(prog **run.Program) map[string]run.HostFunc {
-	return map[string]run.HostFunc{
-		"io::print":     func(ctx context.Context, a []run.Value) (run.Value, error) { return run.Unit{}, nil },
-		"clock::now":    func(ctx context.Context, a []run.Value) (run.Value, error) { return int64(0), nil },
-		"fs::read_all":  func(ctx context.Context, a []run.Value) (run.Value, error) { return (*prog).Ok("contents"), nil },
-		"fs::write_all": func(ctx context.Context, a []run.Value) (run.Value, error) { return (*prog).Ok(run.Unit{}), nil },
-	}
-}
-
-// modulesOf is the modules in a block: the text itself is the module doc, or it is cut at the lines "--- name".
-func modulesOf(b block, multiple bool) map[string]string {
+// modulesOf is the modules in a block: the text itself is the module doc, or it is cut at the lines "--- module file.cov", and the
+// file is the module name with .cov if it is not said.
+func modulesOf(b block, multiple bool) map[string][]check.Source {
 	if !multiple {
-		return map[string]string{"doc": b.text}
+		return map[string][]check.Source{"doc": {{Name: "doc.cov", Text: b.text}}}
 	}
 
-	mods := map[string]string{}
-	name := ""
+	mods := map[string][]check.Source{}
+
+	var module, file string
+
+	index := -1
 
 	for _, l := range strings.Split(b.text, "\n") {
-		if strings.HasPrefix(l, "--- ") {
-			name = strings.TrimPrefix(l, "--- ")
+		if header, ok := strings.CutPrefix(l, "--- "); ok {
+			fields := strings.Fields(header)
+
+			module, file = fields[0], fields[0]+".cov"
+			if len(fields) > 1 {
+				file = fields[1]
+			}
+
+			mods[module] = append(mods[module], check.Source{Name: module + "/" + file})
+			index = len(mods[module]) - 1
+
 			continue
 		}
 
-		if name != "" {
-			mods[name] += l + "\n"
+		if module != "" {
+			mods[module][index].Text += l + "\n"
 		}
 	}
 
@@ -106,12 +99,34 @@ func modulesOf(b block, multiple bool) map[string]string {
 }
 
 func TestLanguageExamplesAreTrue(t *testing.T) {
-	checked, examples := 0, 0
+	checked, examples, manifests := 0, 0, 0
+
+	var previous *check.Result
 
 	for _, b := range blocks(t) {
 		var multiple, wantError bool
 
 		switch b.kind {
+		case "json-for-previous":
+			if previous == nil {
+				t.Errorf("line %d: a manifest, and no program before it", b.line)
+				continue
+			}
+
+			m, err := tool.Describe(previous)
+			if err != nil {
+				t.Errorf("line %d: %v", b.line, err)
+				continue
+			}
+
+			got, _ := m.JSON()
+			if strings.TrimSpace(b.text) != string(got) {
+				t.Errorf("line %d: the manifest is not what covenant describe writes:\n%s", b.line, got)
+			}
+
+			manifests++
+
+			continue
 		case "covenant":
 		case "covenant-error":
 			wantError = true
@@ -126,7 +141,7 @@ func TestLanguageExamplesAreTrue(t *testing.T) {
 		checked++
 
 		mods := modulesOf(b, multiple)
-		res := check.Check(docConfig, mods)
+		res := check.CheckModules(docConfig, mods)
 
 		if wantError {
 			first, _, _ := strings.Cut(b.text, "\n")
@@ -151,17 +166,19 @@ func TestLanguageExamplesAreTrue(t *testing.T) {
 			continue
 		}
 
-		for _, bytecode := range []bool{false, true} {
-			var prog *run.Program
+		previous = res
 
-			prog, err := run.New(res, run.Config{Host: stubs(&prog), Bytecode: bytecode})
+		for _, bytecode := range []bool{false, true} {
+			// the host has a policy that allows nothing: the examples do not call the host, and they could not
+			host := std.New(std.Policy{})
+
+			prog, err := run.New(res, run.Config{Host: host.Host(), Bytecode: bytecode})
 			if err != nil {
 				t.Errorf("line %d: %v", b.line, err)
 				continue
 			}
 
-			// the stubs call back into the program that was just made
-			prog, _ = run.New(res, run.Config{Host: stubs(&prog), Bytecode: bytecode})
+			host.Bind(prog)
 
 			for _, ex := range prog.Examples(context.Background()) {
 				if bytecode {
@@ -175,11 +192,11 @@ func TestLanguageExamplesAreTrue(t *testing.T) {
 		}
 	}
 
-	if checked < 30 || examples < 60 {
-		t.Errorf("only %d programs and %d examples were checked", checked, examples)
+	if checked < 35 || examples < 65 || manifests < 1 {
+		t.Errorf("only %d programs, %d examples and %d manifests were checked", checked, examples, manifests)
 	}
 
-	t.Logf("%d programs checked, and %d examples are true", checked, examples)
+	t.Logf("%d programs checked, %d examples are true, and %d manifests are as written", checked, examples, manifests)
 }
 
 func TestLanguagePreludeIsThePrelude(t *testing.T) {

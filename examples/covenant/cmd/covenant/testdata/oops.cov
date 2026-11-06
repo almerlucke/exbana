@@ -1,0 +1,3 @@
+fn main() -> Result<Unit, Text> {
+    return Err("it went wrong")
+}

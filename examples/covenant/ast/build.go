@@ -10,9 +10,15 @@ import (
 // Build makes the tree of a file from what the parser returned. The tree is the one for src, and tokens are the tokens the parser
 // read: the positions in the parser's tree are the numbers of tokens, and in the result they are bytes of the source.
 func Build(src string, tokens []token.Token, tree *parser.CovenantTree) *File {
-	b := &builder{src: src, toks: tokens, t: tree}
+	return BuildAt(0, src, tokens, tree)
+}
 
-	f := &File{Span: Span{0, len(src)}}
+// BuildAt is Build for a file that is one of several in a module: the positions in the tree are as if the file started at base in
+// the text of the module, which is the files, one after the other.
+func BuildAt(base int, src string, tokens []token.Token, tree *parser.CovenantTree) *File {
+	b := &builder{src: src, toks: tokens, t: tree, base: base}
+
+	f := &File{Span: Span{base, base + len(src)}}
 
 	top, ok := tree.First(-1, parser.CovenantRuleFile)
 	if !ok {
@@ -34,6 +40,7 @@ type builder struct {
 	src  string
 	toks []token.Token
 	t    *parser.CovenantTree
+	base int
 }
 
 type rule = parser.CovenantRule
@@ -58,7 +65,8 @@ const (
 	rIf          = parser.CovenantRuleIf
 )
 
-func (b *builder) span(n int) Span {
+// rawSpan is where a node is in the text of its own file.
+func (b *builder) rawSpan(n int) Span {
 	begin, end := b.t.Span(n)
 	if begin >= len(b.toks) {
 		return Span{len(b.src), len(b.src)}
@@ -74,6 +82,13 @@ func (b *builder) span(n int) Span {
 	}
 
 	return Span{b.toks[begin].Begin, b.toks[end-1].End}
+}
+
+// span is where a node is in the text of the module.
+func (b *builder) span(n int) Span {
+	s := b.rawSpan(n)
+
+	return Span{s.Begin + b.base, s.End + b.base}
 }
 
 func (b *builder) kids(n int, r rule) []int {
@@ -99,7 +114,10 @@ func (b *builder) firstKind(n int) token.Kind {
 
 func (b *builder) tokText(i int) string { return b.src[b.toks[i].Begin:b.toks[i].End] }
 
-func (b *builder) text(n int) string { return b.src[b.span(n).Begin:b.span(n).End] }
+func (b *builder) text(n int) string {
+	s := b.rawSpan(n)
+	return b.src[s.Begin:s.End]
+}
 
 // nameOf is the name in a node of the rule name or label: a label without its colon.
 func (b *builder) nameOf(n int) string {

@@ -143,6 +143,19 @@ func (t *Fn) String() string {
 	return s
 }
 
+// Resolve is the type with the variables that are bound followed: what a program that has been checked is about.
+func Resolve(t Type) Type { return prune(t) }
+
+// FieldType is the type of a field of a value of a struct or a variant, with the parameters of the type filled in.
+func FieldType(con *Con, f *FieldInfo) Type {
+	s := &subst{types: map[*Param]Type{}}
+	for i, p := range con.Def.Params {
+		s.types[p] = con.Args[i]
+	}
+
+	return s.ty(f.Type)
+}
+
 // prune follows the variables that are bound to the type they stand for.
 func prune(t Type) Type {
 	for {

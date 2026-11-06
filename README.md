@@ -427,3 +427,5 @@ fmt.Print(rules)
 - `examples/golang`: Go literal tokens, scanning and seeded generation.
 - `examples/melody`: seeded melody generation with weights and state, and learning the weights by parsing known melodies with the same grammar.
 - `examples/melody/abc`: a reader for ABC notation (the format of folk tune collections like the Nottingham Music Database): notes as steps of the scale, ties, triplets, repeats and endings. `abcstat` reports how many tunes of a collection it reads.
+
+Covenant, a statically typed language for people and agents whose parser is generated from a grammar like these, has its own repository: [github.com/almerlucke/covenant](https://github.com/almerlucke/covenant).

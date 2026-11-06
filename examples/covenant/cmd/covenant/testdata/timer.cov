@@ -1,8 +1,0 @@
-use clock
-use io
-use random
-
-fn main() with time + random + io::print {
-    io::print(clock::now().to_text())
-    io::print(random::int(5, 6).to_text())
-}
